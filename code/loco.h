@@ -30,6 +30,7 @@ class LocomotionClass : public IPersistStream, public ILocomotion
 		virtual HRESULT STDMETHODCALLTYPE Save(IStream * stream, BOOL cleardirty) override;
 		virtual LONG STDMETHODCALLTYPE GetSizeMax(ULARGE_INTEGER *pcbSize) override;
 
+		virtual void STDMETHODCALLTYPE Object_Linked(void) override;
 		virtual HRESULT STDMETHODCALLTYPE Link_To_Object(void *object) override;
 		virtual boolean STDMETHODCALLTYPE Is_Moving(void) override;
 		virtual Coord STDMETHODCALLTYPE Destination(void) override;

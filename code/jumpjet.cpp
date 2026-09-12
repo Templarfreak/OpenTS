@@ -23,6 +23,7 @@
 #include "mouse.h"
 #include "rules.h"
 #include "savestream.h"
+#include "dbgprint.h"
 
 #include "layer.hh"
 
@@ -58,6 +59,11 @@ JumpjetLocomotionClass::~JumpjetLocomotionClass(void)
 
 }
 
+void JumpjetLocomotionClass::Object_Linked()
+{
+	Facing = LinkedTo->TClass->JumpjetTurnRate == -1 ? Rule->JumpjetTurnRate : LinkedTo->TClass->JumpjetTurnRate;
+}
+
 
 /// <summary>
 /// Is the jumpjet under orders to move?
@@ -83,7 +89,6 @@ Coord STDMETHODCALLTYPE JumpjetLocomotionClass::Destination(void)
 		return(COORD_NONE);
 	}
 }
-
 
 /// <summary>
 /// Handles the per frame processing of the jumpjet.
@@ -207,6 +212,12 @@ void STDMETHODCALLTYPE JumpjetLocomotionClass::Stop_Moving(void)
 			LinkedTo->Clear_Occupy_Bit(HeadToCoord);
 			IsLanding = false;
 		}
+
+        if (LinkedTo->TClass->IsBalloonHover) {
+            Move_To(LinkedTo->PositionCoord);
+            return;
+        }
+
 		Cell cell = LinkedTo->PositionCoord.As_Cell();
 		Cell nearby = Map.Nearby_Location(cell, SPEED_TRACK);
 		if (nearby != CELL_NONE) {
@@ -350,9 +361,15 @@ void JumpjetLocomotionClass::Process_Hover(void)
 	if (Is_Moving()) {
 		Coord headto = HeadToCoord;
 		Coord position = LinkedTo->PositionCoord;
-		if (Point2D(headto) == Point2D(position)) {
+		int distance = Point2D(position).Distance_To(Point2D(HeadToCoord));
+		//if (Point2D(headto) == Point2D(position)) {
+		if ((LinkedTo->TClass->IsBalloonHover && distance < CELL_LEPTON) || (!LinkedTo->TClass->IsBalloonHover && Point2D(headto) == Point2D(position))) {
 			if (LinkedTo->TarCom == NULL) {
-				CurrentState = DESCENDING;
+				if (LinkedTo->TClass->IsBalloonHover) {
+					IsMoving = false;
+				} else {
+					CurrentState = DESCENDING;
+				}
 			}
 		} else {
 			Facing.Set_Desired(DirType().Direction(LinkedTo->PositionCoord, HeadToCoord));
@@ -384,21 +401,41 @@ void JumpjetLocomotionClass::Process_Cruise(void)
 		LinkedTo->Set_Coord(position);
 		LinkedTo->IsDown = down;
 		if (LinkedTo->TarCom == NULL) {
-			FlightLevel = 0;
-			CurrentState = DESCENDING;
+			if (LinkedTo->TClass->IsBalloonHover) {
+				CurrentState = HOVERING;
+				IsMoving = false;
+			} else {
+				FlightLevel = 0;
+				CurrentState = DESCENDING;
+			}
 		} else {
 			CurrentState = HOVERING;
 		}
 	} else if (distance < CELL_LEPTON) {
-		TargetSpeed = Rule->JumpjetSpeed * 0.3;
+		if (LinkedTo->TClass->IsBalloonHover) {
+			TargetSpeed = LinkedTo->TClass->BalloonTerminalSpeed == -1 ? Rule->BalloonTerminalSpeed : LinkedTo->TClass->BalloonTerminalSpeed;
+		}
+		else {
+			TargetSpeed = (LinkedTo->TClass->JumpjetSpeed == -1 ? Rule->JumpjetSpeed : LinkedTo->TClass->JumpjetSpeed) * 0.3;
+		}
 		if (LinkedTo->TarCom == NULL) {
-			FlightLevel = Rule->JumpjetCruiseHeight * 0.75;
+			if (LinkedTo->TClass->IsBalloonHover) {
+				FlightLevel = LinkedTo->TClass->BalloonHoverHeight == -1 ? Rule->BalloonHoverHeight : LinkedTo->TClass->BalloonHoverHeight;
+			}
+			else {
+				FlightLevel = (LinkedTo->TClass->JumpjetCruiseHeight == -1 ? Rule->JumpjetCruiseHeight : LinkedTo->TClass->JumpjetCruiseHeight) * 0.75;
+			}
 		}
 	} else if (distance < CELL_LEPTON * 2) {
-		TargetSpeed = Rule->JumpjetSpeed * 0.5;
+		if (LinkedTo->TClass->IsBalloonHover) {
+			TargetSpeed = LinkedTo->TClass->BalloonApproachSpeed == -1 ? Rule->BalloonApproachSpeed : LinkedTo->TClass->BalloonApproachSpeed;
+		}
+		else {
+			TargetSpeed = (LinkedTo->TClass->JumpjetSpeed == -1 ? Rule->JumpjetSpeed : LinkedTo->TClass->JumpjetSpeed) * 0.5;
+		}
 	} else {
-		TargetSpeed = Rule->JumpjetSpeed;
-		FlightLevel = Rule->JumpjetCruiseHeight;
+		TargetSpeed = LinkedTo->TClass->JumpjetSpeed == -1 ? Rule->JumpjetSpeed : LinkedTo->TClass->JumpjetSpeed;
+		FlightLevel = LinkedTo->TClass->JumpjetCruiseHeight == -1 ? Rule->JumpjetCruiseHeight : LinkedTo->TClass->JumpjetCruiseHeight;
 	}
 }
 
@@ -479,12 +516,10 @@ void JumpjetLocomotionClass::Process_Unknown(void)
 /// not it has been given a destination.
 /// </summary>
 /// <returns>bool; Is the jumpjet in flight toward somewhere?</returns>
-boolean STDMETHODCALLTYPE JumpjetLocomotionClass::Is_Moving_Now(void)
-{
-	if (CurrentState != GROUNDED && CurrentState != HOVERING) {
-		return(true);
-	}
-	return(false);
+boolean JumpjetLocomotionClass::Is_Moving_Now(void) {
+    if (CurrentState == HOVERING && LinkedTo->TClass->IsBalloonHover) return(true);
+    if (CurrentState != GROUNDED && CurrentState != HOVERING) return(true);
+    return(false);
 }
 
 
@@ -507,25 +542,25 @@ void JumpjetLocomotionClass::Movement_AI(void)
 	}
 
 	if (TargetSpeed > CurrentSpeed) {
-		CurrentSpeed += Rule->JumpjetAcceleration;
-		CurrentSpeed = std::min<double>(CurrentSpeed, Rule->JumpjetSpeed);
+		CurrentSpeed += LinkedTo->TClass->JumpjetAcceleration == -1 ? Rule->JumpjetAcceleration : LinkedTo->TClass->JumpjetAcceleration;
+		CurrentSpeed = std::min<double>(CurrentSpeed, LinkedTo->TClass->JumpjetSpeed == -1 ? Rule->JumpjetSpeed : LinkedTo->TClass->JumpjetSpeed);
 	}
 	if (TargetSpeed < CurrentSpeed) {
-		CurrentSpeed -= Rule->JumpjetAcceleration * 1.5;
+		CurrentSpeed -= (LinkedTo->TClass->JumpjetAcceleration == -1 ? Rule->JumpjetAcceleration : LinkedTo->TClass->JumpjetAcceleration) * 1.5;
 		CurrentSpeed = std::max(CurrentSpeed, 0.0);
 	}
 
-	LinkedTo->Set_Speed(CurrentSpeed / Rule->JumpjetSpeed);
+	LinkedTo->Set_Speed(CurrentSpeed / (LinkedTo->TClass->JumpjetSpeed == -1 ? Rule->JumpjetSpeed : LinkedTo->TClass->JumpjetSpeed));
 
 	bool at_destination = LinkedTo->Get_Cell() == HeadToCoord.As_Cell();
 
 	if (CurrentState == HOVERING || CurrentState == CRUISING) {
-		CurrentWobble += DEG_TO_RAD(360) / (15.0 / Rule->JumpjetWobblesPerSecond);
+		CurrentWobble += DEG_TO_RAD(360) / (15.0 / (LinkedTo->TClass->JumpjetWobblesPerSecond == -1 ? Rule->JumpjetWobblesPerSecond : LinkedTo->TClass->JumpjetWobblesPerSecond));
 	} else {
 		CurrentWobble = 0;
 	}
 
-	int desired_height = std::sin(CurrentWobble) * Rule->JumpjetWobbleDeviation + FlightLevel;
+	int desired_height = std::sin(CurrentWobble) * (LinkedTo->TClass->JumpjetWobbleDeviation == -1 ? Rule->JumpjetWobbleDeviation : LinkedTo->TClass->JumpjetWobbleDeviation) + FlightLevel;
 	int height = LinkedTo->Height;
 	int ground_height = Map.Get_Height_GL(LinkedTo->PositionCoord);
 
@@ -552,11 +587,11 @@ void JumpjetLocomotionClass::Movement_AI(void)
 			LinkedTo->Clear_Occupy_Bit(LinkedTo->PositionCoord);
 			LinkedTo->IsOnBridge = false;
 		}
-		height += Rule->JumpjetClimb;
+		height += (LinkedTo->TClass->JumpjetClimb == -1 ? Rule->JumpjetClimb : LinkedTo->TClass->JumpjetClimb);
 		moved = true;
 	}
 	if (height_diff > desired_height) {
-		height -= Rule->JumpjetClimb;
+		height -= (LinkedTo->TClass->JumpjetClimb == -1 ? Rule->JumpjetClimb : LinkedTo->TClass->JumpjetClimb);
 		if (height <= ground_height) {
 			height = ground_height;
 		}
@@ -584,7 +619,7 @@ void JumpjetLocomotionClass::Movement_AI(void)
 	LinkedTo->Set_Coord(new_coord);
 
 	if (LinkedTo != NULL) {
-		const int & rad = Rule->JumpjetCloakDetectionRadius;
+		const int & rad = (LinkedTo->TClass->JumpjetCloakDetectionRadius == -1 ? Rule->JumpjetCloakDetectionRadius : LinkedTo->TClass->JumpjetCloakDetectionRadius);
 		for (int x = -rad; x <= rad; x++) {
 			for (int y = -rad; y <= rad; y++) {
 				CellClass * cellptr = &Map[Cell(x, y) + Cell(new_coord)];

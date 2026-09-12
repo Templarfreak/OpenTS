@@ -29,6 +29,7 @@ class JumpjetLocomotionClass : public LocomotionClass
 
 		virtual void Serialize(SaveStreamClass & stream) override;
 
+		virtual void STDMETHODCALLTYPE Object_Linked(void) override;
 		virtual boolean STDMETHODCALLTYPE Is_Moving(void) override;
 		virtual Coord STDMETHODCALLTYPE Destination(void) override;
 		virtual Coord STDMETHODCALLTYPE Head_To_Coord(void) override;

@@ -217,4 +217,9 @@ class WarheadTypeClass : public AbstractTypeClass
 		 */
 		bool IsVeinhole;
 
+		/*
+		** Is this Warhead allowed to acquire targets on its own?
+		*/
+		bool AllowAcquiring;
+
 };

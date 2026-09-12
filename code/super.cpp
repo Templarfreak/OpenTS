@@ -56,6 +56,7 @@
 #include "crc.h"
 #include "data.h"
 #include "globals.h"
+#include "houstype.h"
 #include "house.h"
 #include "incdec.h"
 #include "infantry.h"
@@ -66,6 +67,7 @@
 #include "mouse.h"
 #include "rules.h"
 #include "savestream.h"
+#include "side.h"
 #include "sun.h"
 #include "suprtype.h"
 #include "swizzle.h"
@@ -74,6 +76,8 @@
 #include "vector.h"
 #include "vox.h"
 #include "weapon.h"
+#include "dbgprint.h"
+#include "unittype.h"
 
 #include <algorithm>
 
@@ -591,6 +595,8 @@ bool SuperClass::Can_Place(void) const
 }
 
 
+
+
 /// <summary>
 /// Unleashes the super weapon upon the cell specified.
 /// This routine is called once the target has been chosen, either by the player
@@ -637,10 +643,13 @@ void SuperClass::Place(Cell const & cell, bool player)
 				 */
 				for (int index = 0; index < Buildings.Count(); index++) {
 					BuildingClass * b = Buildings[index];
-					if (!b->IsInLimbo && b->Class->IsEMPulseCannon && b->House == House && b->Is_Powered_On()) {
-						if (b->Distance(target) < mindist) {
-							mindist = b->Distance(target);
-							launchsite = b;
+
+					if (!b->IsInLimbo && b->House == House && b->Is_Powered_On()) {
+						if ((Class->Building != NULL && b->Class == Class->Building) || (Class->Building == NULL && b->Class->IsEMPulseCannon)) {
+							if (b->Distance(target) < mindist) {
+								mindist = b->Distance(target);
+								launchsite = b;
+							}
 						}
 					}
 				}
@@ -650,6 +659,7 @@ void SuperClass::Place(Cell const & cell, bool player)
 				 * sequence.
 				 */
 				if (launchsite != NULL) {
+					launchsite->LastSuperWeaponIndex = Class->HeapID;
 					launchsite->Assign_Mission(MISSION_MISSILE);
 					launchsite->Commence();
 					House->EMPDest = cell;
@@ -682,11 +692,14 @@ void SuperClass::Place(Cell const & cell, bool player)
 
 					Cell closest = Map.Closest_Edge_Cell(start);
 
-					WeaponTypeClass const * wtype;
-					if (Class->Type == SUPER_CHEM_MISSILE) {
-						wtype = Weapons[WeaponTypeClass::From_Name("ChemLauncher")];
-					} else {
-						wtype = Weapons[WeaponTypeClass::From_Name("MultiLauncher")];
+					WeaponTypeClass const * wtype = Class->Weapon;
+
+					if (wtype == NULL) {
+						if (Class->Type == SUPER_CHEM_MISSILE) {
+							wtype = Weapons[WeaponTypeClass::From_Name("ChemLauncher")];
+						} else {
+							wtype = Weapons[WeaponTypeClass::From_Name("MultiLauncher")];
+						}
 					}
 
 					BulletTypeClass const * btype = wtype->Bullet;
@@ -737,9 +750,32 @@ void SuperClass::Place(Cell const & cell, bool player)
 			for (int index = 0; index < Buildings.Count(); index++) {
 				BuildingClass * b = Buildings[index];
 				if (b->House == House) {
-					for (int j = 0; j < Rule->HSBuilding.Count(); j++) {
-						if (b->Class == Rule->HSBuilding[j]) {
+					if ((unsigned)House->Class->Side < (unsigned)Sides.Count()
+						&& (unsigned)Class->HeapID < (unsigned)Sides[House->Class->Side]->HunterSeekerBuildings.Count()) {
+						if (b->Class == Sides[House->Class->Side]->HunterSeekerBuildings[Class->HeapID]) {
 							hsbuilding = b;
+						}
+					}
+
+					if (hsbuilding == NULL) {
+						if (b->Class == Class->HunterSeekerBuilding) {
+							hsbuilding = b;
+						}
+					}
+
+					if (hsbuilding == NULL) {
+						if ((unsigned)House->Class->Side < (unsigned)Sides.Count()) {
+							if (b->Class == Sides[House->Class->Side]->HunterSeekerBuilding) {
+								hsbuilding = b;
+							}
+						}
+					}
+
+					if (hsbuilding == NULL) {
+						for (int j = 0; j < Rule->HSBuilding.Count(); j++) {
+							if (b->Class == Rule->HSBuilding[j]) {
+								hsbuilding = b;
+							}
 						}
 					}
 				}
@@ -749,11 +785,28 @@ void SuperClass::Place(Cell const & cell, bool player)
 				Cell nearby = Map.Nearby_Location(hsbuilding->PositionCoord.As_Cell(), SPEED_FOOT);
 				if (Map.In_Local_Radar(nearby)) {
 					UnitClass * hs;
-					if (House->ActLike == HOUSE_GOOD) {
-						hs = new UnitClass(Rule->GDIHunterSeeker, House);
-					} else {
-						hs = new UnitClass(Rule->NodHunterSeeker, House);
+					UnitTypeClass const * hunter_seeker = NULL;
+
+					if ((unsigned)House->Class->Side < (unsigned)Sides.Count()
+						&& (unsigned)Class->HeapID < (unsigned)Sides[House->Class->Side]->HunterSeekers.Count()) {
+						hunter_seeker = Sides[House->Class->Side]->HunterSeekers[Class->HeapID];
 					}
+
+					if (hunter_seeker == NULL) {
+						hunter_seeker = Class->HunterSeeker;
+					}
+
+					if (hunter_seeker == NULL) {
+						if ((unsigned)House->Class->Side < (unsigned)Sides.Count()) {
+							hunter_seeker = Sides[House->Class->Side]->HunterSeeker;
+						}
+					}
+
+					if (hunter_seeker == NULL) {
+						hunter_seeker = House->ActLike == HOUSE_GOOD ? Rule->GDIHunterSeeker : Rule->NodHunterSeeker;
+					}
+
+					hs = new UnitClass(hunter_seeker, House);
 					if (!hs->Unlimbo(nearby, DIR_E)) {
 						delete hs;
 					} else {
@@ -872,6 +925,54 @@ void SuperClass::Compute_CRC(CRCEngine &crc) const
 
 
 /// <summary>
+/// Creates and launches one drop-pod passenger.
+/// The passenger type is supplied by Drop_Pods, while the drop-pod covering weapon remains
+/// controlled by the drop-pod locomotor's rules setting.
+/// </summary>
+/// <param name="cell">The working cell around which the passenger is placed; updated for
+/// the next pod when a nearby cell is available.</param>
+/// <param name="type">The infantry type to place in the pod.</param>
+bool SuperClass::Drop_Pod(Cell & cell, InfantryTypeClass const * type) const
+{
+	InfantryClass * inf = (InfantryClass *)type->Create_One_Of(House);
+
+	Cell nearby = Map.Nearby_Location(cell, SPEED_FOOT, -1, MZONE_INFANTRY, false, Point2D(1,1), false, false, false, false);
+	if (inf->Can_Enter_Cell(&Map[nearby]) == MOVE_OK) {
+
+		inf->Veterancy.Set_Elite(true);
+		inf->Link_DropPod();
+		inf->PositionCoord = nearby;
+		inf->Assign_Destination(&Map[nearby]);
+		inf->Locomotion->Move_To(Coord(nearby));
+		if (!inf->IsInLimbo) {
+			inf->Look();
+			inf->Assign_Mission(MISSION_GUARD_AREA);
+			inf->Commence();
+		}
+
+		FacingType start_dir = Random_Pick(FACING_N, FACING_NW);
+
+		for (int offset = 0; offset < FACING_COUNT; offset++) {
+			FacingType dir = (FacingType)((start_dir + offset) % FACING_COUNT);
+			if (inf->Can_Enter_Cell(&Map[Adjacent_Cell(nearby, dir)]) == MOVE_OK) {
+				cell = Adjacent_Cell(nearby, dir);
+				break;
+			}
+		}
+
+		if (inf->IsInLimbo) {
+			inf->Delete_Me();
+			return(false);
+		}
+	} else {
+		inf->Delete_Me();
+		return(false);
+	}
+	return(true);
+}
+
+
+/// <summary>
 /// Delivers a squad of elite infantry by drop pod.
 /// This routine is used by the drop pod super weapon to land a handful of veteran
 /// soldiers on the map. Each pod aims for a cell adjacent to the one before it, so the
@@ -882,47 +983,47 @@ void SuperClass::Compute_CRC(CRCEngine &crc) const
 void SuperClass::Drop_Pods(Cell const & cell) const
 {
 	Cell working_cell = cell;
-	int count = Random_Pick(Rule->DropPodInfantryMinimum, Rule->DropPodInfantryMaximum);
-	InfantryType i1 = InfantryTypeClass::From_Name("E1");
-	InfantryTypeClass const * inftype = InfantryTypes[i1];
-	InfantryType i2 = InfantryTypeClass::From_Name("E2");
-	InfantryTypeClass const * altinftype = InfantryTypes[i2];
 
-	int toplace = count;
-	int attempts = 3 * count;
+	if (Class->OGDropPod) {
+		int min = Class->InfantryMinimums[0] > -1 ? Class->InfantryMinimums[0] : Rule->DropPodInfantryMinimum;
+		int max = Class->InfantryMaximums[0] > -1 ? Class->InfantryMaximums[0] : Rule->DropPodInfantryMaximum;
+		int count = Random_Pick(min, max);
 
-	while (toplace && attempts--) {
-		InfantryClass * inf = (InfantryClass *)(((Random_Double(0.0, 1.0) < 0.5) ? inftype : altinftype)->Create_One_Of(House));
+		TypeList<InfantryTypeClass const *> inflist;
 
-		Cell nearby = Map.Nearby_Location(working_cell, SPEED_FOOT, -1, MZONE_INFANTRY, false, Point2D(1,1), false, false, false, false);
-		if (inf->Can_Enter_Cell(&Map[nearby]) == MOVE_OK) {
-			inf->Veterancy.Set_Elite(true);
-			inf->Link_DropPod();
-			inf->PositionCoord = nearby;
-			inf->Assign_Destination(&Map[nearby]);
-			inf->Locomotion->Move_To(Coord(nearby));
-			if (!inf->IsInLimbo) {
-				inf->Look();
-				inf->Assign_Mission(MISSION_GUARD_AREA);
-				inf->Commence();
+		if (Class->DeliveredInfantryTypes.Count() > 0) {
+			inflist = Class->DeliveredInfantryTypes;
+		}
+		else {
+			InfantryTypeClass * try_alt = InfantryTypes.Count() > 1 ? InfantryTypes[1] : InfantryTypes[0];
+
+			inflist = {};
+			inflist.Add(InfantryTypes[0]);
+			inflist.Add(try_alt);
+		}
+
+		int toplace = count;
+		int attempts = 3 * count;
+
+		while (toplace && attempts--) {
+			InfantryTypeClass const * type = inflist[Random_Pick(0, inflist.Count() - 1)];
+			if (Drop_Pod(working_cell, type)) {
 				toplace--;
 			}
+		}
+	}
+	else {
+		for (int i = 0; i < Class->DeliveredInfantryTypes.Count(); i++) {
+			int min = Class->InfantryMinimums[i];
+			int max = Class->InfantryMaximums[i];
+			int toplace = Random_Pick(min, max);
+			int attempts = 3 * toplace;
 
-			FacingType start_dir = Random_Pick(FACING_N, FACING_NW);
-
-			for (int offset = 0; offset < FACING_COUNT; offset++) {
-				FacingType dir = (FacingType)((start_dir + offset) % FACING_COUNT);
-				if (inf->Can_Enter_Cell(&Map[Adjacent_Cell(nearby, dir)]) == MOVE_OK) {
-					working_cell = Adjacent_Cell(nearby, dir);
-					break;
+			while (toplace && attempts--) {
+				if (Drop_Pod(working_cell, Class->DeliveredInfantryTypes[i])) {
+					toplace--;
 				}
 			}
-
-			if (inf->IsInLimbo) {
-				inf->Delete_Me();
-			}
-		} else {
-			inf->Delete_Me();
 		}
 	}
 }

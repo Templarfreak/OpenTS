@@ -14,6 +14,7 @@
 #pragma once
 
 #include "abstype.h"
+#include "typelist.h"
 
 #include "action.hh"
 #include "overlay.hh"
@@ -64,6 +65,26 @@ class SuperWeaponTypeClass : public AbstractTypeClass
 		WeaponTypeClass const * Weapon;
 
 		/*
+		** Building type that this Superwepaon Type uses. This currently is used by EMP SWs.
+		*/
+		BuildingTypeClass const * Building;
+
+		/*
+		 * Original DropPod behavior for spawning random infantry counts.
+		 */
+		bool OGDropPod;
+
+		/*
+		 * Determines the min and max range for dropping infantry. Currently used for DropPods, might be for more later.
+		 */
+		TypeList<int> InfantryMaximums;
+		TypeList<int> InfantryMinimums;
+		TypeList<InfantryTypeClass const *> DeliveredInfantryTypes;
+
+		UnitTypeClass const * HunterSeeker;
+		BuildingTypeClass const * HunterSeekerBuilding;
+
+		/*
 		 * These are the voice announcements this super weapon makes -- when it has finished
 		 * charging, when it starts charging, when the player clicks its cameo before it is
 		 * ready, and when it is clicked while its charging is suspended.
@@ -98,6 +119,11 @@ class SuperWeaponTypeClass : public AbstractTypeClass
 		 * the cursor shown over the map and is how the click finds its way back here.
 		 */
 		ActionType Action;
+
+		/*
+		 * Certain SWs, such as EMP, use this as the disallowed action.
+		 */
+		ActionType DisallowedAction;
 
 		/*
 		 * Pointer to a building type that must also be standing before this super weapon is

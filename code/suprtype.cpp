@@ -17,14 +17,17 @@
 #include "building.h"
 #include "builtype.h"
 #include "cell.h"
+#include "dbgprint.h"
 #include "findmake.h"
 #include "globals.h"
+#include "infatype.h"
 #include "mixfile.h"
 #include "mouse.h"
 #include "savestream.h"
 #include "sun.h"
 #include "swizzle.h"
 #include "weapon.h"
+#include "unittype.h"
 
 
 /// <summary>
@@ -72,11 +75,19 @@ SuperWeaponTypeClass::SuperWeaponTypeClass(char const * ininame) :
 	RechargeTime(4500),
 	CameoData(NULL),
 	Action(ACTION_NONE),
+	DisallowedAction(ACTION_EMPULSE_RANGE),
 	AuxBuilding(NULL),
+	HunterSeeker(NULL),
+	HunterSeekerBuilding(NULL),
 	SidebarImage(),
 	UseChargeDrain(false),
 	IsPowered(true),
-	IsManualControl(false)
+	IsManualControl(false),
+	OGDropPod(true),
+	InfantryMaximums({-1}),
+	InfantryMinimums({-1}),
+	DeliveredInfantryTypes({}),
+	Building(NULL)
 {
 	Create_ID();
 	HeapID = (SuperWeaponType)SuperWeaponTypes.Count();
@@ -138,14 +149,22 @@ void SuperWeaponTypeClass::Serialize(SaveStreamClass & stream)
 
 	stream.Serialize(HeapID);
 	stream.Serialize(Weapon);
+	stream.Serialize(Building);
 	stream.Serialize(VoxRecharge);
 	stream.Serialize(VoxCharging);
 	stream.Serialize(VoxImpatient);
 	stream.Serialize(VoxSuspend);
 	stream.Serialize(RechargeTime);
 	stream.Serialize(Type);
+	stream.Serialize(HunterSeeker);
+	stream.Serialize(HunterSeekerBuilding);
+	stream.Serialize(InfantryMinimums);
+	stream.Serialize(InfantryMaximums);
+	stream.Serialize(DeliveredInfantryTypes);
+	stream.Serialize(OGDropPod);
 	// CameoData -- artwork, fetched from the mix files again as this loads.
 	stream.Serialize(Action);
+	stream.Serialize(DisallowedAction);
 	stream.Serialize(AuxBuilding);
 	stream.Serialize(SidebarImage);
 	stream.Serialize(UseChargeDrain);
@@ -174,6 +193,7 @@ void SuperWeaponTypeClass::Compute_CRC(CRCEngine & crc) const
 	BASECLASS::Compute_CRC(crc);
 	crc(HeapID);
 	crc(Action);
+	crc(DisallowedAction);
 	crc(VoxRecharge);
 	crc(VoxCharging);
 	crc(VoxImpatient);
@@ -181,6 +201,21 @@ void SuperWeaponTypeClass::Compute_CRC(CRCEngine & crc) const
 	crc(IsPowered);
 	crc(RechargeTime);
 	crc(Type);
+	crc(HunterSeeker);
+	crc(HunterSeekerBuilding);
+	crc(InfantryMaximums.Count());
+	for (int index = 0; index < InfantryMaximums.Count(); index++) {
+		crc(InfantryMaximums[index]);
+	}
+	crc(InfantryMinimums.Count());
+	for (int index = 0; index < InfantryMinimums.Count(); index++) {
+		crc(InfantryMinimums[index]);
+	}
+	crc(DeliveredInfantryTypes.Count());
+	for (int index = 0; index < DeliveredInfantryTypes.Count(); index++) {
+		crc(DeliveredInfantryTypes[index]);
+	}
+	crc(OGDropPod);
 	crc(UseChargeDrain);
 	crc(IsManualControl);
 }
@@ -208,6 +243,7 @@ bool SuperWeaponTypeClass::Read_INI(CCINIClass const & ini)
 	if (BASECLASS::Read_INI(ini)) {
 
 		Weapon = TGet_Class(ini, IniName, "WeaponType", Weapon);
+		Building = TGet_Class(ini, IniName, "BuildingType", Building);
 
 		VoxRecharge = ini.Get_VoxType(IniName, "RechargeVoice", VoxRecharge);
 		VoxCharging = ini.Get_VoxType(IniName, "ChargingVoice", VoxCharging);
@@ -215,13 +251,40 @@ bool SuperWeaponTypeClass::Read_INI(CCINIClass const & ini)
 		VoxSuspend = ini.Get_VoxType(IniName, "SuspendVoice", VoxSuspend);
 
 		Action = ini.Get_ActionType(IniName, "Action", Action);
+		DisallowedAction = ini.Get_ActionType(IniName, "DisallowedAction", DisallowedAction);
 		IsPowered = ini.Get_Bool(IniName, "IsPowered", IsPowered);
+		OGDropPod = ini.Get_Bool(IniName, "OGDropPod", OGDropPod);
 
 		char buffer[40];
 		ini.Get_String(IniName, "Type", "", buffer, sizeof(buffer));
 		if (strlen(buffer) != 0) {
 			SuperWeaponType type = Special_From_Name(buffer);
 			if (type != SUPER_NONE) Type = type;
+		}
+		if (Type == SUPER_HUNTER_SEEKER) {
+			HunterSeeker = TGet_Class(ini, IniName, "HunterSeeker", HunterSeeker);
+			HunterSeekerBuilding = TGet_Class(ini, IniName, "HunterSeekerBuilding", HunterSeekerBuilding);
+		}
+		if (Type == SUPER_DROP_PODS) {
+			bool has_infantry_maximums = !ini.Get_String(IniName, "InfantryMaximums").empty();
+			bool has_infantry_minimums = !ini.Get_String(IniName, "InfantryMinimums").empty();
+			bool has_delivered_infantry = !ini.Get_String(IniName, "DeliveredInfantryTypes").empty();
+			if (!OGDropPod && (has_infantry_maximums || has_infantry_minimums || has_delivered_infantry)) {
+				InfantryMaximums = ini.Get_IntList(IniName, "InfantryMaximums", InfantryMaximums);
+				InfantryMinimums = ini.Get_IntList(IniName, "InfantryMinimums", InfantryMinimums);
+				DeliveredInfantryTypes = TGet_TypeList<InfantryTypeClass>(ini, IniName, "DeliveredInfantryTypes", DeliveredInfantryTypes);
+
+				if (InfantryMaximums.Count() != InfantryMinimums.Count()
+					|| InfantryMaximums.Count() != DeliveredInfantryTypes.Count()) {
+					DebugString("%s has OGDropPod=false but mismatched drop pod list lengths: InfantryMaximums=%d, InfantryMinimums=%d, DeliveredInfantryTypes=%d\n",
+						Name(),
+						InfantryMaximums.Count(),
+						InfantryMinimums.Count(),
+						DeliveredInfantryTypes.Count());
+					assert(false);
+					return(false);
+				}
+			}
 		}
 
 		AuxBuilding = TGet_Class(ini, IniName, "AuxBuilding", AuxBuilding);
@@ -328,7 +391,8 @@ ActionType SuperWeaponTypeClass::What_Action(Cell const & cell, ObjectClass * ob
 
 	for (int i = 0; i < Buildings.Count(); i++) {
 		BuildingClass * building = Buildings[i];
-		if (building->Class->IsEMPulseCannon && building->House == PlayerPtr && building->Is_Powered_On()) {
+		if (building->House == PlayerPtr && building->Is_Powered_On()
+			&& ((Building != NULL && building->Class == Building) || (Building == NULL && building->Class->IsEMPulseCannon))) {
 			if (building->Distance(target) < mindist) {
 				mindist = building->Distance(target);
 				cannon = building;
@@ -337,7 +401,7 @@ ActionType SuperWeaponTypeClass::What_Action(Cell const & cell, ObjectClass * ob
 	}
 
 	if (cannon == NULL) {
-		return(ACTION_EMPULSE_RANGE);
+		return(DisallowedAction);
 	}
 
 	WeaponTypeClass *weap = cannon->Get_Class_Weapon_Data()->Weapon;
@@ -345,8 +409,8 @@ ActionType SuperWeaponTypeClass::What_Action(Cell const & cell, ObjectClass * ob
 	Cell cannon_cell = cannon->PositionCell;
 	Cell dist(target_cell - cannon_cell);
 	if (dist.X * dist.X + dist.Y * dist.Y < range * range) {
-		return(ACTION_EMPULSE);
+		return(Action);
 	}
 
-	return(ACTION_EMPULSE_RANGE);
+	return(DisallowedAction);
 }

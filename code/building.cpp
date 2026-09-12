@@ -1262,7 +1262,9 @@ DirType BuildingClass::Barrel_Pitch(AbstractClass * target) const
 			return(BarrelPitch.Current());
 		}
 
-	} else if (Class->IsEMPulseCannon) {
+	} else if (Class->IsEMPulseCannon || LastSuperWeaponIndex >= 0 &&
+		SuperWeaponTypes[LastSuperWeaponIndex]->Type == SUPER_EM_PULSE &&
+		SuperWeaponTypes[LastSuperWeaponIndex]->Building == Class) {
 		int z = Map.Get_Height_GL(target->Center_Coord());
 
 		Point2D tcoord = target->Center_Coord();
@@ -3037,9 +3039,11 @@ int BuildingClass::Exit_Object(TechnoClass * base)
 						}
 
 						InfantryClass * flying_jumpjet = NULL;
-						if (base->Fetch_RTTI() == RTTI_INFANTRY && base->ArchiveTarget != NULL) {
+						if (base->Fetch_RTTI() == RTTI_INFANTRY) {
 							InfantryClass * infantry = (InfantryClass *)base;
-							if (infantry->Class->IsJumpJet &&
+							if (infantry->Class->IsJumpJet && infantry->TClass->IsBalloonHover) {
+								flying_jumpjet = infantry;
+							} else if (base->ArchiveTarget != NULL && infantry->Class->IsJumpJet &&
 								infantry->Should_JumpJet_Fly(infantry->Get_Coord().As_Cell(), base->ArchiveTarget->Center_Coord().As_Cell())) {
 								flying_jumpjet = infantry;
 							}
@@ -3870,7 +3874,7 @@ ActionType BuildingClass::What_Action(ObjectClass const * object, bool disallow_
 	if (action == ACTION_ATTACK && PrimaryWeapon != NULL) {
 		if (!In_Range((ObjectClass *)object, 0) || !PrimaryWeapon->Bullet->IsAntiGround) {
 			action = ACTION_NONE;
-		} else if (Class->IsEMPulseCannon || Class->IsLimpetMine) {
+		} else if (Class->IsEMPulseCannon || Class->IsLimpetMine || !PrimaryWeapon->WarheadPtr->AllowAcquiring) {
 			action = ACTION_NONE;
 		}
 		if (CurrentMission == MISSION_DECONSTRUCTION) {
@@ -3951,7 +3955,7 @@ ActionType BuildingClass::What_Action(Cell const & cell, bool check_fog, bool di
 	if (action == ACTION_ATTACK && PrimaryWeapon != NULL) {
 		if (!PrimaryWeapon->Bullet->IsAntiGround) {
 			action = ACTION_NONE;
-		} else if (Class->IsEMPulseCannon || Class->IsLimpetMine) {
+		} else if (Class->IsEMPulseCannon || Class->IsLimpetMine || !PrimaryWeapon->WarheadPtr->AllowAcquiring) {
 			action = ACTION_NONE;
 		}
 		if (CurrentMission == MISSION_DECONSTRUCTION) {
@@ -4109,7 +4113,9 @@ Coord BuildingClass::Destination_Coord(void) const
  *=============================================================================================*/
 FireErrorType BuildingClass::Can_Fire(AbstractClass * target, int which) const
 {
-	if (Class->IsEMPulseCannon) {
+	if (Class->IsEMPulseCannon || LastSuperWeaponIndex >= 0 &&
+		SuperWeaponTypes[LastSuperWeaponIndex]->Type == SUPER_EM_PULSE &&
+		SuperWeaponTypes[LastSuperWeaponIndex]->Building == Class) {
 		return(FIRE_CANT);
 	}
 
@@ -4566,7 +4572,8 @@ int BuildingClass::Do_MISSION_GUARD(void)
 		*/
 		IsReadyToCommence = true;
 
-		if (!Class->IsEMPulseCannon && (Fetch_Super_Weapon() == SUPER_NONE || SuperWeaponTypes[Fetch_Super_Weapon()]->Type != SUPER_CHEM_MISSILE)) {
+		if (!Class->IsEMPulseCannon && (Fetch_Super_Weapon() == SUPER_NONE || SuperWeaponTypes[Fetch_Super_Weapon()]->Type != SUPER_CHEM_MISSILE)
+	 		&& PrimaryWeapon->WarheadPtr->AllowAcquiring) {
 
 			/*
 			**	If there is no target available, then search for one.
@@ -5896,7 +5903,9 @@ int BuildingClass::Do_MISSION_MISSILE(void)
 		Assign_Mission(MISSION_GUARD);
 	}
 
-	if (Class->IsEMPulseCannon) {
+	if (Class->IsEMPulseCannon || LastSuperWeaponIndex >= 0 &&
+		SuperWeaponTypes[LastSuperWeaponIndex]->Type == SUPER_EM_PULSE &&
+		SuperWeaponTypes[LastSuperWeaponIndex]->Building == Class) {
 		enum {
 			INITIAL,
 			EM_PULSE,
@@ -5980,18 +5989,21 @@ int BuildingClass::Do_MISSION_MISSILE(void)
 							bullet->Release();
 							Begin_Mode(BSTATE_IDLE);	// keep the door closed.
 							Assign_Mission(MISSION_GUARD);
+							LastSuperWeaponIndex = -1;
 							return(4 * TICKS_PER_SECOND);
 						}
 					}
 				}
 				Begin_Mode(BSTATE_IDLE);	// keep the door closed.
 				Assign_Mission(MISSION_GUARD);
+				LastSuperWeaponIndex = -1;
 				return(4 * TICKS_PER_SECOND);
 
 			case DONE:
 				BarrelPitch.Set_Desired(DIR_E);
 				Begin_Mode(BSTATE_IDLE);	// keep the door closed.
 				Assign_Mission(MISSION_GUARD);
+				LastSuperWeaponIndex = -1;
 				return(4 * TICKS_PER_SECOND);
 		}
 	}

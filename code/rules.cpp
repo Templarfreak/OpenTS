@@ -95,6 +95,7 @@
 #include "vector.h"
 #include "warhead.h"
 #include "weapon.h"
+#include "dbgprint.h"
 
 #include "bench.hh"
 
@@ -388,11 +389,14 @@ RulesClass::RulesClass(void) :
 	GateDownSound(VOC_NONE),
 	JumpjetTurnRate(3),
 	JumpjetSpeed(30),
+	BalloonApproachSpeed(22),
+	BalloonTerminalSpeed(15),
 	JumpjetClimb(5),
 	JumpjetCruiseHeight(400),
 	JumpjetAcceleration(.25),
 	JumpjetWobblesPerSecond(.25),
 	JumpjetWobbleDeviation(40),
+	BalloonHoverHeight(400),
 	RadarEventSuppressionDistances(),
 	RadarEventVisibilityDurations(),
 	RadarEventDurations(),
@@ -1427,6 +1431,8 @@ bool RulesClass::Do_Sides(CCINIClass const & ini)
 			sidep = ::Sides[side];
 		}
 		DebugString("Side %d: %s \n", i, (char const *)sidep->IniName);
+		sidep->HunterSeeker = TGet_Class(ini, sidep->Name(), "HunterSeeker", sidep->HunterSeeker);
+		sidep->HunterSeekerBuilding = TGet_Class(ini, sidep->Name(), "HunterSeekerBuilding", sidep->HunterSeekerBuilding);
 		sidep->Houses = ini.Get_House_List(SIDES, name, sidep->Houses);
 		for (int house = 0; house < sidep->Houses.Count(); house++) {
 			side = sidep->Houses[house];
@@ -1902,8 +1908,12 @@ bool RulesClass::Jumpjet_Controls(CCINIClass const & ini)
 	if (ini.Is_Present(SECTION)) {
 		JumpjetTurnRate = ini.Get_Int(SECTION, "TurnRate", JumpjetTurnRate);
 		JumpjetSpeed = ini.Get_Int(SECTION, "Speed", JumpjetSpeed);
+		BalloonApproachSpeed = ini.Get_Int(SECTION, "BalloonApproachSpeed", BalloonApproachSpeed);
+		BalloonTerminalSpeed = ini.Get_Int(SECTION, "BalloonTerminalSpeed", BalloonTerminalSpeed);
+		JumpjetSpeed = ini.Get_Int(SECTION, "Speed", JumpjetSpeed);
 		JumpjetClimb = ini.Get_Float(SECTION, "Climb", JumpjetClimb);
 		JumpjetCruiseHeight = ini.Get_Int(SECTION, "CruiseHeight", JumpjetCruiseHeight);
+		BalloonHoverHeight = ini.Get_Int(SECTION, "BalloonHoverHeight", BalloonHoverHeight);
 		JumpjetAcceleration = ini.Get_Float(SECTION, "Acceleration", JumpjetAcceleration);
 		JumpjetWobblesPerSecond = ini.Get_Float(SECTION, "WobblesPerSecond", JumpjetWobblesPerSecond);
 		JumpjetWobbleDeviation = ini.Get_Int(SECTION, "WobbleDeviation", JumpjetWobbleDeviation);
@@ -2089,8 +2099,11 @@ void RulesClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(JumpjetClimb);
 	stream.Serialize(JumpjetCruiseHeight);
 	stream.Serialize(JumpjetAcceleration);
+	stream.Serialize(BalloonHoverHeight);
 	stream.Serialize(JumpjetWobblesPerSecond);
 	stream.Serialize(JumpjetWobbleDeviation);
+	stream.Serialize(BalloonApproachSpeed);
+	stream.Serialize(BalloonTerminalSpeed);
 	stream.Serialize(RadarEventSuppressionDistances);
 	stream.Serialize(RadarEventVisibilityDurations);
 	stream.Serialize(RadarEventDurations);
@@ -2792,6 +2805,45 @@ bool RulesClass::Objects(CCINIClass const & ini)
 	*/
 	for (int index = 0; index < SuperWeaponTypes.Count(); index++) {
 		SuperWeaponTypes[index]->Read_INI(ini);
+	}
+	for (int sideindex = 0; sideindex < Sides.Count(); sideindex++) {
+		SideClass * side = Sides[sideindex];
+
+		while (side->HunterSeekers.Count() < SuperWeaponTypes.Count()) {
+			side->HunterSeekers.Add(NULL);
+		}
+
+		while (side->HunterSeekerBuildings.Count() < SuperWeaponTypes.Count()) {
+			side->HunterSeekerBuildings.Add(NULL);
+		}
+
+		for (int swindex = 0; swindex < SuperWeaponTypes.Count(); swindex++) {
+			SuperWeaponTypeClass * swtype = SuperWeaponTypes[swindex];
+			if (swtype->Type == SUPER_HUNTER_SEEKER) {
+				int const char_size = 128;
+				char key_base[char_size];
+				strcpy(key_base, swtype->Name());
+
+				char hs_key[char_size];
+				strcpy(hs_key, key_base);
+				strcat(hs_key, "HunterSeeker");
+
+				char hsb_key[char_size];
+				strcpy(hsb_key, key_base);
+				strcat(hsb_key, "HSB");
+
+				char hs_value[char_size];
+				char hsb_value[char_size];
+
+				ini.Get_String(side->Name(), hs_key, "", hs_value, sizeof(hs_value));
+				UnitTypeClass const * hs = TGet_Class(ini, side->Name(), hs_key, side->HunterSeekers[swtype->HeapID]);
+				side->HunterSeekers[swtype->HeapID] = hs;
+
+				ini.Get_String(side->Name(), hsb_key, "", hsb_value, sizeof(hsb_value));
+				BuildingTypeClass const * hsb = TGet_Class(ini, side->Name(), hsb_key, side->HunterSeekerBuildings[swtype->HeapID]);
+				side->HunterSeekerBuildings[swtype->HeapID] = hsb;
+			}
+		}
 	}
 
 	for (int anim = 0; anim < AnimTypes.Count(); anim++) {

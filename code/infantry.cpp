@@ -4256,6 +4256,10 @@ bool InfantryClass::Should_JumpJet_Fly(Cell const & from, Cell const & to)
 	int height = HeightAGL;
 	height = height; /// dead code
 
+	if (TClass->IsBalloonHover && Class->IsJumpJet) {
+		return(true);
+	}
+
 	if (IonStormClass::Is_Ion_Storm_Active()) {
 		return(false);
 	}

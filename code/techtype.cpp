@@ -92,6 +92,7 @@ TechnoTypeClass::TechnoTypeClass(char const * ininame, SpeedType speed) :
 	MaxPassengers(0),
 	SightRange(0),
 	Cost(0),
+	BuildTime(-1),
 	Level(255),
 	Prerequisite(),
 	Risk(0),
@@ -184,10 +185,22 @@ TechnoTypeClass::TechnoTypeClass(char const * ininame, SpeedType speed) :
 	IsSubterranean(false),
 	IsAutoCrush(false),
 	IsAccelerates(true),
+	IsBalloonHover(true),
 	ZFudgeCliff(10),
 	ZFudgeColumn(5),
 	ZFudgeTunnel(10),
-	ZFudgeBridge(0)
+	ZFudgeBridge(0),
+	JumpjetTurnRate(-1),
+	JumpjetSpeed(-1),
+	BalloonApproachSpeed(-1),
+	BalloonTerminalSpeed(-1),
+	JumpjetClimb(-1),
+	JumpjetCruiseHeight(-1),
+	JumpjetAcceleration(-1),
+	JumpjetWobblesPerSecond(-1),
+	JumpjetWobbleDeviation(-1),
+	BalloonHoverHeight(-1),
+	JumpjetCloakDetectionRadius(-1)
 {
 	IsSentient = true;
 
@@ -284,7 +297,12 @@ int TechnoTypeClass::Get_Ownable(void) const
  *=============================================================================================*/
 int TechnoTypeClass::Time_To_Build(void) const
 {
-	return(Cost * Rule->BuildSpeedBias * (TICKS_PER_MINUTE / 1000.));
+	if (BuildTime == -1) {
+		return(Cost * Rule->BuildSpeedBias * (TICKS_PER_MINUTE / 1000.));
+	}
+	else {
+		return (BuildTime * Rule->BuildSpeedBias);
+	}
 }
 
 
@@ -553,6 +571,7 @@ bool TechnoTypeClass::Read_INI(CCINIClass const & ini)
 		if (strcmp(Name(), "GAFSDF") == 0 || strcmp(Name(), "GAWALL") == 0 || strcmp(Name(), "NAWALL") == 0) {
 			Cost = 250;
 		}
+		BuildTime = ini.Get_Int(Name(), "BuildTime", BuildTime);
 		MaxAmmo = ini.Get_Int(Name(), "Ammo", MaxAmmo);
 		Reward = Points = ini.Get_Int(Name(), "Points", Points);
 		Risk = ini.Get_Int(Name(), "ThreatPosed", Risk);
@@ -579,6 +598,7 @@ bool TechnoTypeClass::Read_INI(CCINIClass const & ini)
 		IsAutoCrush = ini.Get_Bool(Name(), "AutoCrush", IsAutoCrush);
 		IsTiltsWhenCrushes = ini.Get_Bool(Name(), "TiltsWhenCrushes", IsTiltsWhenCrushes);
 		IsAccelerates = ini.Get_Bool(Name(), "Accelerates", IsAccelerates);
+		IsBalloonHover = ini.Get_Bool(Name(), "BalloonHover", IsBalloonHover);
 		ZFudgeCliff = ini.Get_Int(Name(), "ZFudgeCliff", ZFudgeCliff);
 		ZFudgeColumn = ini.Get_Int(Name(), "ZFudgeColumn", ZFudgeColumn);
 		ZFudgeTunnel = ini.Get_Int(Name(), "ZFudgeTunnel", ZFudgeTunnel);
@@ -591,6 +611,20 @@ bool TechnoTypeClass::Read_INI(CCINIClass const & ini)
 		TargetStrengthCoefficient = ini.Get_Float(Name(), "TargetStrengthCoefficient", TargetStrengthCoefficient == 0 ? Rule->TargetStrengthCoefficientDefault : TargetStrengthCoefficient);
 		TargetDistanceCoefficient = ini.Get_Float(Name(), "TargetDistanceCoefficient", TargetDistanceCoefficient == 0 ? Rule->TargetDistanceCoefficientDefault : TargetDistanceCoefficient);
 		SpecialThreatValue = ini.Get_Float(Name(), "SpecialThreatValue", SpecialThreatValue);
+
+
+		// JumpJet
+		JumpjetTurnRate = ini.Get_Int(Name(), "TurnRate", JumpjetTurnRate);
+		JumpjetSpeed = ini.Get_Int(Name(), "JumpjetSpeed", JumpjetSpeed);
+		BalloonApproachSpeed = ini.Get_Int(Name(), "BalloonApproachSpeed", BalloonApproachSpeed);
+		BalloonTerminalSpeed = ini.Get_Int(Name(), "BalloonTerminalSpeed", BalloonTerminalSpeed);
+		JumpjetClimb = ini.Get_Float(Name(), "Climb", JumpjetClimb);
+		JumpjetCruiseHeight = ini.Get_Int(Name(), "CruiseHeight", JumpjetCruiseHeight);
+		BalloonHoverHeight = ini.Get_Int(Name(), "BalloonHoverHeight", BalloonHoverHeight);
+		JumpjetAcceleration = ini.Get_Float(Name(), "Acceleration", JumpjetAcceleration);
+		JumpjetWobblesPerSecond = ini.Get_Float(Name(), "WobblesPerSecond", JumpjetWobblesPerSecond);
+		JumpjetWobbleDeviation = ini.Get_Int(Name(), "WobbleDeviation", JumpjetWobbleDeviation);
+		JumpjetCloakDetectionRadius = ini.Get_Int(Name(), "CloakDetectionRadius", JumpjetCloakDetectionRadius);
 
 		IsLeader = false;
 		if (Weapons[0].Weapon != NULL && Weapons[0].Weapon->Attack > 0) {
@@ -916,6 +950,7 @@ void TechnoTypeClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(MaxPassengers);
 	stream.Serialize(SightRange);
 	stream.Serialize(Cost);
+	stream.Serialize(BuildTime);
 	stream.Serialize(FlightLevel);
 	stream.Serialize(Level);
 	stream.Serialize(Prerequisite);
@@ -980,10 +1015,24 @@ void TechnoTypeClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(IsSubterranean);
 	stream.Serialize(IsAutoCrush);
 	stream.Serialize(IsAccelerates);
+	stream.Serialize(IsBalloonHover);
 	stream.Serialize(ZFudgeCliff);
 	stream.Serialize(ZFudgeColumn);
 	stream.Serialize(ZFudgeTunnel);
 	stream.Serialize(ZFudgeBridge);
+
+	// JumpJet
+	stream.Serialize(JumpjetTurnRate);
+	stream.Serialize(JumpjetSpeed);
+	stream.Serialize(JumpjetClimb);
+	stream.Serialize(JumpjetCruiseHeight);
+	stream.Serialize(JumpjetAcceleration);
+	stream.Serialize(BalloonHoverHeight);
+	stream.Serialize(JumpjetWobblesPerSecond);
+	stream.Serialize(JumpjetWobbleDeviation);
+	stream.Serialize(BalloonApproachSpeed);
+	stream.Serialize(BalloonTerminalSpeed);
+	stream.Serialize(JumpjetCloakDetectionRadius);
 }
 
 
@@ -1033,6 +1082,7 @@ void TechnoTypeClass::Compute_CRC(class CRCEngine & crc) const
 	crc(MaxPassengers);
 	crc(SightRange);
 	crc(Cost);
+	crc(BuildTime);
 	crc(Level);
 	crc(Prerequisite.Count());
 	crc(Risk);
@@ -1069,10 +1119,24 @@ void TechnoTypeClass::Compute_CRC(class CRCEngine & crc) const
 	crc(IsExploding);
 	crc(IsNoAutoFire);
 	crc(IsRadarEquipped);
+	crc(IsBalloonHover);
 	crc(IsRegulated);
 	crc(IsManualReload);
 	crc(IsVisibleLoad);
 	crc(IsLightningRod);
+
+	// JumpJet
+	crc(JumpjetTurnRate);
+	crc(JumpjetSpeed);
+	crc(JumpjetClimb);
+	crc(JumpjetCruiseHeight);
+	crc(JumpjetAcceleration);
+	crc(BalloonHoverHeight);
+	crc(JumpjetWobblesPerSecond);
+	crc(JumpjetWobbleDeviation);
+	crc(BalloonApproachSpeed);
+	crc(BalloonTerminalSpeed);
+	crc(JumpjetCloakDetectionRadius);
 }
 
 

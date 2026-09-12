@@ -113,7 +113,8 @@ WarheadTypeClass::WarheadTypeClass(char const * ininame) :
 	IsRocker(false),
 	IsBright(false),
 	IsEMEffect(false),
-	IsVeinhole(false)
+	IsVeinhole(false),
+	AllowAcquiring(true)
 {
 	Create_ID();
 
@@ -189,8 +190,10 @@ bool WarheadTypeClass::Read_INI(CCINIClass const & ini)
 
 		ProneDamage = ini.Get_Float(Name(), "ProneDamage", ProneDamage);
 		IsVeinhole = ini.Get_Bool(Name(), "Veinhole", IsVeinhole);
+		AllowAcquiring = ini.Get_Bool(Name(), "AllowAcquiring", AllowAcquiring);
 
 		char buffer[128];
+		//ini.Get_VocType_List
 		if (ini.Get_String(Name(), "Verses", "100%%,100%%,100%%,100%%,100%%", buffer, sizeof(buffer))) {
 			char * aval = strtok(buffer, ",");
 			for (int armor = ARMOR_FIRST; armor < ARMOR_COUNT; armor++) {
@@ -200,7 +203,12 @@ bool WarheadTypeClass::Read_INI(CCINIClass const & ini)
 			}
 		}
 
-		IsOrganic = (Modifier[ARMOR_STEEL] == 0);
+		if (ini.Find_Entry(Name(), "IsOrganic") != NULL) {
+			IsOrganic = ini.Get_Bool(Name(), "IsOrganic", false);
+		}
+		else {
+			IsOrganic = (Modifier[ARMOR_STEEL] == 0);
+		}
 
 		if (Session.Type != GAME_NORMAL && strcmp(Name(), "ARTYHE") == 0) {
 			ProneDamage = .3;
@@ -239,6 +247,7 @@ void WarheadTypeClass::Compute_CRC(CRCEngine &crc) const
 	crc(DeformThreshhold);
 	crc(ProneDamage);
 	crc(IsVeinhole);
+	crc(AllowAcquiring);
 	for (int armor = ARMOR_FIRST; armor < ARMOR_COUNT; armor++) {
 		crc(Modifier[armor]);
 	}
@@ -295,6 +304,7 @@ void WarheadTypeClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(IsBright);
 	stream.Serialize(IsEMEffect);
 	stream.Serialize(IsVeinhole);
+	stream.Serialize(AllowAcquiring);
 }
 
 

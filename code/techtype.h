@@ -267,6 +267,11 @@ class TechnoTypeClass : public ObjectTypeClass
 		int Cost;
 
 		/*
+		** Explicit override of build time in minutes. -1 means use normal build time calculation. Defaults to -1.
+		*/
+		float BuildTime;
+
+		/*
 		 * This is the height above ground that an object of this type cruises at, expressed
 		 * in leptons. If -1, then the global FlightLevel rule is used instead.
 		 */
@@ -667,6 +672,76 @@ class TechnoTypeClass : public ObjectTypeClass
 		 * Vehicles without this flag simply travel at their target speed throughout.
 		 */
 		bool IsAccelerates;
+
+
+		/*
+		** Whether this Jumpjet unit permanently hovers in the air or not.
+		*/
+		bool IsBalloonHover;
+
+		/*
+		 * This is the rate of turn of a jumpjet unit, expressed as 360/256ths of a rotation
+		 * per game tick.
+		 */
+		int JumpjetTurnRate;
+
+		/*
+		 * This is the top travel speed of a jumpjet unit. The slower speeds it drops to as
+		 * it closes on its destination are expressed as fractions of this.
+		 */
+		int JumpjetSpeed;
+
+		/*
+		 * Speed that a BalloonHover unit starts slowing down upon initial approach.
+		 */
+		int BalloonApproachSpeed;
+
+		/*
+		 * Final approach speed just before reaching destination.
+		 */
+		int BalloonTerminalSpeed;
+
+		/*
+		 * This is how many leptons a jumpjet unit gains or loses in altitude each game
+		 * tick while it is climbing toward or dropping to its cruise height.
+		 */
+		double JumpjetClimb;
+
+		/*
+		 * This is the altitude, expressed in leptons, that a jumpjet unit levels off at
+		 * and travels at once it has finished climbing.
+		 */
+		int JumpjetCruiseHeight;
+
+		/*
+		 * This is how much speed a jumpjet unit picks up each game tick while working up
+		 * to its travel speed. It sheds speed half again as fast as it gains it.
+		 */
+		double JumpjetAcceleration;
+
+		/*
+		 * This is the number of complete wobble cycles a jumpjet unit performs each
+		 * second. It works with JumpjetWobbleDeviation to keep a hovering unit from
+		 * appearing to hang motionless in the air.
+		 */
+		double JumpjetWobblesPerSecond;
+
+		/*
+		 * This is how far above and below its flight level, expressed in leptons, that a
+		 * jumpjet unit drifts as it wobbles.
+		 */
+		int JumpjetWobbleDeviation;
+
+		/*
+		* Height that a BalloonHover unit hovers at when idle.
+		*/
+		int BalloonHoverHeight;
+
+		/*
+		 * This is the radius, in cells, within which a passing jumpjet shimmers any
+		 * cloaked object below it, giving the position away.
+		 */
+		int JumpjetCloakDetectionRadius;
 
 		/*
 		 * These are the amounts to bias this object's draw depth by while it is passing the

@@ -419,6 +419,16 @@ class RulesClass
 		int JumpjetSpeed;
 
 		/*
+		 * Speed that a BalloonHover unit starts slowing down upon initial approach.
+		 */
+		int BalloonApproachSpeed;
+
+		/*
+		 * Final approach speed just before reaching destination.
+		 */
+		int BalloonTerminalSpeed;
+
+		/*
 		 * This is how many leptons a jumpjet unit gains or loses in altitude each game
 		 * tick while it is climbing toward or dropping to its cruise height.
 		 */
@@ -448,6 +458,11 @@ class RulesClass
 		 * jumpjet unit drifts as it wobbles.
 		 */
 		int JumpjetWobbleDeviation;
+
+		/*
+		* Height that a BalloonHover unit hovers at when idle.
+		*/
+		int BalloonHoverHeight;
 
 		/*
 		 * These are the suppression distances, expressed in cells and listed per radar

@@ -55,6 +55,11 @@ LocomotionClass::~LocomotionClass(void)
 	LinkedTo = NULL;
 }
 
+void STDMETHODCALLTYPE LocomotionClass::Object_Linked(void)
+{
+
+}
+
 
 /// <summary>
 /// Attaches this locomotor to the object it is to drive.
@@ -66,6 +71,7 @@ LocomotionClass::~LocomotionClass(void)
 HRESULT STDMETHODCALLTYPE LocomotionClass::Link_To_Object(void *pointer)
 {
 	LinkedTo = (FootClass *)pointer;
+	Object_Linked();
 	return(S_OK);
 }
 

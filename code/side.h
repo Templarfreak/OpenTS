@@ -15,8 +15,11 @@
 
 #include "abstype.h"
 #include "typelist.h"
+#include "vector.h"
 
 #include "side.hh"
+
+class UnitTypeClass;
 
 
 class SideClass : public AbstractTypeClass
@@ -46,4 +49,10 @@ class SideClass : public AbstractTypeClass
 		 * a control file name a whole side wherever a list of houses is expected.
 		 */
 		TypeList<int> Houses;
+
+		DynamicVectorClass<UnitTypeClass const *> HunterSeekers;
+		UnitTypeClass const * HunterSeeker;
+
+		DynamicVectorClass<BuildingTypeClass const *> HunterSeekerBuildings;
+		BuildingTypeClass const * HunterSeekerBuilding;
 };

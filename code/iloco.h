@@ -37,6 +37,7 @@ public:
 	 * Links object to locomotor.
 	 */
 	virtual HRESULT STDMETHODCALLTYPE Link_To_Object(void *pointer) = 0;
+	virtual void STDMETHODCALLTYPE Object_Linked(void) = 0;
 
 	/*
 	 * Sees if object is moving.

@@ -17,6 +17,7 @@
 #include "savestream.h"
 #include "sun.h"
 #include "tracker.h"
+#include "unittype.h"
 
 
 /// <summary>
@@ -26,7 +27,11 @@
 /// </summary>
 SideClass::SideClass(char const * ininame) :
 	BASECLASS(ininame),
-	Houses()
+	Houses(),
+	HunterSeekers(),
+	HunterSeekerBuildings(),
+	HunterSeeker(NULL),
+	HunterSeekerBuilding(NULL)
 {
 	Create_ID();
 	Sides.Add(this);
@@ -73,6 +78,11 @@ void SideClass::Compute_CRC(CRCEngine & crc) const
 {
 	BASECLASS::Compute_CRC(crc);
 	crc(Houses.Count());
+	crc(HunterSeekers.Count());
+	for (int index = 0; index < HunterSeekers.Count(); index++) {
+		crc(HunterSeekers[index]);
+	}
+	crc(HunterSeeker);
 }
 
 
@@ -100,4 +110,6 @@ void SideClass::Serialize(SaveStreamClass & stream)
 	BASECLASS::Serialize(stream);
 
 	stream.Serialize(Houses);
+	stream.Serialize(HunterSeekers);
+	stream.Serialize(HunterSeeker);
 }
