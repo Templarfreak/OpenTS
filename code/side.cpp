@@ -20,6 +20,7 @@
 #include "savestream.h"
 #include "sun.h"
 #include "tracker.h"
+#include "unittype.h"
 
 
 /// <summary>
@@ -40,7 +41,11 @@ SideClass::SideClass(char const * ininame) :
 	AIWallDefenseCoefficient(0.0),
 	IsAIBuildsWalls(true),
 	AIBaseDefensePlaceholders(2),
-	IsAIBaseDefensesWithWalls(false)
+	IsAIBaseDefensesWithWalls(false),
+	HunterSeekers(),
+	HunterSeekerBuildings(),
+	HunterSeeker(NULL),
+	HunterSeekerBuilding(NULL)
 {
 	Create_ID();
 	Sides.Add(this);
@@ -103,6 +108,11 @@ void SideClass::Compute_CRC(CRCEngine & crc) const
 	crc(IsAIBuildsWalls);
 	crc(AIBaseDefensePlaceholders);
 	crc(IsAIBaseDefensesWithWalls);
+	crc(HunterSeekers.Count());
+	for (int index = 0; index < HunterSeekers.Count(); index++) {
+		crc(HunterSeekers[index]);
+	}
+	crc(HunterSeeker);
 }
 
 
@@ -157,4 +167,5 @@ void SideClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(IsAIBuildsWalls);
 	stream.Serialize(AIBaseDefensePlaceholders);
 	stream.Serialize(IsAIBaseDefensesWithWalls);
+	stream.Serialize(HunterSeekers);
 }

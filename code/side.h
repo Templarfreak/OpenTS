@@ -15,6 +15,7 @@
 
 #include "abstype.h"
 #include "typelist.h"
+#include "vector.h"
 
 #include "side.hh"
 
@@ -50,7 +51,6 @@ class SideClass : public AbstractTypeClass
 		 * list is kept in step with each house type's own Side field.
 		 */
 		TypeList<int> Houses;
-
 		/*
 		 * The base building the computer does when it plays for this side, read from the
 		 * section carrying the side's own name. The first two sides inherit the rules' GDI and
@@ -67,4 +67,7 @@ class SideClass : public AbstractTypeClass
 		bool IsAIBuildsWalls;
 		int AIBaseDefensePlaceholders;
 		bool IsAIBaseDefensesWithWalls;
+		DynamicVectorClass<UnitTypeClass const *> HunterSeekers;
+		DynamicVectorClass<BuildingTypeClass const *> HunterSeekerBuildings;
+		BuildingTypeClass const * HunterSeekerBuilding;
 };

@@ -28,7 +28,7 @@ class JumpjetLocomotionClass : public LocomotionClass
 		virtual ClassID Class_ID(void) const override;
 
 		virtual void Serialize(SaveStreamClass & stream) override;
-
+		virtual void Object_Linked(void) override;
 		virtual bool Is_Moving(void) override;
 		virtual Coord Destination(void) override;
 		virtual Coord Head_To_Coord(void) override;

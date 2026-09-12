@@ -41,6 +41,7 @@ class LocomotionClass : public IPersistent, public ILocomotion
 		virtual bool Load(SaveStreamClass & stream) override;
 		virtual bool Save(SaveStreamClass & stream, bool cleardirty) override;
 
+		virtual void Object_Linked(void) override;
 		virtual void Link_To_Object(void *object) override;
 		virtual bool Is_Moving(void) override;
 		virtual Coord Destination(void) override;
@@ -86,7 +87,6 @@ class LocomotionClass : public IPersistent, public ILocomotion
 		virtual int Get_Track_Number(void) override {return(-1);}
 		virtual int Get_Track_Index(void) override {return(-1);}
 		virtual int Get_Speed_Accum(void) override {return(-1);}
-
 
 		/*
 		 * Lists this locomotor's members for the save game. An implementation serializes

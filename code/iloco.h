@@ -32,6 +32,7 @@ struct ILocomotion
 	/*
 	 * Links object to locomotor.
 	 */
+	virtual void Object_Linked(void) = 0;
 	virtual void Link_To_Object(void *pointer) = 0;
 
 	/*
