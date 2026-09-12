@@ -59,7 +59,6 @@ class SideClass : public AbstractTypeClass
 		BuildingTypeClass const * RegularPowerPlant;
 		BuildingTypeClass const * AdvancedPowerPlant;
 		BuildingTypeClass const * PowerTurbine;
-		UnitTypeClass const * HunterSeeker;
 		TypeList<BuildingTypeClass const *> AIWallTowers;
 		double AIBaseDefenseCoefficient;
 		double AIWallDefense;
@@ -67,6 +66,7 @@ class SideClass : public AbstractTypeClass
 		bool IsAIBuildsWalls;
 		int AIBaseDefensePlaceholders;
 		bool IsAIBaseDefensesWithWalls;
+		UnitTypeClass const * HunterSeeker;
 		DynamicVectorClass<UnitTypeClass const *> HunterSeekers;
 		DynamicVectorClass<BuildingTypeClass const *> HunterSeekerBuildings;
 		BuildingTypeClass const * HunterSeekerBuilding;

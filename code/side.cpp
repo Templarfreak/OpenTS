@@ -34,7 +34,6 @@ SideClass::SideClass(char const * ininame) :
 	RegularPowerPlant(NULL),
 	AdvancedPowerPlant(NULL),
 	PowerTurbine(NULL),
-	HunterSeeker(NULL),
 	AIWallTowers(),
 	AIBaseDefenseCoefficient(1.0),
 	AIWallDefense(0.0),
