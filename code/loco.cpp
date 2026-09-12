@@ -56,7 +56,7 @@ LocomotionClass::~LocomotionClass(void)
 	LinkedTo = NULL;
 }
 
-void STDMETHODCALLTYPE LocomotionClass::Object_Linked(void)
+void LocomotionClass::Object_Linked(void)
 {
 
 }

@@ -37,7 +37,7 @@ SideClass::SideClass(char const * ininame) :
 	HunterSeekers(),
 	HunterSeekerBuildings(),
 	HunterSeeker(NULL),
-	HunterSeekerBuilding(NULL)
+	HunterSeekerBuilding(NULL),
 	AIWallTowers(),
 	AIBaseDefenseCoefficient(1.0),
 	AIWallDefense(0.0),

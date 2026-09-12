@@ -33,7 +33,7 @@ struct ILocomotion
 	 * Links object to locomotor.
 	 */
 	virtual void Link_To_Object(void *pointer) = 0;
-	virtual void STDMETHODCALLTYPE Object_Linked(void) = 0;
+	virtual void Object_Linked(void) = 0;
 
 	/*
 	 * Sees if object is moving.
