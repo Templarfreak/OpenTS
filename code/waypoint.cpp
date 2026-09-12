@@ -7,7 +7,6 @@
  * See LICENSE.md for applicable additional terms and warranty disclaimers.
  ******************************************************************************/
 
-#define INCLUDE_COM
 #include "always.h"
 
 #include "waypoint.h"
@@ -45,11 +44,11 @@ const char *Waypoint_To_Name(WAYPOINT wp)
 
 	if (wp < num_chars) {
 
-		wsprintf(_string, "%c", wp + 'A');
+		snprintf(_string, sizeof(_string), "%c", wp + 'A');
 		return(_string);
 	}
 
-	wsprintf(_string, "%c%c", (wp / num_chars) + ('A' - 1), (wp % num_chars) + 'A');
+	snprintf(_string, sizeof(_string), "%c%c", (wp / num_chars) + ('A' - 1), (wp % num_chars) + 'A');
 	return(_string);
 }
 
@@ -68,12 +67,12 @@ WAYPOINT Waypoint_From_Name(const char *string)
 
 	const int num_chars = ('Z' - 'A') + 1;
 
-	if (isalpha(string[0])) {
+	if (isalpha((unsigned char)string[0])) {
 
-		wp = toupper(string[0]) - 'A';
+		wp = toupper((unsigned char)string[0]) - 'A';
 
-		if (isalpha(string[1])) {
-			wp = toupper(string[1]) + (wp * num_chars) - ('A' - num_chars);
+		if (isalpha((unsigned char)string[1])) {
+			wp = toupper((unsigned char)string[1]) + (wp * num_chars) - ('A' - num_chars);
 		}
 	}
 
@@ -221,15 +220,18 @@ void WaypointPathClass::Replace_Waypoint(int index, Coord const & coord)
 
 /// <summary>
 /// Removes a waypoint from this path.
-/// The selection is dropped when the removal would leave it pointing at a different
-/// waypoint than the player picked. Nothing happens if the index names no waypoint.
+/// The loop's return point stays on its waypoint, or moves to the one after it when that is
+/// the waypoint removed; removing the last waypoint opens the loop. Nothing happens if the
+/// index names no waypoint.
 /// </summary>
 /// <param name="index">The waypoint on this path to remove.</param>
 void WaypointPathClass::Delete_Waypoint(int index)
 {
 	if (index >= 0 && index < Waypoints.Count()) {
-		if (index == CurrentWaypoint || index == Waypoints.Count() - 1) {
+		if (index == Waypoints.Count() - 1) {
 			CurrentWaypoint = -1;
+		} else if (index < CurrentWaypoint) {
+			CurrentWaypoint--;
 		}
 		Waypoints.Delete_Index(index);
 	}
@@ -278,18 +280,9 @@ void WaypointPathClass::Compute_CRC(CRCEngine & crc) const
 }
 
 
-/// <summary>
-/// Fetches the class identifier of this object.
-/// This routine is used by the persistence machinery, which records the identifier so that
-/// it knows what kind of object to create when the game is loaded back.
-/// </summary>
-/// <param name="retval">Pointer to the identifier to fill in.</param>
-/// <returns>Returns with S_OK, or E_POINTER if no destination was supplied.</returns>
-HRESULT STDMETHODCALLTYPE WaypointPathClass::GetClassID(CLSID * retval)
+ClassID WaypointPathClass::Class_ID(void) const
 {
-	if (retval == NULL) return(E_POINTER);
-	*retval = CLSID_WaypointPath;
-	return(S_OK);
+	return(ClassID_WaypointPath);
 }
 
 

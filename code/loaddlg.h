@@ -35,6 +35,9 @@
 #include "house.hh"
 #include "opents_version.h"
 
+#include <cstddef>
+#include <cstdint>
+
 template<class T> class DynamicVectorClass;
 
 class FileEntryClass {
@@ -115,6 +118,12 @@ class LoadOptionsClass
 
 		bool Dialog(void);
 
+		// How many of the newest files the list reads headers for; reading one costs a disk open.
+		virtual std::size_t Scan_Limit(void) const {return(SIZE_MAX);}
+
+		// The box a completed save confirms itself with, or TXT_NONE when it reports elsewhere.
+		virtual int Save_Confirmation(void) const;
+
 		/*
 		 * These handlers are members so that they can reach the dialog's protected data.
 		 */
@@ -122,9 +131,9 @@ class LoadOptionsClass
 		static void Save_Dialog_On_WM_COMMAND(HWND window, WPARAM wparam, LPARAM lparam, int id);
 		static void Delete_Dialog_On_WM_COMMAND(HWND window, WPARAM wparam, LPARAM lparam, int id);
 
-		static LRESULT CALLBACK Load_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
-		static LRESULT CALLBACK Save_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
-		static LRESULT CALLBACK Delete_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
+		static INT_PTR CALLBACK Load_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
+		static INT_PTR CALLBACK Save_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
+		static INT_PTR CALLBACK Delete_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
 
 		/*
 		**	This is the requested style of the dialog
@@ -179,4 +188,29 @@ class LoadOptionsClass
 		**	by date/time.
 		*/
 		DynamicVectorClass<FileEntryClass *> Files;
+};
+
+
+/*
+ * The load dialog over the numbered multiplayer saves of a match. A pick is recorded rather
+ * than loaded, since every machine loads together once the master has asked them to.
+ */
+class MultiplayerLoadOptionsClass : public LoadOptionsClass
+{
+	public:
+		// The list is opened while the other machines wait, so the scan stays short.
+		static constexpr std::size_t LIST_LIMIT = 32;
+
+		MultiplayerLoadOptionsClass(void);
+
+		virtual bool Load_File(const char * file_name);
+		virtual bool Read_File(FileEntryClass * entry, WIN32_FIND_DATAA * ff);
+
+		char const * Picked_File(void) const {return(Picked);}
+
+	protected:
+		virtual std::size_t Scan_Limit(void) const {return(LIST_LIMIT);}
+
+	private:
+		char Picked[32];
 };

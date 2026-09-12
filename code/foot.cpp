@@ -90,6 +90,8 @@
 #include "_rules.h"
 #include "_surface.h"
 #include "_tactica.h"
+#include "_uicontrol.h"
+#include "actionline.h"
 #include "aircraft.h"
 #include "anim.h"
 #include "astar.h"
@@ -113,6 +115,7 @@
 #include "partsys.h"
 #include "revent.h"
 #include "rules.h"
+#include "saveload.h"
 #include "savestream.h"
 #include "session.h"
 #include "swizzle.h"
@@ -121,6 +124,7 @@
 #include "team.h"
 #include "tracker.h"
 #include "tube.h"
+#include "uicontrol.h"
 #include "unit.h"
 #include "unittype.h"
 #include "vein.h"
@@ -498,7 +502,7 @@ bool FootClass::Basic_Path(Cell cell, int path_offset, int avoidance)
 		*/
 		bool found = false;		// Found a best path yet?
 		PathStruct path1;
-		FacingType workpath[200*10];	// Staging area for path list.
+		FacingType workpath[PATH_LENGTH_MAX + 1];	// Staging area for path list.
 		MoveType maxtype = MOVE_OK;
 
 		path = Find_Path(cell, &workpath[0], ARRAY_SIZE(workpath), maxtype, path_offset, avoidance);
@@ -599,7 +603,6 @@ void FootClass::Advance_Path(int count)
 	std::memmove(Path, Path + advance, (ARRAY_SIZE(Path) - advance) * sizeof(Path[0]));
 	std::fill(std::end(Path) - advance, std::end(Path), FACING_NONE);
 }
-
 
 
 /***********************************************************************************************
@@ -1129,10 +1132,8 @@ void FootClass::Approach_Target(void)
 		 */
 		bool flyer = (RTTI == RTTI_AIRCRAFT);
 
-		CLSID clsid;
-		IPersistPtr persist(Locomotion);
-		persist->GetClassID(&clsid);
-		if (clsid == CLSID_JumpjetLocomotion) {
+		ClassID const clsid = Locomotion_Class_ID(Locomotion.get());
+		if (clsid == ClassID_JumpjetLocomotion) {
 			flyer = true;
 		}
 
@@ -1872,9 +1873,9 @@ bool FootClass::Enter_Idle_Mode(bool, bool resume_waypoint)
 		}
 
 		bool was_piggybacking = false;
-		IPiggybackPtr piggy(Locomotion);
+		IPiggyback * piggy = Piggyback_Of(Locomotion.get());
 		if (piggy != NULL && piggy->Is_Ok_To_End()) {
-			piggy->End_Piggyback(&Locomotion);
+			Locomotion = piggy->End_Piggyback();
 			was_piggybacking = true;
 		}
 
@@ -2190,7 +2191,7 @@ bool FootClass::Restore_Mission(void)
  * HISTORY:                                                                                    *
  *   05/14/1995 JLB : Created.                                                                 *
  *=============================================================================================*/
-RadioMessageType FootClass::Receive_Message(RadioClass * from, RadioMessageType message, int & param)
+RadioMessageType FootClass::Receive_Message(RadioClass * from, RadioMessageType message, intptr_t & param)
 {
 	BuildingClass const * building = NULL;
 	ObjectClass *object = NULL;
@@ -2244,7 +2245,7 @@ RadioMessageType FootClass::Receive_Message(RadioClass * from, RadioMessageType 
 		**	then it doesn't need further movement instructions.
 		*/
 		case RADIO_NEED_TO_MOVE:
-			param = (int)NavCom;
+			param = (intptr_t)NavCom;
 			if (NavCom == NULL || !Locomotion->Is_Moving()) {
 				return(RADIO_ROGER);
 			}
@@ -2330,9 +2331,9 @@ int FootClass::Do_MISSION_ENTER(void)
 			Enter_Idle_Mode();
 		} else {
 			if (NavCom == NULL && RouteQueue.Count() > 0 ) {
-				IPiggybackPtr piggy(Locomotion);
+				IPiggyback * piggy = Piggyback_Of(Locomotion.get());
 				if (piggy != NULL && piggy->Is_Ok_To_End()) {
-					piggy->End_Piggyback(&Locomotion);
+					Locomotion = piggy->End_Piggyback();
 				}
 				if (RouteQueue.Count() > 0) {
 					Assign_Destination(RouteQueue[0], false);
@@ -2384,11 +2385,9 @@ void FootClass::Assign_Destination(AbstractClass * target, bool)
 			ParticleSystems[ATTACHED_PARTICLE_FIRE] = NULL;
 		}
 
-		CLSID locoid;
-		IPersistPtr persist(Locomotion);
-		persist->GetClassID(&locoid);
+		ClassID const locoid = Locomotion_Class_ID(Locomotion.get());
 
-		if (locoid == CLSID_HoverLocomotion && PathDelay == 0) {
+		if (locoid == ClassID_HoverLocomotion && PathDelay == 0) {
 			PathDelay = 1;
 		}
 
@@ -3314,10 +3313,10 @@ void FootClass::AI(void)
 			Scatter(Coord(0,0,0), true);
 		}
 
-		IPiggybackPtr piggy(Locomotion);
+		IPiggyback * piggy = Piggyback_Of(Locomotion.get());
 		if (piggy != NULL) {
 			if (piggy->Is_Ok_To_End()) {
-				piggy->End_Piggyback(&Locomotion);
+				Locomotion = piggy->End_Piggyback();
 			}
 		}
 
@@ -3409,7 +3408,7 @@ ZGradientType FootClass::Get_Z_Gradient(void) const
 /// </summary>
 void FootClass::Draw_Voxel_Shadow(VoxelDataStruct const & voxeldata, int layer_index, int key, VoxelIndexClass * cache, Rect const & cliprect, Point2D const & point, Matrix3D const & matrix, bool force_cache) const
 {
-	if (Locomotion != NULL && Locomotion->Is_To_Have_Shadow() == (boolean)true) {
+	if (Locomotion != nullptr && Locomotion->Is_To_Have_Shadow() == (bool)true) {
 		Point2D drawpoint = point;
 		if (Locomotion != NULL) {
 			drawpoint = Point2D(Locomotion->Shadow_Point()) + point;
@@ -3516,19 +3515,13 @@ void FootClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(BlockagePathDelay);
 
 	/*
-	 * The locomotor is a COM sub-object rather than a member, so it persists itself onto
-	 * the raw stream through OLE. The one being replaced is released first, since loading
-	 * hands back a fresh interface pointer rather than filling this one in.
+	 * The locomotor is a sub-object rather than a member, so it travels as a record of
+	 * its own.
 	 */
 	if (stream.Is_Saving()) {
-		IPersistStreamPtr persist(Locomotion);
-		OleSaveToStream(persist, stream.Get_Stream());
+		Save_Object(stream, Locomotion.get());
 	} else {
-		if (Locomotion != NULL) {
-			((ILocomotion *)Locomotion)->Release();
-		}
-		Locomotion.Detach();
-		OleLoadFromStream(stream.Get_Stream(), IID_ILocomotion, (LPVOID *)&Locomotion);
+		Locomotion = Load_Locomotor(stream);
 	}
 
 	stream.Serialize(HeadToCoord);
@@ -3592,12 +3585,12 @@ void FootClass::Set_Coord(Coord const & coord)
 /// </summary>
 void FootClass::Link_DropPod(void)
 {
-	ILocomotionPtr locomotion = Locomotion;
-	ILocomotionPtr ballistic(CLSID_BallisticLocomotion);
+	std::unique_ptr<ILocomotion> locomotion = std::move(Locomotion);
+	std::unique_ptr<ILocomotion> ballistic = Create_Locomotor(ClassID_BallisticLocomotion);
 	ballistic->Link_To_Object(this);
-	IPiggybackPtr piggy(ballistic);
+	IPiggyback * piggy = Piggyback_Of(ballistic.get());
 	piggy->Begin_Piggyback(locomotion);
-	Locomotion = ballistic;
+	Locomotion = std::move(ballistic);
 
 }
 
@@ -3785,10 +3778,10 @@ void FootClass::On_Movement_Blocked(void)
 
 
 /// <summary>
-/// Draws the line that shows this object's current order.
-/// This routine marks the two ends of the order -- the firing point and its target, or the
-/// object and its destination -- and joins them with a line clipped to the tactical map.
-/// The line only appears for a short while after the order is given.
+/// Draws the lines that show this object's current orders: the firing point to the target,
+/// the object to the far end of its route, and on through every queued destination. They
+/// appear for a short while after an order, while the queue-move key is held, or always
+/// when UI.INI asks for that.
 /// </summary>
 void FootClass::Draw_Action_Line(void) const
 {
@@ -3796,44 +3789,39 @@ void FootClass::Draw_Action_Line(void) const
 		return;
 	}
 
-	if (ActionLineTimer.Value() > 0) {
+	bool queueing = Keyboard->Down(Options.KeyQueueMove1) || Keyboard->Down(Options.KeyQueueMove2);
+	if (!UIControls.IsAlwaysShowActionLines && ActionLineTimer.Value() <= 0 && !queueing) {
+		return;
+	}
 
-		Coord start_coord;
-		Coord end_coord;
-		ColorType color;
+	if (TarCom != NULL) {
+		Draw_Action_Line_Segment(*CompositeSurface, Turret_Coord(), Predict_Target_Coord(), UIControls.Target_Line_Style(), 3, 4, 64);
+	}
 
-		if (TarCom != NULL) {
-			start_coord = Turret_Coord();
-			end_coord = Predict_Target_Coord();
-			color = RED;
-		} else {
-			start_coord = PositionCoord;
-			if (RouteQueue.Count() == 0) {
-				end_coord = NavCom->Center_Coord();
-			} else {
-				end_coord = RouteQueue[RouteQueue.Count() - 1]->Center_Coord();
-			}
-			color = GREEN;
-			if (Map.In_Radar(end_coord.As_Cell()) && Map[end_coord].IsUnderBridge) {
-				end_coord.Z = BRIDGE_LEPTON_HEIGHT + Map.Get_Height_GL(end_coord);
-			}
+	if (NavCom != NULL) {
+		AbstractClass * destination = RouteQueue.Count() ? RouteQueue[RouteQueue.Count() - 1] : NavCom;
+		Coord end_coord = Action_Line_Coord(destination);
+		Draw_Action_Line_Segment(*CompositeSurface, PositionCoord, end_coord, UIControls.Movement_Line_Style(), 3, 4, 128);
+
+		if (UIControls.IsShowNavComQueueLines) {
+			Draw_Navigation_Queue_Lines(end_coord);
 		}
+	}
+}
 
-		Point2D start_point;
-		Point2D end_point;
 
-		TacticalMap->Coord_To_Pixel(start_coord, start_point);
-		TacticalMap->Coord_To_Pixel(end_coord, end_point);
-
-		start_point.Y += TacticalRect.Y;
-		end_point.Y += TacticalRect.Y;
-
-		CompositeSurface->Fill_Rect(Intersect(TacticalRect, Rect(start_point - Point2D(2, 2), 3, 3)), NormalDrawer->Convert_Pixel(color));
-		CompositeSurface->Fill_Rect(Intersect(TacticalRect, Rect(end_point - Point2D(2, 2), 3, 3)), NormalDrawer->Convert_Pixel(color));
-
-		Rect tacticalr = TacticalRect;
-		if (Clip_Line_To_Rect(start_point, end_point, tacticalr)) {
-			CompositeSurface->Draw_Line(start_point, end_point, NormalDrawer->Convert_Pixel(color));
+/// <summary>
+/// Draws the queued destinations as a chain of lines that starts at the coordinate given.
+/// </summary>
+void FootClass::Draw_Navigation_Queue_Lines(Coord const & from) const
+{
+	Coord start_coord = from;
+	for (int index = 0; index < NavQueue.Count(); index++) {
+		AbstractClass * target = NavQueue[index];
+		if (target != NULL) {
+			Coord end_coord = Action_Line_Coord(target);
+			Draw_Action_Line_Segment(*CompositeSurface, start_coord, end_coord, UIControls.Navigation_Queue_Line_Style(), 3, 4, 128);
+			start_coord = end_coord;
 		}
 	}
 }
@@ -4219,7 +4207,7 @@ Cell FootClass::Search_For_Tiberium_Weighted(int rad)
 		return(center);
 	}
 
-	int numharv = House->AUQuantity.Value(Rule->HarvesterUnit[0]->HeapID);
+	int numharv = House->Count_Owned(House->AUQuantity, Rule->HarvesterUnit);
 	if (numharv < 1) {
 		numharv = 1;
 	}
@@ -4566,6 +4554,43 @@ ActionType FootClass::What_Action(ObjectClass const * target, bool disallow_forc
 
 
 /// <summary>
+/// Resolves the action for pointing this object at a possible transport: ACTION_ENTER if it
+/// would be taken aboard, ACTION_NO_ENTER if it would be refused, and the incoming action
+/// unchanged if the object is not a transport this one could board.
+/// </summary>
+/// <param name="object">The object under the cursor.</param>
+/// <param name="action">The action decided so far.</param>
+ActionType FootClass::Transport_Enter_Action(ObjectClass const * object, ActionType action) const
+{
+	if (object == NULL || object == this) return(action);
+	if (!House->Is_Ally(object) || !House->Is_Player_Control()) return(action);
+	if (::Dynamic_Cast<TechnoClass const *>(object) == NULL) return(action);
+
+	TechnoTypeClass const * tclass = object->TClass;
+	if (tclass == NULL || tclass->Max_Passengers() <= 0) return(action);
+
+	// A moving transport, or one on a team whose script forbids loading, takes nobody.
+	if (object->Is_Foot()) {
+		FootClass const * foot = (FootClass const *)object;
+		if ((foot->Team != NULL && !foot->Team->Class->IsLoadable) || foot->Locomotion->Is_Moving()) {
+			return(ACTION_NO_ENTER);
+		}
+	}
+
+	switch (const_cast<FootClass *>(this)->Transmit_Message(RADIO_CAN_LOAD, (TechnoClass *)object)) {
+		case RADIO_ROGER:
+			return(ACTION_ENTER);
+
+		case RADIO_NEGATIVE:
+			return(ACTION_NO_ENTER);
+
+		default:
+			return(action);
+	}
+}
+
+
+/// <summary>
 /// Handles the rescue mission state machine.
 /// This routine will have the object engage any threat close to the spot the mission began
 /// at, then head for whatever destination its house nominates. Once it arrives, it settles
@@ -4731,12 +4756,9 @@ void FootClass::Delete_Me(void)
 /// <returns>bool; Is the object in the air?</returns>
 bool FootClass::In_Air(void) const
 {
-	IPersistPtr loco(Locomotion);
+	ClassID const clsid = Locomotion_Class_ID(Locomotion.get());
 
-	CLSID clsid;
-	loco->GetClassID(&clsid);
-
-	if (clsid == CLSID_HoverLocomotion) {
+	if (clsid == ClassID_HoverLocomotion) {
 		return(false);
 	}
 
@@ -4755,10 +4777,7 @@ bool FootClass::On_Ground(void) const
 	if (BASECLASS::On_Ground()) {
 		return(true);
 	}
-	IPersistPtr loco(Locomotion);
+	ClassID const clsid = Locomotion_Class_ID(Locomotion.get());
 
-	CLSID clsid;
-	loco->GetClassID(&clsid);
-
-	return(IsDown && clsid == CLSID_HoverLocomotion);
+	return(IsDown && clsid == ClassID_HoverLocomotion);
 }

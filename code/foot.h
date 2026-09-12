@@ -37,6 +37,9 @@
 #include "team.h"
 #include "techno.h"
 
+#include <cstdint>
+#include <memory>
+
 class UnitClass;
 class BuildingClass;
 class WaypointClass;
@@ -208,7 +211,7 @@ class FootClass : public TechnoClass
 		 * handed to a ballistic locomotor and a unit crossing a tunnel walks -- so all
 		 * movement is asked of this interface rather than of the type's setting.
 		 */
-		ILocomotionPtr Locomotion;
+		std::unique_ptr<ILocomotion> Locomotion;
 
 		/*
 		**	This is the coordinate that the unit is heading to
@@ -389,7 +392,7 @@ class FootClass : public TechnoClass
 
 		virtual void Compute_CRC(CRCEngine &) const override;
 		virtual Coord Destination_Coord(void) const override;
-		virtual RadioMessageType Receive_Message(RadioClass * from, RadioMessageType message, int & param) override;
+		virtual RadioMessageType Receive_Message(RadioClass * from, RadioMessageType message, intptr_t & param) override;
 		virtual bool Can_Demolish(void) const override;
 		bool Is_Recruitable(HouseClass const * house=NULL) const;
 		bool Is_On_Priority_Mission(void) const;
@@ -439,6 +442,7 @@ class FootClass : public TechnoClass
 		virtual int Get_Z_Adjust(void) const override;
 		virtual ZGradientType Get_Z_Gradient(void) const override;
 		virtual void Draw_Action_Line(void) const override;
+		void Draw_Navigation_Queue_Lines(Coord const & from) const;
 		virtual void Draw_Voxel(VoxelDataStruct const & voxeldata, int frame, int key, VoxelIndexClass * cache, Rect const & cliprect, Point2D const & point, Matrix3D const & matrix, int brightness, ShapeFlags_Type flags) const override;
 		void Draw_Voxel_Shadow(VoxelDataStruct const & voxeldata, int layer_index, int key, VoxelIndexClass * cache, Rect const & cliprect, Point2D const & point, Matrix3D const & matrix, bool force_cache) const;
 		virtual void Draw_Object(ShapeSet const * shapefile, int shapenum, Point2D const & xy, Rect const & rect, Dir256 rotation=DIR_N, int scale=0x0100, int zadjust=0, ZGradientType zgrad=ZGRAD_GROUND, bool=false, int brightness=0, ShapeSet const * zshapefile=0, int zshapenum=0, Point2D zoff=Point2D(0,0), ShapeFlags_Type flags=SHAPE_NORMAL) const;
@@ -448,6 +452,7 @@ class FootClass : public TechnoClass
 		*/
 		virtual ActionType What_Action(ObjectClass const *, bool disallow_force = false) const override;
 		virtual ActionType What_Action(Cell const &, bool check_fog = false, bool disallow_force = false) const override;
+		ActionType Transport_Enter_Action(ObjectClass const * object, ActionType action) const;
 		virtual bool Active_Click_With(ActionType action, ObjectClass * object, bool) override;
 		virtual bool Active_Click_With(ActionType action, Cell const & cell, bool) override;
 

@@ -35,6 +35,7 @@ bool Allocate_Surfaces(const Rect & hidden_rect, const Rect & composite_rect, co
 
 bool Init_Hotkeys(void);
 void Execute_Command(char const * name);
+void Reset_Selection_Filters(void);
 
 #define ATTRACT_MODE_TIMEOUT	TIMER_MINUTE
 
@@ -42,6 +43,7 @@ void Title_Screen_Restore(bool force=false);
 
 void Init_Campaigns(void);
 
+void Prepare_Theater_Roster(void);
 void Prepare_Side_Roster(void);
 
 void Delete_All_Objects(void);
@@ -49,6 +51,8 @@ void Delete_All_Objects(void);
 void Init_Theater(TheaterType theater);
 bool Prep_For_Side(SideType side);
 bool Prep_Speech_For_Side(SideType side);
+SideType Prep_For_Side_Or_First(SideType side);
+SideType Prep_Speech_For_Side_Or_First(SideType side);
 
 void Anim_Init(void);
 

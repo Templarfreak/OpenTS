@@ -62,7 +62,7 @@
 #include "mouse.h"
 #include "netsemantic.h"
 #include "rules.h"
-#include "saveload.h"
+#include "savemgr.h"
 #include "scenario.h"
 #include "session.h"
 #include "stats.h"
@@ -75,6 +75,9 @@
 #include "house.hh"
 #include "ramp.hh"
 #include "special.hh"
+
+#include <cstdint>
+#include <limits>
 
 
 namespace {
@@ -93,7 +96,10 @@ namespace {
 		InvalidLatencyFudge,
 		UnauthorizedSubject,
 		UnauthorizedTiming,
+		InvalidTimingArithmetic,
 		InvalidTimingValues,
+		UnschedulableTiming,
+		InvalidNetworkReport,
 		Count,
 	};
 
@@ -112,7 +118,10 @@ namespace {
 		"invalid latency fudge",
 		"unauthorized subject",
 		"unauthorized timing",
+		"invalid timing arithmetic",
 		"invalid timing values",
+		"unschedulable timing",
+		"invalid network report",
 	};
 
 	static_assert(ARRAY_SIZE(EventRejectReasonNames) == (int)EventRejectReason::Count);
@@ -707,7 +716,6 @@ void EventClass::Execute(void)
 //	bool formation = false;
 	int i;
 	int index;
-	unsigned int ul;
 //	RTTIType rt;
 
 	//if (Debug_Print_Events) {
@@ -1209,7 +1217,7 @@ void EventClass::Execute(void)
 				Log_Event_Rejection(EventRejectReason::InvalidTimingValues, Type, ID, Data.FrameInfo.Delay);
 				break;
 			}
-			Session.MaxAhead = Data.FrameInfo.Delay;
+			Session.Apply_Network_Response_Time(Data.FrameInfo.Delay, Frame >= 0 ? static_cast<unsigned int>(Frame) : 0u);
 			break;
 		}
 
@@ -1217,7 +1225,8 @@ void EventClass::Execute(void)
 		**	Save a multiplayer game (this event is only generated in multiplayer mode)
 		*/
 		case SAVEGAME:
-			Request_Save_Game(NET_SAVE_FILE_NAME, Fetch_String(TXT_MULTIPLAYER_GAME));
+			SaveManager.Request_Multiplayer_Save(Fetch_String(TXT_MULTIPLAYER_GAME), false,
+				SaveManagerClass::NoticeType::Requested);
 			break;
 
 		/*
@@ -1249,12 +1258,13 @@ void EventClass::Execute(void)
 			}
 
 			DebugString("Executing REMOVEPLAYER event. Frame is %d\n", ::Frame);
-			Disable_Multiplayer_Saving();
+			SaveManager.Disable_Multiplayer_Saving();
+			Session.Remove_Network_Timing_Player(index, Frame >= 0 ? static_cast<unsigned int>(Frame) : 0u);
 			house = Houses[index];
 			if (house->IsObserver) {
 				break;
 			}
-			if (Session.Type == GAME_INTERNET && WestwoodOnline_Tournament) {
+			if ((Session.Type == GAME_INTERNET && WestwoodOnline_Tournament) || !Session.Options.AITakeover) {
 				house->Flag_To_Die();
 			} else {
 				if (house->Is_Human_Player()) {
@@ -1295,15 +1305,46 @@ void EventClass::Execute(void)
 				break;
 			}
 
-			unsigned int const padding = Scen->Special.IsFogOfWar ? 10 : 0;
-			if (Data.Timing.MaxAhead < padding) {
+			if (Session.CommProtocol != COMM_PROTOCOL_MULTI_E_COMP || Frame < 0) {
+				Log_Event_Rejection(EventRejectReason::InvalidTimingArithmetic, Type, ID, Frame);
+				break;
+			}
+			if (!NetSemantic::Timing_Values_Are_Valid(Data.Timing.DesiredFrameRate, Data.Timing.MaxAhead, Data.Timing.FrameSendRate)) {
 				Log_Event_Rejection(EventRejectReason::InvalidTimingValues, Type, ID, Data.Timing.MaxAhead);
 				break;
 			}
-			unsigned int const max_ahead = Data.Timing.MaxAhead - padding;
-			if (!NetSemantic::Timing_Values_Are_Valid(Data.Timing.DesiredFrameRate, max_ahead, Data.Timing.FrameSendRate)) {
-				Log_Event_Rejection(EventRejectReason::InvalidTimingValues, Type, ID, max_ahead);
+
+			NetTiming::TimingSettings const settings{Data.Timing.FrameSendRate, Data.Timing.MaxAhead};
+			NetTiming::ConnectionQuality const old_quality = NetTiming::Connection_Quality_For_Settings(Session.Network_Timing_Target());
+			unsigned int const old_frame_send_rate = Session.FrameSendRate;
+			unsigned int const old_max_ahead = Session.MaxAhead;
+
+			if (settings.MaxAhead > old_max_ahead || settings.FrameSendRate > old_frame_send_rate) {
+				std::uint64_t const boundary = settings.FrameSendRate * ((static_cast<std::uint64_t>(Frame) + NetTiming::MAXIMUM_MAX_AHEAD
+					+ settings.FrameSendRate - 1) / settings.FrameSendRate);
+				if (boundary > static_cast<std::uint64_t>((std::numeric_limits<int>::max)())) {
+					Log_Event_Rejection(EventRejectReason::InvalidTimingArithmetic, Type, ID, Frame);
+					break;
+				}
+			}
+
+			NetTiming::ScheduleResult const result = Session.Schedule_Network_Timing(settings, Data.Timing.DesiredFrameRate, static_cast<unsigned int>(Frame));
+			if (result == NetTiming::ScheduleResult::Rejected) {
+				Log_Event_Rejection(EventRejectReason::UnschedulableTiming, Type, ID, static_cast<int>(settings.MaxAhead));
 				break;
+			}
+
+			DebugString("Network timing event at frame %d from player %d: %u/%u at %u fps %s\n", Frame, ID, settings.FrameSendRate, settings.MaxAhead,
+				Data.Timing.DesiredFrameRate, result == NetTiming::ScheduleResult::Applied ? "applied" : "staged");
+			NetTiming::ConnectionQuality const quality = NetTiming::Connection_Quality_For_Settings(settings);
+			if (quality != old_quality) {
+				char const * format = Fetch_String(TXT_CONNECTION_QUALITY_STATUS);
+				char const * quality_name = Fetch_String(Network_Quality_Text_ID(quality));
+				if (format != NULL && quality_name != NULL && format[0] != '\0' && quality_name[0] != '\0') {
+					snprintf(msg, sizeof(msg), format, quality_name);
+					Session.Messages.Add_Message(NULL, 0, msg, house->Scheme,
+						TextPrintType(TPF_6PT_GRAD|TPF_USE_GRAD_PAL|TPF_FULLSHADOW), Rule->MessageDelay * TICKS_PER_MINUTE);
+				}
 			}
 
 #if (TIMING_FIX)
@@ -1314,26 +1355,16 @@ void EventClass::Execute(void)
 			// period of vulnerability's frame start & end values, so we
 			// can reschedule these events to execute after it's over.
 			//
-			if (max_ahead > Session.MaxAhead || Data.Timing.FrameSendRate > Session.FrameSendRate) {
+			if (result == NetTiming::ScheduleResult::Applied && (Session.MaxAhead > old_max_ahead || Session.FrameSendRate > old_frame_send_rate)) {
+				std::uint64_t const boundary = Session.FrameSendRate * ((static_cast<std::uint64_t>(Frame) + Session.MaxAhead
+					+ Session.FrameSendRate - 1) / Session.FrameSendRate);
 				NewMaxAheadFrame1 = Frame;
-				NewMaxAheadFrame2 = Data.Timing.FrameSendRate * ((Data.Timing.FrameSendRate + max_ahead + Frame - 1) / Data.Timing.FrameSendRate);
+				NewMaxAheadFrame2 = static_cast<int>(boundary);
 			} else {
 				NewMaxAheadFrame1 = 0;
 				NewMaxAheadFrame2 = 0;
 			}
 #endif
-
-			ul = Session.MaxMaxAhead;
-
-			Session.DesiredFrameRate = Data.Timing.DesiredFrameRate;
-			Session.MaxAhead = max_ahead;
-
-			if (ul <= Session.MaxAhead) {
-				Session.MaxMaxAhead = Session.MaxAhead;
-			}
-
-			Session.FrameSendRate = Data.Timing.FrameSendRate;
-
 			break;
 		}
 
@@ -1348,6 +1379,21 @@ void EventClass::Execute(void)
 					Session.Players[i]->Player.ProcessTime = Data.ProcessTime.AverageTicks;
 					break;
 				}
+			}
+			break;
+
+		case NETWORK_REPORT:
+			// A recording started without a roster has nobody to attribute reports to.
+			if ((Session.CommProtocol != COMM_PROTOCOL_MULTI_E_COMP || Frame < 0
+				|| !Session.Record_Network_Report(ID, Data.NetworkReport.AverageProcessMilliseconds,
+					Data.NetworkReport.WorstRoundTripMilliseconds, Data.NetworkReport.StallMilliseconds, static_cast<unsigned int>(Frame)))
+				&& !Session.Play) {
+				Log_Event_Rejection(EventRejectReason::InvalidNetworkReport, Type, ID, Data.NetworkReport.WorstRoundTripMilliseconds);
+			} else if (!Session.Play) {
+				DebugString("Network report at frame %d from player %d: process %u ms, RTT %d ms, longest wait %u ms\n", Frame, ID,
+					(unsigned int)Data.NetworkReport.AverageProcessMilliseconds,
+					Data.NetworkReport.WorstRoundTripMilliseconds == NETWORK_RTT_UNAVAILABLE ? -1 : (int)Data.NetworkReport.WorstRoundTripMilliseconds,
+					(unsigned int)Data.NetworkReport.StallMilliseconds);
 			}
 			break;
 

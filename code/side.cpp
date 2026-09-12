@@ -7,12 +7,15 @@
  * See LICENSE.md for applicable additional terms and warranty disclaimers.
  ******************************************************************************/
 
-#define INCLUDE_COM
 #include "always.h"
 
 #include "side.h"
 
+#include "builtype.h"
+#include "ccini.h"
+#include "unittype.h"
 #include "crc.h"
+#include "findmake.h"
 #include "globals.h"
 #include "savestream.h"
 #include "sun.h"
@@ -28,13 +31,32 @@
 SideClass::SideClass(char const * ininame) :
 	BASECLASS(ininame),
 	Houses(),
+	RegularPowerPlant(NULL),
+	AdvancedPowerPlant(NULL),
+	PowerTurbine(NULL),
 	HunterSeekers(),
 	HunterSeekerBuildings(),
 	HunterSeeker(NULL),
 	HunterSeekerBuilding(NULL)
+	AIWallTowers(),
+	AIBaseDefenseCoefficient(1.0),
+	AIWallDefense(0.0),
+	AIWallDefenseCoefficient(0.0),
+	IsAIBuildsWalls(true),
+	AIBaseDefensePlaceholders(2),
+	IsAIBaseDefensesWithWalls(false)
 {
 	Create_ID();
 	Sides.Add(this);
+
+	// No rules key seeds these, so the first two positions take what Tiberian Sun hard-coded
+	// for GDI and Nod.
+	int position = Sides.ID(this);
+	if (position == 0) {
+		AIBaseDefensePlaceholders = 3;
+	} else if (position == 1) {
+		IsAIBaseDefensesWithWalls = true;
+	}
 }
 
 
@@ -83,21 +105,44 @@ void SideClass::Compute_CRC(CRCEngine & crc) const
 		crc(HunterSeekers[index]);
 	}
 	crc(HunterSeeker);
+	crc(AIWallTowers.Count());
+	crc(AIBaseDefenseCoefficient);
+	crc(AIWallDefense);
+	crc(AIWallDefenseCoefficient);
+	crc(IsAIBuildsWalls);
+	crc(AIBaseDefensePlaceholders);
+	crc(IsAIBaseDefensesWithWalls);
 }
 
 
 /// <summary>
-/// Fetches the class identifier of this object.
-/// This routine is part of the IPersist interface. It is used by the save and load
-/// system to recognize what kind of object it is about to create.
+/// Reads this side's base building settings from the section carrying its own name.
 /// </summary>
-/// <param name="retval">Pointer to the identifier to fill in.</param>
-/// <returns>Returns with S_OK, or E_POINTER if no destination was supplied.</returns>
-HRESULT STDMETHODCALLTYPE SideClass::GetClassID(CLSID * retval)
+/// <returns>bool; Was a section for this side present?</returns>
+bool SideClass::Read_INI(CCINIClass const & ini)
 {
-	if (retval == NULL) return(E_POINTER);
-	*retval = CLSID_SideClass;
-	return(S_OK);
+	if (!ini.Is_Present(Name())) {
+		return(false);
+	}
+
+	RegularPowerPlant = TGet_Class(ini, Name(), "RegularPowerPlant", RegularPowerPlant);
+	AdvancedPowerPlant = TGet_Class(ini, Name(), "AdvancedPowerPlant", AdvancedPowerPlant);
+	PowerTurbine = TGet_Class(ini, Name(), "PowerTurbine", PowerTurbine);
+	HunterSeeker = TGet_Class(ini, Name(), "HunterSeeker", HunterSeeker);
+	AIWallTowers = TGet_TypeList<BuildingTypeClass>(ini, Name(), "AIWallTowers", AIWallTowers);
+	AIBaseDefenseCoefficient = ini.Get_Float(Name(), "AIBaseDefenseCoefficient", AIBaseDefenseCoefficient);
+	AIWallDefense = ini.Get_Float(Name(), "AIWallDefense", AIWallDefense);
+	AIWallDefenseCoefficient = ini.Get_Float(Name(), "AIWallDefenseCoefficient", AIWallDefenseCoefficient);
+	IsAIBuildsWalls = ini.Get_Bool(Name(), "AIBuildsWalls", IsAIBuildsWalls);
+	AIBaseDefensePlaceholders = ini.Get_Int(Name(), "AIBaseDefensePlaceholders", AIBaseDefensePlaceholders);
+	IsAIBaseDefensesWithWalls = ini.Get_Bool(Name(), "AIBaseDefensesWithWalls", IsAIBaseDefensesWithWalls);
+	return(true);
+}
+
+
+ClassID SideClass::Class_ID(void) const
+{
+	return(ClassID_SideClass);
 }
 
 
@@ -110,6 +155,16 @@ void SideClass::Serialize(SaveStreamClass & stream)
 	BASECLASS::Serialize(stream);
 
 	stream.Serialize(Houses);
+	stream.Serialize(RegularPowerPlant);
+	stream.Serialize(AdvancedPowerPlant);
+	stream.Serialize(PowerTurbine);
 	stream.Serialize(HunterSeekers);
 	stream.Serialize(HunterSeeker);
+	stream.Serialize(AIWallTowers);
+	stream.Serialize(AIBaseDefenseCoefficient);
+	stream.Serialize(AIWallDefense);
+	stream.Serialize(AIWallDefenseCoefficient);
+	stream.Serialize(IsAIBuildsWalls);
+	stream.Serialize(AIBaseDefensePlaceholders);
+	stream.Serialize(IsAIBaseDefensesWithWalls);
 }

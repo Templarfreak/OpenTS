@@ -284,6 +284,7 @@ namespace OwnerDraw {
 	};
 
 	void Initialize(void);
+	void Prepare_Resources(HWND window);
 	void Register_Control_Classes(void);
 	bool Subclass_Dialog(HWND window, LPARAM lParam);
 
@@ -298,7 +299,7 @@ namespace OwnerDraw {
 	int Move_Dialog(HWND window, int x, int y);
 	void End_Dialog(HWND window);
 
-	int Default_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
+	INT_PTR Default_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
 	bool Dialog_Message_Handler(void);
 
 	bool Start_Tooltip(Rect const & rect, char const * text, HWND window);

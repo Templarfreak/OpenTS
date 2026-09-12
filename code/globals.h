@@ -30,6 +30,7 @@
 #include "theater.hh"
 #include "vox.hh"
 
+#include <cstdint>
 #include <deque>
 
 /*
@@ -131,7 +132,6 @@ extern int NewINIFormat;
 **	Dynamic global variables (these change or are initialized at run time).
 */
 extern MissionControlClass			MissionControl[MISSION_COUNT];
-extern IndexClass<int, char *> 		TutorialText;
 extern int							MapTriggerID;
 extern int							LogicTriggerID;
 extern RandomStraw					CryptRandom;
@@ -141,14 +141,11 @@ extern bool							ScoresPresent;
 extern bool							DrawShapeShadows;
 extern int							TournamentTime;
 extern bool							AllowVoice;
-extern VoxType						SpeakQueue;
 extern bool							PlayerWins;
 extern bool							PlayerLoses;
 extern bool							PlayerRestarts;
 extern bool							PlayerAborts;
 extern int							Frame;
-extern VoxType						SpeechRecord[1];
-extern void *						SpeechBuffer[1];
 extern GameOptionsClass 			Options;
 extern ThemeClass 					Theme;
 extern SpecialClass 				Special;
@@ -254,7 +251,7 @@ extern bool							drag_select_aborted;
 
 extern GroundType  				Ground[LAND_COUNT];
 
-extern int LParam;
+extern intptr_t LParam;
 
 /*
 **	Constant externs (data is not modified during game play).

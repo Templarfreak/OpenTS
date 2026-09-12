@@ -54,7 +54,6 @@
  *   TeamTypeClass::~TeamTypeClass -- class destructor                                         *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-#define INCLUDE_COM
 #include "always.h"
 
 #include "teamtype.h"
@@ -98,14 +97,14 @@ int _ahtoi(const char *string)
 {
 	char *s = (char *)string;
 	int integer = 0;
-	while (isxdigit(s[0]))
+	while (isxdigit((unsigned char)s[0]))
 	{
 		integer *= 16; /// desired base is 16
 
-		if (isdigit(s[0])) {
+		if (isdigit((unsigned char)s[0])) {
 			integer += s[0] - '0';
 		} else {
-			integer += toupper(s[0]) - ('A' - 10);
+			integer += toupper((unsigned char)s[0]) - ('A' - 10);
 		}
 		s++;
 	}
@@ -257,6 +256,10 @@ TeamClass * TeamTypeClass::Create_One_Of(HouseClass * house) const
 	DebugString("Create_One_Of...\n");
 	if (house == NULL) {
 		house = House;
+	}
+	// A type owned by nobody, such as a start position nobody holds, raises no team.
+	if (house == NULL) {
+		return(NULL);
 	}
 	if (ScenarioInit || MaxAllowed < 0 ||
 		((Session.Type == GAME_NORMAL && Number < MaxAllowed) ||
@@ -886,18 +889,9 @@ void TeamTypeClass::Serialize(SaveStreamClass & stream)
 }
 
 
-/// <summary>
-/// Fetches the class identifier of this object.
-/// This is part of the persistence contract that the save and load code leans on to
-/// recognize what it is reading back.
-/// </summary>
-/// <returns>Returns with S_OK and the class identifier filled in, or E_POINTER if no
-/// destination was supplied.</returns>
-HRESULT STDMETHODCALLTYPE TeamTypeClass::GetClassID(CLSID * retval)
+ClassID TeamTypeClass::Class_ID(void) const
 {
-	if (retval == NULL) return(E_POINTER);
-	*retval = CLSID_TeamTypeClass;
-	return(S_OK);
+	return(ClassID_TeamTypeClass);
 }
 
 

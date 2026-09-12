@@ -105,6 +105,7 @@
 #include "crc.h"
 #include "data.h"
 #include "dbgprint.h"
+#include "desyncdlg.h"
 #include "dsurface.h"
 #include "empulse.h"
 #include "factory.h"
@@ -129,6 +130,7 @@
 #include "netpacket.h"
 #include "netsemantic.h"
 #include "netshare.h"
+#include "nettiming.h"
 #include "opents_build.h"
 #include "overlay.h"
 #include "overtype.h"
@@ -138,6 +140,7 @@
 #include "psystype.h"
 #include "ptype.h"
 #include "rules.h"
+#include "savemgr.h"
 #include "scenario.h"
 #include "scheme.h"
 #include "script.h"
@@ -240,6 +243,7 @@ enum RetcodeType {
 	RC_SCENARIO_MISMATCH,   // scenario mismatch
 	RC_NOT_RESPONDING,      // other player not responding (timeout/hung up)
 	RC_CANCEL,              // user cancelled
+	RC_LOAD_PENDING,        // every machine agreed to load a save; the main loop performs it
 };
 
 
@@ -274,6 +278,12 @@ FrameSyncStruct SyncBarFrameSync[MAX_PLAYERS - 1];
 BasicTimerClass<SystemTimerClass> SentFrameSyncTimer;
 FrameSyncStruct TheirFrameSync[MAX_PLAYERS - 1];
 unsigned short SentCommandCount;								// # cmds I've sent out
+// Frame of the previous Execute_DoList call; a send-period decrease can skip an event's frame.
+static int LastExecutedFrame = -1;
+
+// How often a frame packet asks for an acknowledgement while a link is still unmeasured.
+constexpr int ROUND_TRIP_PROBE_FRAMES = 32;
+static int LastRoundTripProbeFrame = -ROUND_TRIP_PROBE_FRAMES;
 
 static std::array<unsigned int, static_cast<std::size_t>(NetPacket::DecodeError::COUNT)>
 	NetworkPacketDrops = {};
@@ -305,9 +315,8 @@ static void Queue_AI_Multiplayer(void);
 static RetcodeType Wait_For_Players(int first_time, ConnManClass *net,
 	int resend_delta, int dialog_time, int timeout, char *multi_packet_buf,
 	int multi_packet_max, int my_sent, FrameSyncStruct *their);
-static void Generate_Timing_Event(ConnManClass *net, int my_sent);
-static void Generate_Real_Timing_Event(ConnManClass *net, int my_sent);
-static void Generate_Process_Time_Event(ConnManClass *net);
+static void Generate_Real_Timing_Event(void);
+static void Generate_Network_Report_Event(ConnManClass *net);
 static int Process_Send_Period(ConnManClass *net);	//, int init);
 static int Send_Packets(ConnManClass *net, char *multi_packet_buf,
 	int multi_packet_max, int max_ahead, int my_sent);
@@ -320,11 +329,11 @@ static int Process_Reconnect_Dialog(CDTimerClass<SystemTimerClass> *timeout_time
 	BasicTimerClass<SystemTimerClass> *timer);
 static int Handle_Timeout(ConnManClass *net, FrameSyncStruct *their);
 static void Stop_Game(bool=false);
-BOOL CALLBACK Reconnect_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
+INT_PTR CALLBACK Reconnect_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
 static void Close_Reconnect_Dialog(void);
 void Kick_Player_Now(ConnManClass *net, int kickee, FrameSyncStruct * their, bool error);
 bool Cast_Kick_Vote(int kicker, int kickee);
-void Multiplayer_Debug_Print(bool noframecheck);
+void Multiplayer_Debug_Print(void);
 
 //...........................................................................
 // Packet compression/decompression:
@@ -488,6 +497,11 @@ bool Queue_Exit(void)
  *=========================================================================*/
 void Queue_AI(void)
 {
+	if (Frame >= 0 && Session.CommProtocol == COMM_PROTOCOL_MULTI_E_COMP
+		&& (Session.Type == GAME_IPX || Session.Type == GAME_INTERNET)) {
+		Session.Advance_Network_Timing(static_cast<unsigned int>(Frame));
+	}
+
 	if (Session.Play) {
 		Queue_Playback();
 	}
@@ -543,13 +557,6 @@ static void Queue_AI_Normal(void)
 		Sync_Record_Event(OutList.front(), SYNC_EVENT_QUEUED);
 		DoList.push_back(OutList.front());
 		OutList.pop_front();
-	}
-
-	//------------------------------------------------------------------------
-	// Save the DoList to disk, if we're in "Record" mode
-	//------------------------------------------------------------------------
-	if (Session.Record) {
-		Queue_Record();
 	}
 
 	//------------------------------------------------------------------------
@@ -665,6 +672,9 @@ static void Queue_AI_Multiplayer(void)
 {
 	if (Session.Type == GAME_SKIRMISH) return;
 
+	// Nothing of the running match is sent or executed once every machine has agreed to load.
+	if (SaveManager.Multiplayer_Load_Is_Pending()) return;
+
 	//........................................................................
 	// Enums:
 	//........................................................................
@@ -672,16 +682,15 @@ static void Queue_AI_Multiplayer(void)
 		int MIXFILE_RESEND_DELTA;	// ticks b/w resends
 		int FRAMESYNC_DLG_TIME;		// timeout waiting for mixfiles.
 		int FRAMESYNC_TIMEOUT;		// time until displaying reconnect dialog
-		int MIXFILE_TIMEOUT;		// timeout waiting for frame sync packet
 	} _timings[8] = {
-		{ 0, 0, 0, 0 },
-		{ 120, 900, 420, 3600 },
-		{ 120, 900, 420, 3600 },
-		{ 60, 900, 420, 2400 },
-		{ 60, 900, 420, 2400 },
-		{ 0, 0, 0, 0 },
-		{ 0, 0, 0, 0 },
-		{ 0, 0, 0, 0 }
+		{ 0, 0, 0 },
+		{ 120, 900, 420 },
+		{ 120, 900, 420 },
+		{ 60, 900, 420 },
+		{ 60, 900, 420 },
+		{ 0, 0, 0 },
+		{ 0, 0, 0 },
+		{ 0, 0, 0 }
 	};
 
 	//........................................................................
@@ -742,6 +751,8 @@ static void Queue_AI_Multiplayer(void)
 	// If we've just started a game, or loaded a multiplayer game, we must
 	// wait for all other systems to signal ready.
 	//------------------------------------------------------------------------
+	std::uint32_t const network_timing_frame = Frame > 0
+		? static_cast<std::uint32_t>(Frame) - Session.NetworkTimingPolicy.Cadence_Origin() : 0;
 	if (Frame==0 || Session.LoadGame) {
 		//.....................................................................
 		// Initialize static locals
@@ -753,6 +764,8 @@ static void Queue_AI_Multiplayer(void)
 		}
 		skip_crc = Frame + ARRAY_SIZE(CRC);
 		SentCommandCount = 0;
+		LastExecutedFrame = Frame - 1;
+		LastRoundTripProbeFrame = Frame - ROUND_TRIP_PROBE_FRAMES;
 		for (i = 0; i < ARRAY_SIZE(CRC); i++)
 			CRC[i] = 0;
 
@@ -781,8 +794,12 @@ static void Queue_AI_Multiplayer(void)
 		// Wait for the other guys
 		//.....................................................................
 		rc = Wait_For_Players (1, net, _timings[Session.Type].MIXFILE_RESEND_DELTA, _timings[Session.Type].FRAMESYNC_DLG_TIME,
-			_timings[Session.Type].MIXFILE_TIMEOUT, multi_packet_buf, multi_packet_max,
+			Session.ReconnectTimeout, multi_packet_buf, multi_packet_max,
 			SentCommandCount, TheirFrameSync);
+
+		if (rc == RC_LOAD_PENDING) {
+			return;
+		}
 
 		if (rc != RC_NORMAL) {
 			if (Session.Type == GAME_INTERNET){
@@ -838,36 +855,14 @@ static void Queue_AI_Multiplayer(void)
 
 	} 	// end of Frame 0 wait
 
-	//------------------------------------------------------------------------
-	// Adjust connection timing parameters every 128 frames.
-	//------------------------------------------------------------------------
-
-	else if ( (Frame & 0x007f) == 0) {
-		//
-		// If we're using the new spiffy protocol, do proper timing handling.
-		// If we're the net "master", compute our desired frame rate & new
-		// 'MaxAhead' value.
-		//
-		//if (Session.CommProtocol == COMM_PROTOCOL_MULTI_E_COMP) {
-
-			//
-			// All systems will transmit their required process time.
-			//
-			Generate_Process_Time_Event(net);
-
-		//} else {
-		// 	//
-		// 	// For the older protocols, do the old broken timing handling.
-		// 	//
-		// 	Generate_Timing_Event(net, SentCommandCount);
-		// }
+	else if (Session.CommProtocol == COMM_PROTOCOL_MULTI_E_COMP && Frame > 0 && NetTiming::Report_Is_Due(network_timing_frame)) {
+		Generate_Network_Report_Event(net);
 	}
 
-	//
-	// The game "host" will transmit timing adjustment events.
-	//
-	if (Session.Am_I_Master() && (Session.PrecalcMaxAhead != 0 || Session.PrecalcDesiredFrameRate != 0 || !(char)Frame)) {
-		Generate_Real_Timing_Event(net, SentCommandCount);
+	int const timing_master = Session.Master_Player_ID();
+	if (Session.CommProtocol == COMM_PROTOCOL_MULTI_E_COMP && PlayerPtr != NULL && PlayerPtr->HeapID == timing_master
+		&& Frame > 0 && NetTiming::Evaluation_Is_Due(network_timing_frame)) {
+		Generate_Real_Timing_Event();
 	}
 
 	//------------------------------------------------------------------------
@@ -904,8 +899,12 @@ static void Queue_AI_Multiplayer(void)
 	rc = Wait_For_Players (0, net,
 	TIMER_SECOND, /// (Session.MaxAhead << 3),
 	std::max((int) net->Response_Time() * 3, _timings[Session.Type].FRAMESYNC_TIMEOUT ),
-	_timings[Session.Type].MIXFILE_TIMEOUT,
+	Session.ReconnectTimeout,
 	multi_packet_buf, multi_packet_max, SentCommandCount, TheirFrameSync);
+
+	if (rc == RC_LOAD_PENDING) {
+		return;
+	}
 
 	if (rc != RC_NORMAL) {
 		DebugString("Wait_For_Players returned %d\n", rc);
@@ -926,13 +925,6 @@ static void Queue_AI_Multiplayer(void)
 		Session.Suspended--;
 		Stop_Game(!is_error);
 		return;
-	}
-
-	//------------------------------------------------------------------------
-	// Save the DoList to disk, if we're in "Record" mode
-	//------------------------------------------------------------------------
-	if (Session.Record) {
-		Queue_Record();
 	}
 
 	//------------------------------------------------------------------------
@@ -1225,6 +1217,14 @@ static RetcodeType Wait_For_Players(int first_time, ConnManClass *net,
 	while (1) {
 		Keyboard->Check();
 
+		// A load every machine agreed on ends the wait; the main loop performs it.
+		if (SaveManager.Multiplayer_Load_Is_Pending()) {
+			if (reconnect_dlg) {
+				Close_Reconnect_Dialog();
+			}
+			return(RC_LOAD_PENDING);
+		}
+
 		Update_Queue_Mono (net, 2);
 
 		//---------------------------------------------------------------------
@@ -1423,7 +1423,7 @@ static RetcodeType Wait_For_Players(int first_time, ConnManClass *net,
 			 */
 			int show_stall = 1;
 			if (Session.ShowInternetDebug && loop_count > 0 && (!stall_drawn || frame_stall != -1 || count_stall != -1)) {
-				Multiplayer_Debug_Print(true);
+				Multiplayer_Debug_Print();
 			} else if (stall_drawn) {
 				show_stall = 0;
 			}
@@ -1465,6 +1465,9 @@ static RetcodeType Wait_For_Players(int first_time, ConnManClass *net,
 
 	}	/* end of while */
 
+	if (!first_time && (int)timer > Session.WorstStallTicks) {
+		Session.WorstStallTicks = (int)timer;
+	}
 	if (reconnect_dlg) {
 		Close_Reconnect_Dialog();
 	}
@@ -1477,322 +1480,88 @@ static RetcodeType Wait_For_Players(int first_time, ConnManClass *net,
 }	// end of Wait_For_Players
 
 
-/***************************************************************************
- * Generate_Timing_Event -- computes & queues a RESPONSE_TIME event        *
- *                                                                         *
- * This routine adjusts the connection timing on the local system; it also *
- * optionally generates a RESPONSE_TIME event, to tell all systems to      *
- * dynamically adjust the current MaxAhead value.  This allows both the    *
- * MaxAhead & the connection retry logic to have dynamic timing, to adjust *
- * to varying line conditions.                                             *
- *                                                                         *
- * INPUT:                                                                  *
- *      net         ptr to connection manager                              *
- *      my_sent      # commands I've sent out so far                       *
- *                                                                         *
- * OUTPUT:                                                                 *
- *      none.                                                              *
- *                                                                         *
- * WARNINGS:                                                               *
- *      none.                                                              *
- *                                                                         *
- * HISTORY:                                                                *
- *   11/21/1995 BRR : Created.                                             *
- *=========================================================================*/
-static void Generate_Timing_Event(ConnManClass *net, int my_sent)
+static int Game_Speed_Frame_Rate(void)
 {
-	unsigned int resp_time;			// connection response time, in ticks
-	EventClass ev;
-
-	//------------------------------------------------------------------------
-	// Measure the current connection response time.  This time will be in
-	// 60ths of a second, and represents full round-trip time of a packet.
-	// To convert to one-way packet time, divide by 2; to convert to game
-	// frames, divide again by 4, assuming a game rate of 15 fps.
-	//------------------------------------------------------------------------
-	resp_time = net->Response_Time();
-
-	//------------------------------------------------------------------------
-	//	Adjust my connection retry timing; only do this if I've sent out more
-	// than 5 commands, so I know I have a measure of the response time.
-	//------------------------------------------------------------------------
-	if (my_sent > 5) {
-
-		net->Set_Timing (resp_time + TIMER_SECOND / 6, -1, (resp_time * 4) + TIMER_SECOND / 4);
-
-		//.....................................................................
-		// If I'm the network "master", I'm also responsible for updating the
-		// MaxAhead value on all systems, so do that here too.
-		//.....................................................................
-		if (Session.Am_I_Master()) {
-			ev.Type = EventClass::RESPONSE_TIME;
-			//..................................................................
-			// For multi-frame compressed events, the MaxAhead must be an even
-			// multiple of the FrameSendRate.
-			//..................................................................
-			if (Session.CommProtocol == COMM_PROTOCOL_MULTI_E_COMP) {
-				ev.Data.FrameInfo.Delay = std::max( ((((resp_time / 8) +
-					(Session.FrameSendRate - 1)) / Session.FrameSendRate) *
-					Session.FrameSendRate), (Session.FrameSendRate * 2) );
-			}
-			//..................................................................
-			// For sending packets every frame, just use the 1-way connection
-			// response time.
-			//..................................................................
-			else {
-				if (Session.Type == GAME_IPX || Session.Type == GAME_INTERNET) {
-					ev.Data.FrameInfo.Delay = std::max<unsigned int>( (resp_time / 8),
-						 NETWORK_MIN_MAX_AHEAD );
-				}
-			}
-			OutList.push_back(ev);
-		}
-	}
-
-}	// end of Generate_Timing_Event
-
-
-/***************************************************************************
- * Generate_Real_Timing_Event -- Generates a TIMING event                  *
- *                                                                         *
- * INPUT:                                                                  *
- *      net         ptr to connection manager                              *
- *      my_sent      # commands I've sent out so far                       *
- *                                                                         *
- * OUTPUT:                                                                 *
- *      none.                                                              *
- *                                                                         *
- * WARNINGS:                                                               *
- *      none.                                                              *
- *                                                                         *
- * HISTORY:                                                                *
- *   07/02/1996 BRR : Created.                                             *
- *=========================================================================*/
-static void Generate_Real_Timing_Event(ConnManClass *net, int my_sent)
-{
-	unsigned int resp_time;			// connection response time, in ticks
-	EventClass ev;
-	int highest_ticks;
-	int i;
-	int specified_frame_rate;
-	int maxahead;
-	unsigned char frame_send_rate;
-
-	if (Session.PrecalcMaxAhead != 0 || Session.PrecalcDesiredFrameRate != 0) {
-		DebugString("Sending precalculated network timings on frame %d\n", Frame);
-
-		ev.Type = EventClass::TIMING;
-		ev.Data.Timing.DesiredFrameRate = Session.PrecalcDesiredFrameRate;
-		ev.Data.Timing.MaxAhead = Session.PrecalcMaxAhead;
-		ev.Data.Timing.FrameSendRate = Session.PrecalcDesiredFrameRate > 30u ? 10 : 5;
-
-		OutList.push_back(ev);
-
-		Session.PrecalcMaxAhead = 0;
-		Session.PrecalcDesiredFrameRate = 0;
-
-		return;
-	}
-
-
-	//
-	// If we haven't sent out at least 5 guaranteed-delivery packets, don't
-	// bother trying to measure our connection response time; just return.
-	//
-	if (my_sent < 5) {
-		return;
-	}
-
-	//
-	// Find the highest processing time we have stored
-	//
-	highest_ticks = 0;
-	for (i = 0; i < Session.Players.Count(); i++) {
-
-		//
-		// If we haven't heard from all systems yet, bail out.
-		//
-		if (Session.Players[i]->Player.ProcessTime == -1) {
-			return;
-		}
-		if (Session.Players[i]->Player.ProcessTime > highest_ticks) {
-			highest_ticks = Session.Players[i]->Player.ProcessTime;
-		}
-	}
-
-	//
-	// Compute our "desired" frame rate as the lower of:
-	// - What the user has dialed into the options screen
-	// - What we're really able to run at
-	//
-	if (highest_ticks == 0) {
-		Session.DesiredFrameRate = 60;
-	} else {
-		Session.DesiredFrameRate = std::max(1, 1000 / highest_ticks);
-	}
-
 	switch (Options.GameSpeed) {
-		case 0:
-			specified_frame_rate = 60;
-			break;
-		case 1:
-			specified_frame_rate = 45;
-			break;
-		default:
-			specified_frame_rate = 60 / Options.GameSpeed;
-			break;
+		case 0: return(60);
+		case 1: return(45);
+		case 2: return(30);
+		case 3: return(20);
+		case 4: return(15);
+		case 5: return(12);
+		case 6: return(10);
+		default: return(60);
 	}
-
-	Session.DesiredFrameRate = std::min(Session.DesiredFrameRate, specified_frame_rate);
-
-	//
-	// Measure the current connection response time.  This time will be in
-	// 60ths of a second, and represents full round-trip time of a packet.
-	// To convert to one-way packet time, divide by 2; to convert to game
-	// frames, ....uh....
-	//
-	resp_time = net->Response_Time();
-	frame_send_rate = Session.FrameSendRate;
-	if (Session.Type == GAME_INTERNET) {
-		frame_send_rate = Session.DesiredFrameRate > 30 ? 10 : 5;
-	}
-
-	int fudge = 0;
-	if (resp_time != 0) {
-		switch (Session.LatencyFudge) {
-			case 0:
-				DebugString("Response time = %d\n", resp_time);
-				break;
-			case 1:
-				resp_time += resp_time >> 1;
-				fudge = 10;
-				DebugString("Response time = %d\n", resp_time);
-				break;
-			case 2:
-				resp_time *= 2;
-				fudge = 20;
-				DebugString("Response time = %d\n", resp_time);
-				break;
-			case 3:
-				resp_time *= 3;
-				fudge = 30;
-				DebugString("Response time = %d\n", resp_time);
-				break;
-		}
-	}
-
-	//
-	// Compute our new 'MaxAhead' value, based upon the response time of our
-	// connection and our desired frame rate.
-	// 'MaxAhead' in frames is:
-	//
-	// (resp_time / 2 ticks) * (1 sec/60 ticks) * (n Frames / sec)
-	//
-	// resp_time is divided by 2 because, as reported, it represents a round-
-	// trip, and we only want to use a one-way trip.
-	//
-	maxahead = frame_send_rate + (resp_time * Session.DesiredFrameRate) / (2 * TIMER_SECOND);
-
-	//
-	// Now, we have to round 'maxahead' so it's an even multiple of our
-	// send rate.  It also must be at least thrice the FrameSendRate.
-	// (Isn't "thrice" a cool word?)
-	//
-	maxahead = ((maxahead + fudge - 1) / frame_send_rate) * frame_send_rate;
-	maxahead = std::max(maxahead, (int)frame_send_rate * 3);
-	maxahead = std::min(maxahead, frame_send_rate * ((frame_send_rate + 249) / frame_send_rate));
-
-	ev.Type = EventClass::TIMING;
-	ev.Data.Timing.DesiredFrameRate = Session.DesiredFrameRate;
-	ev.Data.Timing.MaxAhead = maxahead + (Scen->Special.IsFogOfWar ? 10 : 0);
-	ev.Data.Timing.FrameSendRate = frame_send_rate;
-
-	OutList.push_back(ev);
-
-	//
-	// Adjust my connection retry timing.  These values set the retry timeout
-	// to just over one round-trip time, the 'maxretries' to -1, and the
-	// connection timeout to allow for about 4 retries.
-	//
-	if (Session.Players.Count() == 1 && resp_time == 0) {
-		resp_time = TIMER_SECOND / 2;
-	}
-	net->Set_Timing (resp_time + TIMER_SECOND / 6, -1, std::max<unsigned>(2 * TIMER_SECOND, (resp_time*8) + TIMER_SECOND / 4), false);
 }
 
 
-/***************************************************************************
- * Generate_Process_Time_Event -- Generates a PROCESS_TIME event           *
- *                                                                         *
- * INPUT:                                                                  *
- *      net         ptr to connection manager                              *
- *                                                                         *
- * OUTPUT:                                                                 *
- *      none.                                                              *
- *                                                                         *
- * WARNINGS:                                                               *
- *      none.                                                              *
- *                                                                         *
- * HISTORY:                                                                *
- *   07/02/1996 BRR : Created.                                             *
- *=========================================================================*/
-static void Generate_Process_Time_Event(ConnManClass *net)
+/// <summary>Queues timing selected from the synchronized report census.</summary>
+static void Generate_Real_Timing_Event(void)
 {
-	EventClass ev;
-	int avgticks;
-	unsigned int resp_time;			// connection response time, in ticks
-
-	//
-	// Measure the current connection response time.  This time will be in
-	// 60ths of a second, and represents full round-trip time of a packet.
-	// To convert to one-way packet time, divide by 2; to convert to game
-	// frames, ....uh....
-	//
-	resp_time = net->Response_Time();
-
-	//
-	// Adjust my connection retry timing.  These values set the retry timeout
-	// to just over one round-trip time, the 'maxretries' to -1, and the
-	// connection timeout to allow for about 4 retries.
-	//
-	switch (Session.LatencyFudge) {
-		case 0:
-			DebugString("Response time = %d\n", resp_time);
-			break;
-		case 1:
-			resp_time += resp_time >> 1;
-			DebugString("Response time = %d\n", resp_time);
-			break;
-		case 2:
-			resp_time *= 2;
-			DebugString("Response time = %d\n", resp_time);
-			break;
-		case 3:
-			resp_time *= 3;
-			DebugString("Response time = %d\n", resp_time);
-			break;
-	}
-	net->Set_Timing (resp_time + TIMER_SECOND / 6, -1, std::max<unsigned>(2 * TIMER_SECOND, (resp_time * 8) + TIMER_SECOND / 4), false);
-
-	if (IsMono) {
-		MonoClass::Enable();
-		Mono_Set_Cursor(0,23);
-		Mono_Printf("Processing Ticks:%03d Frames:%03d\n", Session.ProcessTicks,Session.ProcessFrames);
-		MonoClass::Disable();
+	if (Frame < 0) {
+		return;
 	}
 
-	avgticks = Session.ProcessTicks / Session.ProcessFrames;
+	unsigned int const frame = static_cast<unsigned int>(Frame);
+	int const master_id = Session.Master_Player_ID();
+	if (PlayerPtr == NULL || PlayerPtr->HeapID != master_id) {
+		return;
+	}
+	Session.Prepare_Network_Timing_Master(master_id, frame);
 
-	ev.Type = EventClass::PROCESS_TIME;
-	ev.Data.ProcessTime.AverageTicks = avgticks;
-	OutList.push_back(ev);
+	NetTiming::TimingCensus const census = Session.Network_Timing_Census(frame);
+	unsigned int const desired_frame_rate = NetTiming::Select_Desired_Frame_Rate(census,
+		static_cast<unsigned int>(std::clamp(Session.DesiredFrameRate, 1, 60)), static_cast<unsigned int>(Game_Speed_Frame_Rate()));
+	NetTiming::TimingEvaluation const evaluation = Session.Evaluate_Network_Timing(census, desired_frame_rate, frame);
+	if (evaluation.Evaluated) {
+		DebugString("Network timing evaluation at frame %u: %u of %u reports fresh, worst process %u ms, RTT %u ms%s, wait %u ms, %u fps -> %s %u/%u\n",
+			frame, census.FreshProcessReports, census.ActivePlayers, (unsigned int)census.WorstProcessMilliseconds, (unsigned int)census.WorstRoundTrip,
+			census.RequiresConservativeTiming ? " (never measured)" : census.RoundTripComplete ? "" : " (incomplete)",
+			(unsigned int)census.WorstStallMilliseconds, desired_frame_rate, evaluation.Changed ? "change to" : "keep",
+			evaluation.Settings.FrameSendRate, evaluation.Settings.MaxAhead);
+	}
+	// Comparing against the staged target avoids resending a change that has not activated yet.
+	if (!evaluation.Evaluated || (evaluation.Settings == Session.Network_Timing_Target()
+		&& desired_frame_rate == static_cast<unsigned int>(Session.DesiredFrameRate))) {
+		return;
+	}
+
+	EventClass event;
+	memset(&event, 0, sizeof(event));
+	event.Type = EventClass::TIMING;
+	event.Data.Timing.DesiredFrameRate = desired_frame_rate;
+	event.Data.Timing.MaxAhead = evaluation.Settings.MaxAhead;
+	event.Data.Timing.FrameSendRate = evaluation.Settings.FrameSendRate;
+	OutList.push_back(event);
+}
+
+
+/// <summary>Queues the local process-time, waiting-time and worst-RTT report.</summary>
+static void Generate_Network_Report_Event(ConnManClass *net)
+{
+	if (Session.ProcessFrames <= 0) {
+		return;
+	}
+
+	int const average_process_milliseconds = std::clamp(Session.ProcessTicks / Session.ProcessFrames, 0,
+		static_cast<int>(NetTiming::MAXIMUM_PROCESS_MILLISECONDS));
+	std::optional<NetTiming::Milliseconds> const worst_round_trip = net->Worst_Local_Round_Trip_MS();
+
+	EventClass event;
+	memset(&event, 0, sizeof(event));
+	event.Type = EventClass::NETWORK_REPORT;
+	event.Data.NetworkReport.AverageProcessMilliseconds = static_cast<std::uint16_t>(average_process_milliseconds);
+	event.Data.NetworkReport.WorstRoundTripMilliseconds = !worst_round_trip || *worst_round_trip >= EventClass::NETWORK_RTT_UNAVAILABLE
+		? EventClass::NETWORK_RTT_UNAVAILABLE : static_cast<std::uint16_t>(*worst_round_trip);
+	// Evaluations run every other report, so each report covers the last two intervals.
+	int const worst_stall_ticks = std::max(Session.WorstStallTicks, Session.PreviousWorstStallTicks);
+	event.Data.NetworkReport.StallMilliseconds = static_cast<std::uint16_t>(std::clamp(worst_stall_ticks * 1000 / TIMER_SECOND, 0, 65535));
+	OutList.push_back(event);
 
 	Session.ProcessTicks = 0;
 	Session.ProcessFrames = 0;
-
-	if (Session.Type == GAME_INTERNET && (Frame & 0x3FF) == 0) {
-		net->Reset_Response_Time(false);
-	}
+	Session.PreviousWorstStallTicks = Session.WorstStallTicks;
+	Session.WorstStallTicks = 0;
 }
 
 
@@ -1896,6 +1665,10 @@ static int Send_Packets(ConnManClass *net, char *multi_packet_buf,
 		else {
 			ack_req = 1;
 		}
+		if (Session.CommProtocol == COMM_PROTOCOL_MULTI_E_COMP && Session.NumPlayers > 1
+			&& Frame - LastRoundTripProbeFrame >= ROUND_TRIP_PROBE_FRAMES && !net->Worst_Local_Round_Trip_MS()) {
+			ack_req = 1;
+		}
 
 		//.....................................................................
 		// Build & send out our message
@@ -1907,6 +1680,9 @@ static int Send_Packets(ConnManClass *net, char *multi_packet_buf,
 		num += processed;
 		if (processed) {
 			ack_req = 1;
+		}
+		if (ack_req) {
+			LastRoundTripProbeFrame = Frame;
 		}
 
 		net->Send_Private_Message (multi_packet_buf, packetlen, ack_req);
@@ -2301,7 +2077,7 @@ static int Process_Reconnect_Dialog(CDTimerClass<SystemTimerClass> *timeout_time
 		disconnect_dialog = WS_Create_Dialog(ProgramInstance, IDD_MPLAYER_DISCONNECT, MainWindow, Reconnect_Dialog_Proc, true);
 		Center_Window_Within_Window(disconnect_dialog);
 		if (disconnect_dialog) {
-			SetWindowLong(disconnect_dialog, DWL_USER, (LONG)&disconnect_return);
+			SetWindowLongPtr(disconnect_dialog, DWLP_USER, (LONG_PTR)&disconnect_return);
 			MouseCursor->Hide_Mouse();
 			ShowWindow(disconnect_dialog, SW_SHOWNORMAL);
 			UpdateWindow(disconnect_dialog);
@@ -2411,7 +2187,7 @@ static int SyncNameButtonControlsIDs[MAX_PLAYERS] = {
 };
 static int SyncBarControlIDs[MAX_PLAYERS] = {
 	IDC_DISCONNECT_PLAYER1_BOX,
-	IDC_DISCONNECT_PLAYER1_BOX,
+	IDC_DISCONNECT_PLAYER2_BOX,
 	IDC_DISCONNECT_PLAYER3_BOX,
 	IDC_DISCONNECT_PLAYER4_BOX,
 	IDC_DISCONNECT_PLAYER5_BOX,
@@ -2739,9 +2515,9 @@ bool Cast_Kick_Vote(int kicker, int kickee)
 /// This is the dialog that appears when the game stalls waiting on somebody. It paints the
 /// per-player sync bars and offers a kick button for each player in the game.
 /// </summary>
-BOOL CALLBACK Reconnect_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
+INT_PTR CALLBACK Reconnect_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
-	int * rc = (int *)GetWindowLong(window, DWL_USER);
+	int * rc = (int *)GetWindowLongPtr(window, DWLP_USER);
 
 	switch (message) {
 		case IDCANCEL:
@@ -2796,7 +2572,7 @@ BOOL CALLBACK Reconnect_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LP
 		case WM_CTLCOLORDLG:
 		case WM_CTLCOLORSCROLLBAR:
 		case WM_CTLCOLORSTATIC:
-			return((BOOL)GetStockObject(BLACK_BRUSH));
+			return((INT_PTR)GetStockObject(BLACK_BRUSH));
 
 		case WM_ERASEBKGND:
 			return(TRUE);
@@ -3591,6 +3367,8 @@ static int Execute_DoList(int max_houses, HousesType base_house,
 	HouseClass *hptr;
 	int i,j,k;
 	int index;
+	int const previous_execution_frame = LastExecutedFrame;
+	LastExecutedFrame = Frame;
 
 #if (TIMING_FIX)
 	//
@@ -3613,6 +3391,10 @@ static int Execute_DoList(int max_houses, HousesType base_house,
 		}
 	}
 #endif
+
+	if (Session.Record && !Session.Play) {
+		Queue_Record();
+	}
 
 	//------------------------------------------------------------------------
 	// Compare the checksums the other systems reported before executing any of
@@ -3671,21 +3453,41 @@ static int Execute_DoList(int max_houses, HousesType base_house,
 		if (mismatch_count > 0) {
 
 			Report_Out_Of_Sync(mismatches, mismatch_count, CRC, ARRAY_SIZE(CRC));
-			Session.Suspended++;
-			if (WWMessageBox().Process (TXT_OUT_OF_SYNC,
-				TXT_CONTINUE, TXT_STOP) == 0) {
+
+			if (net == NULL || (Session.Type != GAME_IPX && Session.Type != GAME_INTERNET)) {
+
+				// A recording has nobody to decide with, so it keeps the plain box.
+				Session.Suspended++;
+				int choice = WWMessageBox().Process(TXT_OUT_OF_SYNC, TXT_CONTINUE, TXT_STOP);
 				Session.Suspended--;
-				if ((Session.Type == GAME_IPX ||
-					Session.Type == GAME_INTERNET) && net) {
-					while (net->Num_Connections()) {
-						Destroy_Connection (net->Connection_ID(0), -1);
-					}
+				if (choice != 0) {
+					return(0);
 				}
 				Map.Flag_To_Redraw(GS_REDRAW_ALL);
-			}
-			else {
-				Session.Suspended--;
-				return(0);
+
+			} else if (SaveManager.Multiplayer_Load_Is_Pending()) {
+
+				// The load every machine agreed on brings them back into step.
+				return(1);
+
+			} else {
+				switch (DesyncDialog.Run()) {
+					case DesyncDialogClass::OutcomeType::Continue:
+						for (int id = 0; id < MAX_PLAYERS; id++) {
+							if (Sync_Is_Out_Of_Sync(id) && net->Connection_Index(id) >= 0) {
+								Destroy_Connection(id, -1);
+							}
+						}
+						Map.Flag_To_Redraw(GS_REDRAW_ALL);
+						break;
+
+					case DesyncDialogClass::OutcomeType::Load:
+						return(1);
+
+					case DesyncDialogClass::OutcomeType::Quit:
+						Sign_Off_Match();
+						return(0);
+				}
 			}
 		}
 	}
@@ -3730,14 +3532,13 @@ static int Execute_DoList(int max_houses, HousesType base_house,
 			// If this event was from the currently-executing player ID, and it's
 			// time to execute it, execute it.
 			//..................................................................
-			if (DoList[j].ID == hptr->HeapID && Frame >= DoList[j].Frame &&
-				!DoList[j].IsExecuted) {
+			if (DoList[j].ID == hptr->HeapID && NetTiming::Event_Is_Due(DoList[j].Frame, DoList[j].IsExecuted, Frame)) {
 
 				//...............................................................
 				// Error if it's too late to execute this packet!
 				// (Hack: disable this check for solo or skirmish mode.)
 				//...............................................................
-				if (Frame > DoList[j].Frame && DoList[j].Type !=
+				if (DoList[j].Frame <= previous_execution_frame && DoList[j].Type !=
 					EventClass::FRAMEINFO && Session.Type != GAME_NORMAL &&
 					Session.Type != GAME_SKIRMISH) {
 					Dump_Packet_Too_Late_Stuff(&DoList[j]);
@@ -3827,7 +3628,6 @@ static int Execute_DoList(int max_houses, HousesType base_house,
 							hptr->IsHuman = false;
 							hptr->IQ = Rule->MaxIQ;
 							hptr->Computer_Paranoid();
-							hptr->IniName = Fetch_String(TXT_COMPUTER);
 							DebugString("Removing a player %s:%d\n", __FILE__, __LINE__);
 							Session.NumPlayers--;
 						}
@@ -3934,7 +3734,7 @@ static void Queue_Record(void)
 	//------------------------------------------------------------------------
 	j = 0;
 	for (i = 0; i < (int)DoList.size(); i++) {
-		if (Frame == DoList[i].Frame && !DoList[i].IsExecuted) {
+		if (NetTiming::Event_Is_Due(DoList[i].Frame, DoList[i].IsExecuted, Frame)) {
 			j++;
 		}
 	}
@@ -3944,7 +3744,7 @@ static void Queue_Record(void)
 	//------------------------------------------------------------------------
 	Session.RecordFile.Write (&j,sizeof(j));
 	for (i = 0; i < (int)DoList.size(); i++) {
-		if (Frame == DoList[i].Frame && !DoList[i].IsExecuted) {
+		if (NetTiming::Event_Is_Due(DoList[i].Frame, DoList[i].IsExecuted, Frame)) {
 			Session.RecordFile.Write (&DoList[i],sizeof (EventClass));
 			j--;
 		}
@@ -4030,6 +3830,9 @@ static void Queue_Playback(void)
 	//	routine didn't write anything the first time through); do this after the
 	// CRC is computed, since we'll still need a CRC for Frame 0.
 	//------------------------------------------------------------------------
+	if (Frame == 0) {
+		LastExecutedFrame = -1;
+	}
 	if (Frame==0 && Session.Type!=GAME_NORMAL) {
 		return;
 	}

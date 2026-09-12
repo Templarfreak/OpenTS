@@ -38,6 +38,7 @@
 #include "house.h" /// needed for HOUSE_NAME_MAX
 #include "ipxaddr.h"
 #include "msglist.h"
+#include "nettiming.h"
 #include "special.h"
 #include "sun.h" /// needed for MAX_PLAYERS
 #include "typelist.h"
@@ -49,6 +50,8 @@
 #include "chat.hh"
 #include "dialog.hh"
 #include "diff.hh"
+
+#include <optional>
 
 //---------------------------------------------------------------------------
 // Forward declarations
@@ -159,6 +162,11 @@ enum NetCommandType {
 	NET_PREVIEW_ACK,			//
 	NET_REQ_PREVIEW,			//
 	NET_PROPOSE_KICK,			//
+	NET_MOVIE_SKIP,				// Which fullscreen movie the sender is watching and whether he wants it skipped
+	NET_HOST_ANNOUNCE,			// The launch file's host names itself once the connections exist.
+	NET_DESYNC_HEARTBEAT,		// Sent every second while the out-of-sync dialog halts the game.
+	NET_DESYNC_CONTINUE,		// The master's decision to play on without the players out of sync.
+	NET_LOAD_GAME,				// The master names the multiplayer save every machine loads.
 };
 
 //---------------------------------------------------------------------------
@@ -262,6 +270,11 @@ struct RemoteFileTransferType {
 };
 
 
+// The encoded game options carry the settings, the scenario description, name and digest,
+// and a name, house and color for every player.
+#define MAX_GAMEOPT_LENGTH	(MAX_PLAYERS * (MPLAYER_NAME_MAX + 8) + 384)
+
+
 //...........................................................................
 // Packet sent over the network Global Channel
 //...........................................................................
@@ -343,15 +356,34 @@ struct GlobalPacketType {
 		} Kick;
 
 		/*
+		 * This names the fullscreen movie the sender is watching, by a digest of its name and by
+		 * its count among the movies the session has started, and says whether the sender wants
+		 * it skipped. It accompanies the NET_MOVIE_SKIP command.
+		 */
+		struct {
+			unsigned int Movie;
+			unsigned int Instance;
+			unsigned int Vote;
+		} MovieSkip;
+
+		/*
 		 * This carries the game options as an encoded string, tagged with the sender's color
 		 * and a CRC of his game's name. It accompanies the NET_PUB_GAMEOPT and
 		 * NET_PRIV_GAMEOPT commands.
 		 */
 		struct {
-			char Buf[400];
+			char Buf[MAX_GAMEOPT_LENGTH];
 			int Color;
 			unsigned int NameCRC;
 		} Options;
+
+		/*
+		 * This names the numbered multiplayer save every machine is to load, by its slot.
+		 * It accompanies the NET_LOAD_GAME command.
+		 */
+		struct {
+			unsigned short Slot;
+		} LoadGame;
 	};
 };
 #pragma pack()
@@ -426,10 +458,15 @@ struct GameOptionsType {
 	bool		FogOfWar;			/// Ground the player can no longer see fogs back over.
 	bool		MCVRedeploy;		/// A construction yard can be sold back into an MCV.
 	bool		CoachMode;			// A defeated player keeps allied vision and private chat, and gets no map reveal.
+	bool		AITakeover;			/// A departed player's house is handed to the computer rather than destroyed.
+	bool		BuildOffAlly;		// A mutually allied house's buildings anchor this player's placements.
+	bool		AutoDeployMCV;		// Every house's starting base unit deploys as the match begins.
+	bool		AttackNeutralUnits;	// A target scan considers a neutral house's objects.
+	bool		ScrapMetal;			// A wreck leaves the animations its type names in ScrapExplosion.
 	char		ScenarioDescription [DESCRIP_MAX];	//Used on client machines only
 
-	bool Save(IStream * stream);
-	bool Load(IStream * stream);
+	bool Save(SaveStreamClass & stream);
+	bool Load(SaveStreamClass & stream);
 
 	void Serialize(SaveStreamClass & stream);
 };
@@ -455,6 +492,12 @@ class SessionClass
 	// Public interface
 	//------------------------------------------------------------------------
 	public:
+		struct NetworkTimingTransition
+		{
+			NetTiming::TimingTransitionState Timing;
+			unsigned int DesiredFrameRate = 30;
+		};
+
 		//.....................................................................
 		// Constructor/Destructor
 		//.....................................................................
@@ -481,6 +524,20 @@ class SessionClass
 		int Create_Connections(void);
 		bool Am_I_Master(void);
 		int Master_Player_ID(void) const;
+		void Announce_Master(void);
+		void Adopt_Master(int house, char const * name);
+		bool Is_Network_Timing_Player_Active(int id) const;
+		void Reset_Network_Timing(unsigned int frame);
+		bool Record_Network_Report(int id, unsigned int process_milliseconds, unsigned int round_trip_milliseconds, unsigned int stall_milliseconds,
+			unsigned int frame);
+		void Remove_Network_Timing_Player(int id, unsigned int frame);
+		NetTiming::TimingCensus Network_Timing_Census(unsigned int frame);
+		NetTiming::TimingEvaluation Evaluate_Network_Timing(NetTiming::TimingCensus const & census, unsigned int target_fps, unsigned int frame);
+		NetTiming::TimingSettings Network_Timing_Target(void) const;
+		void Prepare_Network_Timing_Master(int master_id, unsigned int frame);
+		void Apply_Network_Response_Time(unsigned int max_ahead, unsigned int event_frame);
+		NetTiming::ScheduleResult Schedule_Network_Timing(NetTiming::TimingSettings settings, unsigned int desired_frame_rate, unsigned int event_frame);
+		bool Advance_Network_Timing(unsigned int frame);
 		unsigned int Compute_Unique_ID(void);
 		void Update_Progress(int percent);
 		void Init_Fixed_Alliances(void);
@@ -540,10 +597,10 @@ class SessionClass
 		DiffType CampaignCDifficulty;
 
 		/*
-		 * If the local player is playing a GDI house, then this flag will be true. A starting
-		 * multiplayer scenario takes its side and its speech set from it.
+		 * The country the local player chose in the lobby. A starting multiplayer scenario takes
+		 * its presented side and its speech set from it.
 		 */
-		bool PlayerIsGDI;
+		HousesType PlayerHouse;
 
 		//.....................................................................
 		// Max allowable # of players & actual # of (human) players
@@ -559,26 +616,30 @@ class SessionClass
 		//.....................................................................
 		unsigned int MaxAhead;
 		unsigned int FrameSendRate;
+		NetTiming::TimingReportCensus NetworkTimingReports;
+		NetTiming::BalancedTimingPolicy NetworkTimingPolicy;
+		std::optional<NetworkTimingTransition> PendingNetworkTiming;
+		int NetworkTimingPolicyOwner;
+
+		// How long this machine waits on another, in game ticks. Each machine keeps its own: the
+		// waits decide when this machine gives up, never what the match computes.
+		int ConnTimeout;			/// no loading progress from a machine before it is dropped
+		int ReconnectTimeout;		/// silence from a machine, once playing, before it is dropped
 
 		int			DesiredFrameRate;
 
 		int			ProcessTimer;
 		int			ProcessTicks;
 		int			ProcessFrames;
+		// Longest single wait for other players, in ticks. A report covers this interval and the previous one.
+		int			WorstStallTicks;
+		int			PreviousWorstStallTicks;
 
 		/*
 		 * This is the largest MaxAhead the game has run at, since the value only ever grows.
 		 * The sync bug report carries it as a measure of how bad the connection ever got.
 		 */
 		int			MaxMaxAhead;
-
-		/*
-		 * These are the frame timings Westwood Online worked out from the players' connection
-		 * speeds. While either is non-zero the host sends them out instead of measuring the
-		 * connections itself, and clears both once it has.
-		 */
-		int			PrecalcMaxAhead;
-		int			PrecalcDesiredFrameRate;
 
 		/*
 		 * These are the network statistics gathered for each player over the course of the
@@ -703,6 +764,12 @@ class SessionClass
 		//.....................................................................
 		bool NetStealth;                                // makes us invisible
 		bool NetOpen;                                   // 1 = game is open for joining
+		bool PlayMovies;                                // a launch file asked for movies outside a campaign
+		bool SkipScoreScreen;                           // a launch file asked that the score screen be passed over
+		char LoadScreen[_MAX_PATH];                     // the picture to show while the scenario loads, or empty
+		int LoadScreenX;                                // where in that picture the loading bars go, or zero for
+		int LoadScreenY;                                // the position the game picks for its own
+		char DifficultyName[32];                        // what a launch file calls the campaign difficulty
 		char GameName[MPLAYER_NAME_MAX];                // game's name
 		GlobalPacketType GPacket;                       // global packet
 		int GPacketlen;                                 // global packet length
@@ -724,11 +791,7 @@ class SessionClass
 		 */
 		int PlayerLatency[MAX_PLAYERS];
 
-		/*
-		 * This scales up the measured connection response time when the frame timing is
-		 * computed (0 - 3), buying tolerance of a laggy link at the cost of responsiveness.
-		 */
-		int LatencyFudge;
+		int LatencyFudge; // Legacy synchronized option retained for event and replay compatibility.
 
 		//.....................................................................
 		// For finding Sync Bugs

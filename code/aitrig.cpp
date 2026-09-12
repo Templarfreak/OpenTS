@@ -7,7 +7,6 @@
  * See LICENSE.md for applicable additional terms and warranty disclaimers.
  ******************************************************************************/
 
-#define INCLUDE_COM
 #include "always.h"
 
 #include "aitrig.h"
@@ -92,17 +91,9 @@ AITriggerTypeClass::~AITriggerTypeClass(void)
 }
 
 
-/// <summary>
-/// Fetches the class identifier of this object.
-/// The save game system uses this identifier to work out which class to build when the
-/// object is read back in.
-/// </summary>
-/// <returns>Returns with S_OK, or E_POINTER if no destination was supplied.</returns>
-HRESULT STDMETHODCALLTYPE AITriggerTypeClass::GetClassID(CLSID * retval)
+ClassID AITriggerTypeClass::Class_ID(void) const
 {
-	if (retval == NULL) return(E_POINTER);
-	*retval = CLSID_AITriggerTypeClass;
-	return(S_OK);
+	return(ClassID_AITriggerTypeClass);
 }
 
 
@@ -273,12 +264,12 @@ bool AITriggerTypeClass::Process(HouseClass *house, HouseClass *enemy, bool skip
 		}
 	}
 
-	if (MultiSide == 1) {
-		if (house->ActLike != HOUSE_GOOD) {
-			return(false);
+	if (MultiSide > 0) {
+		SideType acted = SIDE_NONE;
+		if (house->ActLike >= HOUSE_FIRST && house->ActLike < HouseTypes.Count()) {
+			acted = HouseTypes[house->ActLike]->Side;
 		}
-	} else if (MultiSide == 2) {
-		if (house->ActLike != HOUSE_BAD) {
+		if (acted == SIDE_NONE || acted != (SideType)(MultiSide - 1)) {
 			return(false);
 		}
 	}
@@ -774,7 +765,7 @@ bool AITriggerTypeClass::Read_INI(CCINIClass const & ini)
 			endptr = 0;
 			i = 0;
 			while (*paramstr != '\0') {
-				while (isspace(*paramstr)) {
+				while (isspace((unsigned char)*paramstr)) {
 					paramstr++;
 				}
 				nptr[0] = *paramstr;

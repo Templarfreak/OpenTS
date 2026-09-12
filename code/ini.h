@@ -34,7 +34,7 @@
 #include "crc.h"
 #include "index.h"
 
-#include <comdef.h>
+#include "classid.h"
 #include <cstddef>
 #include <cstdlib>
 #include <functional>
@@ -73,6 +73,7 @@ class INIClass {
 		int Load(Straw & file, bool keepcomments = false);
 		int Save(FileClass & file) const;
 		int Save(Pipe & file) const;
+		unsigned Transcoded_Lines(void) const {return(Transcoded);}
 
 		/*
 		**	Erase all data within this INI file manager.
@@ -112,7 +113,7 @@ class INIClass {
 		TPoint3D<int> const Get_Point(char const * section, char const * entry, TPoint3D<int> const & defvalue) const;
 		TPoint2D<int> const Get_Point(char const * section, char const * entry, TPoint2D<int> const & defvalue) const;
 		TPoint3D<float> const Get_Point(char const * section, char const * entry, TPoint3D<float> const & defvalue) const;
-		CLSID const Get_CLSID(char const * section, char const * entry, CLSID defvalue) const;
+		ClassID const Get_ClassID(char const * section, char const * entry, ClassID defvalue) const;
 
 		/*
 		**	Put a data type to the section and entry specified.
@@ -129,7 +130,7 @@ class INIClass {
 		bool Put_Point(char const * section, char const * entry, TPoint3D<int> const & value);
 		bool Put_Point(char const * section, char const * entry, TPoint3D<float> const & value);
 		bool Put_Point(char const * section, char const * entry, TPoint2D<int> const & value);
-		bool Put_CLSID(char const * section, char const * entry, CLSID const & value);
+		bool Put_ClassID(char const * section, char const * entry, ClassID const & value);
 
 		// Callers size the buffers they hand to Get_String from this. It does not bound a line
 		// of the file; the reader keeps a line of any length.
@@ -223,6 +224,9 @@ class INIClass {
 
 	protected:
 		int Load(Straw & file, bool keepcomments, char const * source);
+
+		// Lines read as Windows-1252 because they were not valid UTF-8.
+		unsigned Transcoded = 0;
 
 		// The outcome of reading a numeric value: the entry is absent, it is present but does
 		// not hold the numbers asked for, or every number was read.

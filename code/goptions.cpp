@@ -45,15 +45,15 @@
 #include "ownrdraw.h"
 #include "queue.h"
 #include "restate.h"
-#include "saveload.h"
+#include "savemgr.h"
 #include "scenario.h"
 #include "stats.h"
 
 #include "special.hh"
 
 void Game_Options_On_INITDIALOG(HWND window);
-BOOL CALLBACK Game_Options_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
-BOOL CALLBACK Abort_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
+INT_PTR CALLBACK Game_Options_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
+INT_PTR CALLBACK Abort_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
 void Abort_Dialog_On_COMMAND(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
 
 /// <summary>
@@ -69,11 +69,11 @@ void Game_Options_Dialog(void)
 
 	HWND dialog;
 	if (Session.Type == GAME_NORMAL || Session.Type == GAME_SKIRMISH) {
-		dialog = OwnerDraw::Begin_Dialog(IDD_OPT_CTRL_SP, (DLGPROC)Game_Options_Dialog_Proc);
+		dialog = OwnerDraw::Begin_Dialog(IDD_OPT_CTRL_SP, Game_Options_Dialog_Proc);
 	} else if (Session.Type == GAME_INTERNET) {
-		dialog = OwnerDraw::Begin_Dialog(IDD_OPT_CTRL_WOL, (DLGPROC)Game_Options_Dialog_Proc);
+		dialog = OwnerDraw::Begin_Dialog(IDD_OPT_CTRL_WOL, Game_Options_Dialog_Proc);
 	} else {
-		dialog = OwnerDraw::Begin_Dialog(IDD_OPT_CTRL_MP, (DLGPROC)Game_Options_Dialog_Proc);
+		dialog = OwnerDraw::Begin_Dialog(IDD_OPT_CTRL_MP, Game_Options_Dialog_Proc);
 	}
 
 	IgnoreInput = true;
@@ -81,7 +81,7 @@ void Game_Options_Dialog(void)
 
 	if (dialog) {
 
-		SetWindowLong(dialog, DWL_USER, (LONG)&rc);
+		SetWindowLongPtr(dialog, DWLP_USER, (LONG_PTR)&rc);
 
 		OwnerDraw::Display_Dialog(dialog);
 
@@ -115,25 +115,30 @@ void Game_Options_Dialog(void)
 }
 
 
+int Network_Quality_Text_ID(NetTiming::ConnectionQuality quality)
+{
+	switch (quality) {
+		case NetTiming::ConnectionQuality::Fast: return(TXT_BEST_CONNECTION);
+		case NetTiming::ConnectionQuality::Normal: return(TXT_GOOD_CONNECTION);
+		case NetTiming::ConnectionQuality::Poor: return(TXT_POOR_CONNECTION);
+		case NetTiming::ConnectionQuality::Bad: return(TXT_WORST_CONNECTION);
+	}
+	return(TXT_WORST_CONNECTION);
+}
+
+
 /// <summary>
 /// Handles messages for the in game options dialog.
 /// This routine offers every message to the owner draw system first. What is left it uses
 /// to service the option buttons -- save, load, delete, briefing, resume, abort and
 /// settings -- either acting on them directly or noting the player's choice for
-/// Game_Options_Dialog to deal with once the dialog comes down. Dragging the game speed or
-/// connection quality slider updates the label beside it.
+/// Game_Options_Dialog to deal with once the dialog comes down. Dragging the game speed
+/// slider updates the label beside it.
 /// </summary>
 /// <returns>Returns with TRUE if the owner draw system consumed the message.</returns>
-BOOL CALLBACK Game_Options_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
+INT_PTR CALLBACK Game_Options_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
-	static int GameConnectionQualityNames[] = {
-		TXT_WORST_CONNECTION,
-		TXT_POOR_CONNECTION,
-		TXT_GOOD_CONNECTION,
-		TXT_BEST_CONNECTION
-	};
-
-	BOOL rc = OwnerDraw::Default_Dialog_Proc(window, message, wparam, lparam);
+	INT_PTR rc = OwnerDraw::Default_Dialog_Proc(window, message, wparam, lparam);
 
 	HWND handle;
 
@@ -149,7 +154,7 @@ BOOL CALLBACK Game_Options_Dialog_Proc(HWND window, UINT message, WPARAM wparam,
 
 		case WM_COMMAND: {
 			int code = HIWORD(wparam);
-			int* retval = (int *)GetWindowLong(window, DWL_USER);
+			int* retval = (int *)GetWindowLongPtr(window, DWLP_USER);
 
 			switch (LOWORD(wparam)) {
 
@@ -164,7 +169,7 @@ BOOL CALLBACK Game_Options_Dialog_Proc(HWND window, UINT message, WPARAM wparam,
 							Game_Options_On_INITDIALOG(window);
 							ShowWindow(window, SW_SHOW);
 							UpdateWindow(window);
-						} else if (Is_Multiplayer_Saving_Allowed()) {
+						} else if (SaveManager.Is_Multiplayer_Saving_Allowed()) {
 							OutList.push_back(EventClass(PlayerPtr->HeapID, EventClass::SAVEGAME));
 							*retval = IDC_SAVE_GAME;
 						}
@@ -173,13 +178,20 @@ BOOL CALLBACK Game_Options_Dialog_Proc(HWND window, UINT message, WPARAM wparam,
 
 				case IDC_LOAD_GAME:
 					if (!code) {
-						ShowWindow(window, SW_HIDE);
-						UpdateWindow(MainWindow);
-						if (LoadOptionsClass().Load()) {
+						if (Session.Type == GAME_NORMAL || Session.Type == GAME_SKIRMISH) {
+							ShowWindow(window, SW_HIDE);
+							UpdateWindow(MainWindow);
+							if (LoadOptionsClass().Load()) {
+								*retval = IDC_LOAD_GAME;
+							} else {
+								ShowWindow(window, SW_SHOW);
+								UpdateWindow(window);
+							}
+						} else if (SaveManager.Multiplayer_Load_Is_Allowed()) {
+							// A list opened from in here would sit inside the main loop and stall the
+							// match; the menu loop opens it between frames instead.
+							SpecialDialog = SDLG_LOAD;
 							*retval = IDC_LOAD_GAME;
-						} else {
-							ShowWindow(window, SW_SHOW);
-							UpdateWindow(window);
 						}
 					}
 					break;
@@ -204,14 +216,6 @@ BOOL CALLBACK Game_Options_Dialog_Proc(HWND window, UINT message, WPARAM wparam,
 				case IDC_RESUME_MISSION:
 					if (!code) {
 						if (Session.Type == GAME_INTERNET) {
-							handle = GetDlgItem(window, IDC_CTRLWOL_CONNECTION);
-							if (handle) {
-								int fudge = 3 - SendMessage(handle, TBM_GETPOS, 0, 0);
-								if (fudge != Session.LatencyFudge) {
-									OutList.push_back(EventClass(PlayerPtr->HeapID, EventClass::LATENCYFUDGE, fudge));
-									DebugString("LATENCYFUDGE event created - %d\n", fudge);
-								}
-							}
 							handle = GetDlgItem(window, IDC_GAME_SPEED_SLIDER);
 							if (handle) {
 								int speed = (OptionsClass::MAX_SPEED_SETTING-1) - SendMessage(handle, TBM_GETPOS, 0, 0);
@@ -254,20 +258,11 @@ BOOL CALLBACK Game_Options_Dialog_Proc(HWND window, UINT message, WPARAM wparam,
 		case WM_HSCROLL: {
 			if (LOWORD(wparam) == SB_THUMBTRACK) {
 				int pos = HIWORD(wparam);
-				int textid;
-
 				if ((HWND)lparam == GetDlgItem(window, IDC_GAME_SPEED_SLIDER)) {
-					textid = GameSpeedNames[pos];
 					handle = GetDlgItem(window, IDC_GAME_SPEED_LABEL);
-				} else if ((HWND)lparam == GetDlgItem(window, IDC_CTRLWOL_CONNECTION)) {
-					textid = GameConnectionQualityNames[pos];
-					handle = GetDlgItem(window, IDC_SCROLL_SPEED_LABEL);
-				} else {
-					break;
-				}
-
-				if (handle) {
-					Static_SetText(handle, Fetch_String(textid));
+					if (handle) {
+						Static_SetText(handle, Fetch_String(GameSpeedNames[pos]));
+					}
 				}
 			}
 			break;
@@ -285,7 +280,7 @@ BOOL CALLBACK Game_Options_Dialog_Proc(HWND window, UINT message, WPARAM wparam,
 /// Prepares the controls of the game options dialog.
 /// This routine is called when the dialog is created, and again whenever a save or delete
 /// has changed what is on disk. It decides which buttons the current game type allows the
-/// player to use and primes the game speed and connection quality sliders.
+/// player to use and primes the game speed and connection-quality controls.
 /// </summary>
 void Game_Options_On_INITDIALOG(HWND window)
 {
@@ -308,15 +303,34 @@ void Game_Options_On_INITDIALOG(HWND window)
 	if (Session.Type != GAME_NORMAL && Session.Type != GAME_SKIRMISH) {
 		handle = GetDlgItem(window, IDC_SAVE_GAME);
 		if (handle) {
-			EnableWindow(handle, Is_Multiplayer_Saving_Allowed());
+			EnableWindow(handle, SaveManager.Is_Multiplayer_Saving_Allowed());
+		}
+
+		handle = GetDlgItem(window, IDC_LOAD_GAME);
+		if (handle) {
+			EnableWindow(handle, SaveManager.Multiplayer_Load_Is_Allowed() && MultiplayerLoadOptionsClass().Files_Present());
 		}
 	}
 
 	if (Session.Type == GAME_INTERNET) {
+		NetTiming::TimingSettings const settings{Session.FrameSendRate, Session.MaxAhead};
+		NetTiming::ConnectionQuality const quality = NetTiming::Connection_Quality_For_Settings(settings);
 
 		handle = GetDlgItem(window, IDC_CTRLWOL_CONNECTION);
 		if (handle) {
-			SetSliderRangeAndPos(handle, 0, 3, 3 - Session.LatencyFudge);
+			unsigned int const displayed_rung = settings.FrameSendRate >= NetTiming::MINIMUM_TIMING_RUNG
+				&& settings.FrameSendRate <= NetTiming::MAXIMUM_TIMING_RUNG ? settings.FrameSendRate : NetTiming::MAXIMUM_TIMING_RUNG;
+			// The stock slider runs worst to best from left to right, so rung 1 sits at its right end.
+			int const mirrored_rung = NetTiming::MINIMUM_TIMING_RUNG + NetTiming::MAXIMUM_TIMING_RUNG - displayed_rung;
+			SetSliderRangeAndPos(handle, NetTiming::MINIMUM_TIMING_RUNG, NetTiming::MAXIMUM_TIMING_RUNG, mirrored_rung);
+			EnableWindow(handle, FALSE);
+		}
+
+		handle = GetDlgItem(window, IDC_SCROLL_SPEED_LABEL);
+		if (handle) {
+			char label[64];
+			snprintf(label, sizeof(label), Fetch_String(TXT_CONNECTION_QUALITY_RUNG), Fetch_String(Network_Quality_Text_ID(quality)), settings.FrameSendRate);
+			Static_SetText(handle, label);
 		}
 
 		handle = GetDlgItem(window, IDC_GAME_SPEED_SLIDER);
@@ -348,11 +362,11 @@ int Abort_Dialog(void)
 {
 	int rc = 0;
 
-	HWND dialog = OwnerDraw::Begin_Dialog(IDD_MISSION_ABORT, (DLGPROC)Abort_Dialog_Proc);
+	HWND dialog = OwnerDraw::Begin_Dialog(IDD_MISSION_ABORT, Abort_Dialog_Proc);
 
 	if (dialog) {
 
-		SetWindowLong(dialog, DWL_USER, (LONG)&rc);
+		SetWindowLongPtr(dialog, DWLP_USER, (LONG_PTR)&rc);
 
 		OwnerDraw::Display_Dialog(dialog);
 
@@ -374,11 +388,11 @@ int Abort_Dialog(void)
 /// presses along to Abort_Dialog_On_COMMAND.
 /// </summary>
 /// <returns>Returns with the result of the owner draw default dialog handler.</returns>
-BOOL CALLBACK Abort_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
+INT_PTR CALLBACK Abort_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
 	HWND handle;
 
-	int rc = OwnerDraw::Default_Dialog_Proc(window, message, wparam, lparam);
+	INT_PTR rc = OwnerDraw::Default_Dialog_Proc(window, message, wparam, lparam);
 	if (rc == 0) {
 		switch (message) {
 			case WM_INITDIALOG:
@@ -410,7 +424,7 @@ BOOL CALLBACK Abort_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM
 /// <param name="lparam">The notification code that came with the button press.</param>
 void Abort_Dialog_On_COMMAND(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
-	int* retval = (int *)GetWindowLong(window, DWL_USER);
+	int* retval = (int *)GetWindowLongPtr(window, DWLP_USER);
 
 	switch ((int)message) {
 		case IDC_ABORT_MISSION:

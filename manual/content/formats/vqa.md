@@ -9,6 +9,7 @@ role: video
 related:
   - { type: format, id: mix }
 source_files:
+  - code/audio/audiomovie.cpp
   - code/movie.cpp
   - code/movies.cpp
   - code/rules.cpp
@@ -45,11 +46,11 @@ Playing a movie first tests that the file exists, through the general file layer
 Nothing is announced when a movie does not play, whatever the reason. A full-screen movie is shown only while all of these hold, tested in this order:
 
 - the file exists, as the general file layer sees it;
-- the session is a campaign game — a skirmish is not one, and neither is any multiplayer kind;
+- the session is a campaign game, or the launch file asked for movies — without that, a skirmish does not qualify, and neither does any multiplayer kind;
 - the movie opened;
 - its frame is not both narrower than 320 and shorter than 200; a movie that is gets opened and then discarded rather than shown.
 
-A movie played into the radar pane is held to the first three of those and not the fourth. Nothing is exempt from the second: the startup and menu movies make the same session test and pass it because the session type stands at its campaign value while the menus are up.
+A movie played into the radar pane is held to the first three of those and not the fourth. Nothing is exempt from the second: the startup and menu movies make the same session test and pass it because the session type stands at its campaign value while the menus are up. [Multiplayer movies](/systems/multiplayer-movies/) owns what the launch file's key changes, and how a movie ends once it has.
 
 A movie that does play is centered on the surface it is drawn to unless the caller names a destination, and both the part of the frame taken and the area it lands in are clipped — to the movie's own frame, and to that surface.
 
@@ -96,3 +97,11 @@ The offset the archive reader seeks to is measured from the start of the archive
 :::danger[A long movie name overruns the buffer the filename is built in]
 The filename is assembled in a fixed twenty-byte buffer. `.VQA` takes four of those bytes and the string terminator a fifth, so a registered name of fifteen characters fills the buffer exactly and a sixteenth character writes one byte past its end. The registry accepts names of up to thirty-one characters, and playing a movie registered at that length writes sixteen bytes over whatever follows the buffer. The names the game ships with are all eight characters or fewer.
 :::
+
+## Sound and picture
+
+The picture follows the sound. The player hands the sound track to the audio engine one block at a time, asks how much of it has been heard, and draws the frame due at that moment. The answer is the number of frames the mixer has taken from the track, less what the output device still holds, so the two stay in step through a device change or a stall on the game's own thread. While the sound stands still, as when the track ends before the picture does or the device is being recovered, the clock runs on wall time instead, and a pause is left out of the count altogether.
+
+When the player falls behind and feeds a block twice, that block is taken off the count as well, so the picture waits for the sound rather than running ahead of it. A movie with no audio device is timed from the wall clock throughout.
+
+A `SND1` chunk carries the Westwood delta compression and goes through the same checked decoder as an [AUD](/formats/aud/) file, so a chunk that does not decode to its stated size plays as silence instead of being read past its end.

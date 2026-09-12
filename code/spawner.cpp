@@ -15,6 +15,7 @@
 #include "spawnerconfig.h"
 
 #include "addon.h"
+#include "savemgr.h"
 #include "campaign.h"
 #include "ccfile.h"
 #include "ccini.h"
@@ -226,15 +227,25 @@ static void Spawner_Bind_Options(void)
 	Session.Options.FogOfWar = SpawnConfig.FogOfWar;
 	Session.Options.MCVRedeploy = SpawnConfig.MCVRedeploy;
 	Session.Options.CoachMode = SpawnConfig.CoachMode;
+	Session.Options.BuildOffAlly = SpawnConfig.BuildOffAlly;
+	Session.Options.AutoDeployMCV = SpawnConfig.AutoDeployMCV;
+	Session.Options.AttackNeutralUnits = SpawnConfig.AttackNeutralUnits;
+	Session.Options.ScrapMetal = SpawnConfig.ScrapMetal;
+
+	// The file names what a departing player does; the session names what becomes of the seat.
+	Session.Options.AITakeover = !SpawnConfig.AutoSurrender;
 
 	/*
 	 * Only a match against other machines commits this to the simulation; a skirmish never does.
 	 */
 	Session.Options.HarvTruce = SpawnConfig.HarvesterTruce;
 
-	// These two live outside the session's option block.
+	// These live outside the session's option block.
 	Options.GameSpeed = SpawnConfig.GameSpeed;
 	BuildLevel = SpawnConfig.TechLevel;
+	Session.PlayMovies = SpawnConfig.PlayMoviesInMultiplayer;
+	Session.ConnTimeout = SpawnConfig.ConnTimeout;
+	Session.ReconnectTimeout = SpawnConfig.ReconnectTimeout;
 
 	// Init_Random uses this for a game played alone, and draws its own seed when it is zero.
 	CustomSeed = SpawnConfig.Seed;
@@ -246,22 +257,62 @@ static void Spawner_Bind_Options(void)
 	 *   MapName                       - shown while loading; bound with the scenario below.
 	 *   IsCampaign, LoadSaveGame,
 	 *   SaveGameName                  - read to decide the kind of launch and name the save.
-	 *   IsHost                        - which machine hosts matters once one can leave.
 	 *   Tournament, GameID,
 	 *   WriteStatistics               - naming a match and reporting how it went.
-	 *   AutoSaveInterval,
-	 *   NextCampaignAutoSave,
-	 *   NextSkirmishAutoSave          - saving on a schedule.
-	 *   BuildOffAlly, AttackNeutralUnits,
-	 *   ScrapMetal, AutoSurrender,
-	 *   ContinueWithoutHumans         - options the game has no setting of its own for yet.
-	 *   QuickMatch, SkipScoreScreen,
-	 *   PlayMoviesInMultiplayer,
-	 *   CustomLoadScreen,
-	 *   CustomLoadScreenX,
-	 *   CustomLoadScreenY,
-	 *   DifficultyName                - what a player is shown around the match.
+	 *   QuickMatch                    - what a player is shown around the match.
+	 *
+	 * Spawner_Bind_Presentation binds SkipScoreScreen, CustomLoadScreen, CustomLoadScreenX,
+	 * CustomLoadScreenY and DifficultyName.
 	 */
+}
+
+
+/// <summary>
+/// Hands the session what a launch file asks a player be shown, so that the scenario and the
+/// score screen need know nothing of launch files.
+/// </summary>
+static void Spawner_Bind_Presentation(void)
+{
+	Session.SkipScoreScreen = SpawnConfig.SkipScoreScreen;
+	std::snprintf(Session.LoadScreen, sizeof(Session.LoadScreen), "%s", SpawnConfig.CustomLoadScreen.c_str());
+	Session.LoadScreenX = SpawnConfig.CustomLoadScreenX;
+	Session.LoadScreenY = SpawnConfig.CustomLoadScreenY;
+	std::snprintf(Session.DifficultyName, sizeof(Session.DifficultyName), "%s", SpawnConfig.DifficultyName.c_str());
+}
+
+
+/// <summary>
+/// Hands the game the automatic-save schedule and ring positions the launch file names. A
+/// resumed save overrides the positions when it loads.
+/// </summary>
+static void Spawner_Bind_Autosave(void)
+{
+	SaveManager.Autosave.Set_Interval(SpawnConfig.AutoSaveInterval);
+	SaveManager.Autosave.Seed_Slots(SpawnConfig.NextCampaignAutoSave, SpawnConfig.NextSkirmishAutoSave);
+}
+
+
+/// <summary>
+/// Names this machine the host when its launch file says so. The other seats learn it from
+/// the announcement once the connections exist, and the lowest seat stands in until then.
+/// </summary>
+static void Spawner_Bind_Master(void)
+{
+	if (SpawnConfig.IsHost && Session.Players.Count() > 0) {
+		Session.Adopt_Master(Session.Players[0]->Player.ID, Session.Players[0]->Name);
+	}
+}
+
+
+/// <summary>
+/// Sends the host announcement when this machine's launch file made it the host: once the
+/// connections exist, and again after an in-place load.
+/// </summary>
+void Spawner_Announce_Master(void)
+{
+	if (Spawner_Is_Active() && SpawnConfig.IsHost && Session.Type == GAME_INTERNET) {
+		Session.Announce_Master();
+	}
 }
 
 
@@ -355,6 +406,7 @@ static bool Spawner_Resume(bool & gameloaded)
 
 		Spawner_Seat_Local();
 		Spawner_Seat_Humans();
+		Spawner_Bind_Master();
 
 		if (!Spawner_Wire_Network()) {
 			return(false);
@@ -372,9 +424,13 @@ static bool Spawner_Resume(bool & gameloaded)
 	}
 
 	/*
-	 * A save carries the options it was played under, but game speed is the player's own.
+	 * A save carries the options it was played under, but game speed, whether movies play and
+	 * the waits this machine keeps are the player's own.
 	 */
 	Options.GameSpeed = SpawnConfig.GameSpeed;
+	Session.PlayMovies = SpawnConfig.PlayMoviesInMultiplayer;
+	Session.ConnTimeout = SpawnConfig.ConnTimeout;
+	Session.ReconnectTimeout = SpawnConfig.ReconnectTimeout;
 
 	gameloaded = true;
 
@@ -443,6 +499,7 @@ static void Spawner_Setup_Session(void)
 	Spawner_Seat_Local();
 	Spawner_Seat_Humans();
 	Spawner_Seat_Computers();
+	Spawner_Bind_Master();
 	Spawner_Bind_Scenario();
 }
 
@@ -507,6 +564,9 @@ bool Spawner_Prepare(bool & gameloaded)
 	SpawnConfig.Read_INI(ini);
 
 	SpawnConsumed = true;
+
+	Spawner_Bind_Autosave();
+	Spawner_Bind_Presentation();
 
 	/*
 	 * Every kind of launch is played at this speed, so it is checked before the kinds part.

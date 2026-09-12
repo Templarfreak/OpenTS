@@ -47,10 +47,10 @@
 #include "airctype.h"
 #include "building.h"
 #include "cell.h"
+#include "classids.h"
 #include "foot.h"
 #include "globals.h"
 #include "house.h"
-#include "ilocos.h"
 #include "incdec.h"
 #include "inline.h"
 #include "mouse.h"
@@ -284,7 +284,7 @@ static FootClass * _Create_Group(TeamTypeClass const * teamtype)
 	**	objects to be passengers on the transport.
 	*/
 	if (transport != NULL && object != NULL) {
-		transport->Cargo.Attach(object);
+		transport->Cargo.Attach_Group(object);
 
 		/*
 		**	HACK ALERT! If the this team has an unload mission, then flag the transport
@@ -421,7 +421,7 @@ bool Do_Reinforcements(TeamTypeClass const * teamtype, WAYPOINT wp)
 	/*
 	**	perform some preliminary checks for validity.
 	*/
-	if (!teamtype || !teamtype->TaskForce->ClassCount) return(false);
+	if (!teamtype || !teamtype->TaskForce->ClassCount || teamtype->House == NULL) return(false);
 
 	AircraftTypeClass const * dshp = AircraftTypes[AircraftTypeClass::From_Name("DSHP")];
 	if (teamtype->TaskForce->ClassCount == 1 && teamtype->TaskForce->Members[0].Class == dshp && teamtype->House->CurrentDropship < 3) {
@@ -533,7 +533,7 @@ inline bool _Can_Burrow(FootClass * object)
 {
 	while (object != NULL) {
 		TechnoTypeClass const * tclass = object->TClass;
-		if (tclass->Locomotor != CLSID_TunnelLocomotion) {
+		if (tclass->Locomotor != ClassID_TunnelLocomotion) {
 			return(false);
 		}
 		object = (FootClass *)object->Next;

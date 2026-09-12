@@ -13,6 +13,7 @@
 #include "crc.h"
 #include "diff.hh"
 #include "ini.h"
+#include "utf8.h"
 
 #include <algorithm>
 #include <cstdarg>
@@ -39,6 +40,15 @@ std::string Read_Text(INIClass const & ini, char const * section, char const * e
 {
 	std::string text = ini.Get_String(section, entry);
 	return(text.empty() ? fallback : text);
+}
+
+
+/// <summary>
+/// Brings a wait written in a launch file within the bounds the game accepts.
+/// </summary>
+int Clamp_Timeout(int ticks)
+{
+	return(std::clamp(ticks, SpawnerConfigClass::TIMEOUT_MIN, SpawnerConfigClass::TIMEOUT_MAX));
 }
 
 
@@ -121,7 +131,8 @@ void SpawnerConfigClass::Read_Slots(INIClass const & ini)
 		if (ini.Section_Present(section.c_str())) {
 			slot.Occupancy = OccupancyType::Human;
 			// A seat is judged and ordered by the name the game keeps, the same on every machine.
-			slot.Name = Read_Text(ini, section.c_str(), "Name", "").substr(0, HOUSE_NAME_MAX - 1);
+			std::string name = Read_Text(ini, section.c_str(), "Name", "");
+			slot.Name = name.substr(0, UTF8::Boundary_Before(name.c_str(), HOUSE_NAME_MAX - 1));
 			slot.Color = ini.Get_Int(section.c_str(), "Color", -1);
 			slot.Country = ini.Get_Int(section.c_str(), "Side", -1);
 			slot.Address = Read_Text(ini, section.c_str(), "Ip", slot.Address);
@@ -257,12 +268,18 @@ int SpawnerConfigClass::Session_Identity_CRC(void) const
 	crc(HarvesterTruce);
 	crc(FogOfWar);
 	crc(MCVRedeploy);
+	crc(AutoDeployMCV);
 	crc(Seed);
 	crc(TechLevel);
 	crc(Firestorm);
 	crc(AttackNeutralUnits);
 	crc(ScrapMetal);
 	crc(CoachMode);
+	crc(PlayMoviesInMultiplayer);
+
+	crc(AutoSurrender);
+
+	// ConnTimeout and ReconnectTimeout are each machine's own, so they are left out on purpose.
 
 	for (bool flag : GlobalFlags) {
 		crc(flag);
@@ -507,6 +524,7 @@ void SpawnerConfigClass::Read_INI(INIClass const & ini)
 	HarvesterTruce = ini.Get_Bool(SETTINGS, "HarvesterTruce", HarvesterTruce);
 	FogOfWar = ini.Get_Bool(SETTINGS, "FogOfWar", FogOfWar);
 	MCVRedeploy = ini.Get_Bool(SETTINGS, "MCVRedeploy", MCVRedeploy);
+	AutoDeployMCV = ini.Get_Bool(SETTINGS, "AutoDeployMCV", AutoDeployMCV);
 	Seed = ini.Get_Int(SETTINGS, "Seed", Seed);
 	TechLevel = ini.Get_Int(SETTINGS, "TechLevel", TechLevel);
 	Firestorm = ini.Get_Bool(SETTINGS, "Firestorm", Firestorm);
@@ -522,6 +540,9 @@ void SpawnerConfigClass::Read_INI(INIClass const & ini)
 	TunnelAddress = Read_Text(ini, "Tunnel", "Ip", TunnelAddress);
 	TunnelPort = ini.Get_Int("Tunnel", "Port", TunnelPort);
 
+	ConnTimeout = Clamp_Timeout(ini.Get_Int(SETTINGS, "ConnTimeout", ConnTimeout));
+	ReconnectTimeout = Clamp_Timeout(ini.Get_Int(SETTINGS, "ReconnectTimeout", ReconnectTimeout));
+
 	QuickMatch = ini.Get_Bool(SETTINGS, "QuickMatch", QuickMatch);
 	SkipScoreScreen = ini.Get_Bool(SETTINGS, "SkipScoreScreen", SkipScoreScreen);
 	WriteStatistics = ini.Get_Bool(SETTINGS, "WriteStatistics", WriteStatistics);
@@ -530,7 +551,6 @@ void SpawnerConfigClass::Read_INI(INIClass const & ini)
 	AutoSurrender = ini.Get_Bool(SETTINGS, "AutoSurrender", AutoSurrender);
 	AttackNeutralUnits = ini.Get_Bool(SETTINGS, "AttackNeutralUnits", AttackNeutralUnits);
 	ScrapMetal = ini.Get_Bool(SETTINGS, "ScrapMetal", ScrapMetal);
-	ContinueWithoutHumans = ini.Get_Bool(SETTINGS, "ContinueWithoutHumans", ContinueWithoutHumans);
 	PlayMoviesInMultiplayer = ini.Get_Bool(SETTINGS, "PlayMoviesInMultiplayer", PlayMoviesInMultiplayer);
 	CustomLoadScreen = Read_Text(ini, SETTINGS, "CustomLoadScreen", CustomLoadScreen);
 	DifficultyName = Read_Text(ini, SETTINGS, "DifficultyName", DifficultyName);

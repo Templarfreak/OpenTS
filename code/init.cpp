@@ -61,6 +61,7 @@
 #include "_bench.h"
 #include "_command.h"
 #include "_convert.h"
+#include "_deploymentconfig.h"
 #include "_font.h"
 #include "_keyboar.h"
 #include "_logic.h"
@@ -78,6 +79,7 @@
 #include "_theater.h"
 #include "_timer.h"
 #include "_tooltip.h"
+#include "_uicontrol.h"
 #include "_voxel.h"
 #include "abstract.h"
 #include "addon.h"
@@ -85,6 +87,7 @@
 #include "airctype.h"
 #include "alphashp.h"
 #include "anim.h"
+#include "autosave.h"
 #include "bench.h"
 #include "blight.h"
 #include "building.h"
@@ -100,8 +103,9 @@
 #include "conquer.h"
 #include "data.h"
 #include "dbgprint.h"
+#include "deploymentconfig.h"
 #include "dialog.h"
-#include "dsaudio.h"
+#include "audio/audioengine.h"
 #include "dsurface.h"
 #include "egos.h"
 #include "empulse.h"
@@ -117,6 +121,7 @@
 #include "houstype.h"
 #include "incdec.h"
 #include "infatype.h"
+#include "inline.h"
 #include "intro.h"
 #include "ionblast.h"
 #include "ipxmgr.h"
@@ -151,6 +156,8 @@
 #include "rndstraw.h"
 #include "rules.h"
 #include "saveload.h"
+#include "savemgr.h"
+#include "savever.h"
 #include "scenario.h"
 #include "scheme.h"
 #include "script.h"
@@ -170,6 +177,8 @@
 #include "tracker.h"
 #include "trigger.h"
 #include "tube.h"
+#include "tutorial.h"
+#include "uicontrol.h"
 #include "unit.h"
 #include "unittype.h"
 #include "vein.h"
@@ -191,6 +200,7 @@
 #include <ctime>
 #include <dos.h>
 #include <unordered_set>
+#include <vector>
 
 extern VoxelDataStruct DropPodVoxel;
 
@@ -244,8 +254,8 @@ static void Init_Threads(void);
 void Draw_Version_Text(Surface * surface);
 void Version_Dialog(void);
 
-BOOL CALLBACK Rules_Choice_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
-BOOL CALLBACK Main_Menu_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
+INT_PTR CALLBACK Rules_Choice_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
+INT_PTR CALLBACK Main_Menu_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
 
 void Init_Random(void);
 
@@ -405,6 +415,7 @@ int Init_Game(int , char * [])
 	*/
 	DebugString("Reading Game Settings\n");
 	Options.Load_Settings();
+	SaveManager.Autosave.Set_Interval(Options.AutoSaveInterval);
 
 	/*
 	**	Initialize the animation system.
@@ -469,34 +480,24 @@ int Init_Game(int , char * [])
 		return(-1);
 	}
 
+	DebugString("Reading %s\n", DeploymentConfig.UIFile.c_str());
+	if (!UIControls.Read_INI_File(DeploymentConfig.UIFile.c_str(), true)) {
+		DebugString("%s not found, using the defaults.\n", DeploymentConfig.UIFile.c_str());
+	}
+
 	/*
 	**
 	*/
-	DebugString("Reading SOUND.INI\n");
+	DebugString("Reading %s\n", DeploymentConfig.SoundFile.c_str());
 
 	CCINIClass voc_ini;
-	if (!Read_INI_And_Expansion(voc_ini, "SOUND.INI", "SOUND01.INI")) {
-		DebugString("Failed to read SOUND.INI or SOUND01.INI!\n");
+	if (!Read_INI_And_Expansion(voc_ini, DeploymentConfig.SoundFile.c_str(), DeploymentConfig.SoundExpansionFile.c_str())) {
+		DebugString("Failed to read %s or %s!\n", DeploymentConfig.SoundFile.c_str(), DeploymentConfig.SoundExpansionFile.c_str());
 		return(-1);
 	}
 
 	Free_Vocs();
 	Init_Vocs(voc_ini);
-
-	/*
-	**
-	*/
-	DebugString("Reading THEME.INI\n");
-
-	CCINIClass theme_ini;
-	if (!Read_INI_And_Expansion(theme_ini, "THEME.INI", "THEME01.INI")) {
-		DebugString("Failed to read THEME.INI or THEME01.INI!\n");
-		return(-1);
-	}
-
-	Theme.Free_Themes();
-	Theme.Init_Themes(theme_ini);
-	Theme.Scan();
 
 	/*
 	**	Find and process any rules for this game.
@@ -507,6 +508,24 @@ int Init_Game(int , char * [])
 		DebugString("Failed to initialize Rules!\n");
 		return(-1);
 	}
+
+	// A map names its theater before anything else about it is read.
+	Prepare_Theater_Roster();
+
+	// A score's Side= names a side the rules declare, so the roster is built before the scores are read.
+	Prepare_Side_Roster();
+
+	DebugString("Reading %s\n", DeploymentConfig.ThemeFile.c_str());
+
+	CCINIClass theme_ini;
+	if (!Read_INI_And_Expansion(theme_ini, DeploymentConfig.ThemeFile.c_str(), DeploymentConfig.ThemeExpansionFile.c_str())) {
+		DebugString("Failed to read %s or %s!\n", DeploymentConfig.ThemeFile.c_str(), DeploymentConfig.ThemeExpansionFile.c_str());
+		return(-1);
+	}
+
+	Theme.Free_Themes();
+	Theme.Init_Themes(theme_ini);
+	Theme.Scan();
 
 	Session.MaxPlayers = Rule->MaxPlayers;
 
@@ -556,7 +575,7 @@ int Init_Game(int , char * [])
 /// with the index of the one that the player settled upon.
 /// </summary>
 /// <remarks>The dialog must be created with the vector of rules files as its parameter.</remarks>
-static BOOL CALLBACK Rules_Choice_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
+static INT_PTR CALLBACK Rules_Choice_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
 	char buffer[128];
 
@@ -620,7 +639,7 @@ void Init_Campaigns(void)
 		CCINIClass * ini = new CCINIClass;
 		ini->Load(file, false);
 
-		if (stricmp(name.c_str(), "BATTLE.INI") == 0) {
+		if (stricmp(name.c_str(), DeploymentConfig.BattleFile.c_str()) == 0) {
 			found = true;
 		}
 
@@ -629,7 +648,7 @@ void Init_Campaigns(void)
 	}
 
 	if (!found) {
-		CCFileClass file("BATTLE.INI");
+		CCFileClass file(DeploymentConfig.BattleFile.c_str());
 		CCINIClass * ini = new CCINIClass;
 
 		if (ini != NULL) {
@@ -639,7 +658,7 @@ void Init_Campaigns(void)
 		}
 	}
 
-	CCFileClass file("BATTLEFS.INI");
+	CCFileClass file(DeploymentConfig.BattleExpansionFile.c_str());
 	if (file.Is_Available() == true) {
 		CCINIClass * ini = new CCINIClass;
 
@@ -648,6 +667,37 @@ void Init_Campaigns(void)
 			Read_Battle_INI(*ini);
 			delete ini;
 		}
+	}
+}
+
+
+/// <summary>
+/// Reads the theaters the rules declare, once, before anything can mount one.
+/// A theater list replaces the two theaters Tiberian Sun hard-coded rather than adding to
+/// them, so a rules file may drop or reorder them; a list naming none leaves those two.
+/// Firestorm's theaters are read whenever its rules are installed, not only when its addon
+/// is enabled, because a theater's position must not move between games.
+/// </summary>
+void Prepare_Theater_Roster(void)
+{
+	bool declared = Rule->Do_Theaters(*RuleINI);
+
+	if (Addon_Installed(ADDON_FIRESTORM)) {
+		declared |= Rule->Do_Theaters(FSRuleINI);
+	}
+
+	if (!declared) {
+		TheaterClass::One_Time();
+	}
+
+	for (int index = 0; index < Theaters.Count(); index++) {
+		Theaters[index]->Read_INI(*RuleINI);
+
+		if (Addon_Installed(ADDON_FIRESTORM)) {
+			Theaters[index]->Read_INI(FSRuleINI);
+		}
+
+		DebugString("Theater %d: %s\n", index, Theaters[index]->Name());
 	}
 }
 
@@ -699,12 +749,12 @@ static bool Campaign_Available(CampaignClass * campaign)
 /// This routine lists the campaigns that the player is entitled to play, drives the
 /// difficulty slider, and leaves the choice where Choose_Campaign will collect it.
 /// </summary>
-static BOOL CALLBACK Campaign_Choice_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
+static INT_PTR CALLBACK Campaign_Choice_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
 	HWND item;
 	struct ChooseCampaignStruct * state;
 
-	int rc;
+	INT_PTR rc;
 	rc = OwnerDraw::Default_Dialog_Proc(window, message, wparam, lparam);
 
 	if (rc) {
@@ -747,7 +797,7 @@ static BOOL CALLBACK Campaign_Choice_Dialog_Proc(HWND window, UINT message, WPAR
 			switch (LOWORD(wparam)) {
 				case IDOK:
 					if (HIWORD(wparam) == BN_CLICKED) {
-						state = (ChooseCampaignStruct *)GetWindowLong(window, DWL_USER);
+						state = (ChooseCampaignStruct *)GetWindowLongPtr(window, DWLP_USER);
 
 						if (state != NULL) {
 							item = GetDlgItem(window, IDC_LIST);
@@ -769,7 +819,7 @@ static BOOL CALLBACK Campaign_Choice_Dialog_Proc(HWND window, UINT message, WPAR
 
 				case IDCANCEL:
 					if (HIWORD(wparam) == BN_CLICKED) {
-						state = (ChooseCampaignStruct *)GetWindowLong(window, DWL_USER);
+						state = (ChooseCampaignStruct *)GetWindowLongPtr(window, DWLP_USER);
 
 						if (state != NULL) {
 							state->ChosenCampaign = CAMPAIGN_NONE;
@@ -823,10 +873,10 @@ static CampaignType Choose_Campaign(void)
 		}
 	}
 
-	dialog = OwnerDraw::Begin_Dialog(IDD_CAMPAIGN, (DLGPROC) Campaign_Choice_Dialog_Proc);
+	dialog = OwnerDraw::Begin_Dialog(IDD_CAMPAIGN, Campaign_Choice_Dialog_Proc);
 
 	if (dialog != NULL) {
-		SetWindowLong(dialog, DWL_USER, (LONG) &state);
+		SetWindowLongPtr(dialog, DWLP_USER, (LONG_PTR) &state);
 
 		OwnerDraw::Move_Dialog(dialog, -1, (HiddenSurface->Get_Height() - 400) / 2 + 147);
 		OwnerDraw::Display_Dialog(dialog);
@@ -864,7 +914,7 @@ static bool Init_Rules(void)
 
 		rule->Load(file, false);
 
-		if (stricmp(name.c_str(), "RULES.INI") == 0) {
+		if (stricmp(name.c_str(), DeploymentConfig.RulesFile.c_str()) == 0) {
 			found = true;
 			Rules.Add_Head(rule);
 		} else {
@@ -873,7 +923,7 @@ static bool Init_Rules(void)
 	}
 
 	if (!found) {
-		CCFileClass file("RULES.INI");
+		CCFileClass file(DeploymentConfig.RulesFile.c_str());
 		CCINIClass * rule = new CCINIClass;
 		rule->Load(file, false);
 		Rules.Add_Head(rule);
@@ -885,26 +935,26 @@ static bool Init_Rules(void)
 		return(false);
 	}
 
-	CCFileClass art_file("ART.INI");
+	CCFileClass art_file(DeploymentConfig.ArtFile.c_str());
 
 	if (!ArtINI.Load(art_file, false)) {
-		DebugString("Failed to load ART.INI!\n");
+		DebugString("Failed to load %s!\n", DeploymentConfig.ArtFile.c_str());
 		return(false);
 	}
 
 	CCINIClass art_ini;
-	CCFileClass art_fs_file("ARTFS.INI");
+	CCFileClass art_fs_file(DeploymentConfig.ArtExpansionFile.c_str());
 
 	if (art_fs_file.Is_Available() == true) {
 		art_ini.Load(art_fs_file, false);
 	}
 
 	if (Addon_Installed(ADDON_FIRESTORM)) {
-		CCFileClass rules_fs_file("FIRESTRM.INI");
+		CCFileClass rules_fs_file(DeploymentConfig.RulesExpansionFile.c_str());
 		if (rules_fs_file.Is_Available() == true) {
 			CCINIClass rule_fs;
 			if (!FSRuleINI.Load(rules_fs_file, false)) {
-				DebugString("Failed to load FIRESTRM.INI!\n");
+				DebugString("Failed to load %s!\n", DeploymentConfig.RulesExpansionFile.c_str());
 				return(false);
 			}
 		}
@@ -914,7 +964,7 @@ static bool Init_Rules(void)
 		RuleINI = Rules[0];
 	} else {
 		MouseCursor->Release_Mouse();
-		int rules_choice = DialogBoxParam(ProgramInstance, MAKEINTRESOURCE(IDD_RULES_CHOICE), MainWindow, (DLGPROC)Rules_Choice_Dialog_Proc, (LPARAM)&Rules);
+		int rules_choice = DialogBoxParam(ProgramInstance, MAKEINTRESOURCE(IDD_RULES_CHOICE), MainWindow, Rules_Choice_Dialog_Proc, (LPARAM)&Rules);
 		MouseCursor->Capture_Mouse();
 
 		if (rules_choice == -1) {
@@ -941,7 +991,7 @@ static bool Init_Rules(void)
 	Session.Options.AIPlayers = 0;
 	Session.Options.AIDifficulty = DIFF_NORMAL;
 
-	CCFileClass lang_file("LANGRULE.INI");
+	CCFileClass lang_file(DeploymentConfig.LanguageRulesFile.c_str());
 
 	if (lang_file.Is_Available() == true) {
 		CCINIClass lang_ini;
@@ -959,15 +1009,15 @@ static bool Init_Rules(void)
 		}
 	}
 
-	CCFileClass ai_file("AI.INI");
+	CCFileClass ai_file(DeploymentConfig.AIFile.c_str());
 	AIINI.Load(ai_file, true);
 
 	if (Addon_Installed(ADDON_FIRESTORM)) {
-		CCFileClass ai_fs_file("AIFS.INI");
+		CCFileClass ai_fs_file(DeploymentConfig.AIExpansionFile.c_str());
 		if (ai_fs_file.Is_Available() == true) {
 			CCINIClass ai_fs_ini;
 			if (!FSAIINI.Load(ai_fs_file, false)) {
-				DebugString("Failed to load AIFS.INI!\n");
+				DebugString("Failed to load %s!\n", DeploymentConfig.AIExpansionFile.c_str());
 				return(false);
 			}
 		}
@@ -1037,6 +1087,8 @@ restart:
 
 	Session.ProcessTicks = 0;
 	Session.ProcessFrames = 0;
+	Session.WorstStallTicks = 0;
+	Session.PreviousWorstStallTicks = 0;
 	Session.DesiredFrameRate = 30;
 	NewMaxAheadFrame1 = 0;
 	NewMaxAheadFrame2 = 0;
@@ -1183,10 +1235,7 @@ restart:
 				*/
 				case SEL_MULTIPLAYER_GAME: {
 						Session.Read_MultiPlayer_Settings();
-
-						for (int house = 0; house < HouseTypes.Count(); house++) {
-							HouseTypes[house]->Read_INI(*RuleINI);
-						}
+						Prepare_Side_Roster();
 
 						Session.Suspended = 0;
 
@@ -1237,13 +1286,7 @@ restart:
 						case GAME_IPX: {
 							Cheat_Disable();
 							Session.Read_MultiPlayer_Settings();
-
-							/*
-							**	Fetch the house attribute override values.
-							*/
-							for (int house = 0; house < HouseTypes.Count(); house++) {
-								HouseTypes[house]->Read_INI(*RuleINI);
-							}
+							Prepare_Side_Roster();
 
 							Session.Type = GAME_IPX;
 							Session.CommProtocol = COMM_PROTOCOL_MULTI_E_COMP;
@@ -1362,7 +1405,7 @@ restart:
 	**	Don't carry stray keystrokes into game.
 	*/
 	Keyboard->Clear();
-	Reset_Multiplayer_Save_State();
+	SaveManager.Reset_Multiplayer_Save_State();
 
 	/*
 	**	Initialize the random number generator(s)
@@ -1389,7 +1432,7 @@ restart:
 		Show_Mouse();
 
 		if (Session.Type != GAME_NORMAL) {
-			Session.PlayerIsGDI = stricmp(HouseTypes[Session.Players[0]->Player.House]->Name(), "GDI") == 0;
+			Session.PlayerHouse = (HousesType)Session.Players[0]->Player.House;
 		}
 
 		// The menu sets the difficulty pair on every path but a client launch, which chose it.
@@ -1446,6 +1489,8 @@ restart:
 
 	if (Session.Type != GAME_NORMAL && Session.Type != GAME_SKIRMISH && !Session.Play) {
 		Session.Create_Connections();
+		Spawner_Announce_Master();
+		SaveManager.Multiplayer_Saves_Begin_Match(gameloaded || Session.LoadGame);
 
 		if (Session.Type == GAME_IPX) {
 			Ipx.Set_Timing(std::max<unsigned>(TIMER_SECOND / 4, Ipx.Global_Response_Time() + 2), (unsigned int) -1, 10 * TIMER_SECOND);
@@ -1457,6 +1502,8 @@ restart:
 				Ipx.Set_Timing(std::max<unsigned>(TIMER_SECOND, Ipx.Global_Response_Time() + 2), (unsigned int) -1, 10 * TIMER_SECOND);
 			}
 		}
+	} else if (Session.Play && (Session.Type == GAME_IPX || Session.Type == GAME_INTERNET)) {
+		Session.Reset_Network_Timing(Frame >= 0 ? static_cast<unsigned int>(Frame) : 0u);
 	}
 
 	/*
@@ -1704,7 +1751,7 @@ bool Parse_Command_Line(int argc, char * argv[])
 			continue;
 		}
 
-		if (isdigit(string[1])) {
+		if (isdigit((unsigned char)string[1])) {
 			sscanf(string, "-%dX%d", &Options.ScreenWidth, &Options.ScreenHeight);
 			continue;
 		}
@@ -1755,7 +1802,7 @@ bool Parse_Command_Line(int argc, char * argv[])
 			string += strlen("-X");
 			while (*string) {
 				char code = *string++;
-				switch (toupper(code)) {
+				switch (toupper((unsigned char)code)) {
 
 #ifdef _DEBUG
 
@@ -1996,22 +2043,6 @@ static void Init_Color_Remaps(void)
  *=============================================================================================*/
 static void Init_Heaps(void)
 {
-	/*
-	**	Speech holding tank buffer. Since speech does not mix, it can be placed
-	**	into a custom holding tank only as large as the largest speech file to
-	**	be played.
-	*/
-	for (int index = 0; index < ARRAY_SIZE(SpeechBuffer); index++) {
-		SpeechBuffer[index] = new char [SPEECH_BUFFER_SIZE];
-		SpeechRecord[index] = VOX_NONE;
-		assert(SpeechBuffer[index] != NULL);
-	}
-
-	/*
-	**	Allocate the theater buffer block.
-	*/
-//	TheaterBuffer = new Buffer(THEATER_BUFFER_SIZE);
-//	assert(TheaterBuffer != NULL);
 }
 
 
@@ -2315,6 +2346,31 @@ static void Init_Patch_Mixfiles(void)
 }
 
 
+/// <summary>
+/// Reads a palette out of the mounted archives and expands it to the game's colour range.
+/// </summary>
+/// <param name="palette">The palette to fill, left unchanged if the file is not there.</param>
+/// <param name="name">The palette file to read.</param>
+static void Read_Palette(PaletteClass & palette, char const * name)
+{
+	void const * data = MFCD::Retrieve(name);
+
+	if (data == NULL) {
+		DebugString("%s not found; leaving that palette unchanged.\n", name);
+		return;
+	}
+
+	memmove(&palette[0], data, sizeof(palette));
+
+	for (int index = 0; index < PaletteClass::COLOR_COUNT; index++) {
+		palette[index] = RGBClass(
+				(unsigned char)(palette[index].Get_Red()<<2),
+				(unsigned char)(palette[index].Get_Green()<<2),
+				(unsigned char)(palette[index].Get_Blue()<<2));
+	}
+}
+
+
 /***********************************************************************************************
  * Init_Bootstrap_Mixfiles -- Registers and caches any mixfiles needed for bootstrapping.      *
  *                                                                                             *
@@ -2521,8 +2577,6 @@ static bool Init_Secondary_Mixfiles(void)
  *=============================================================================================*/
 static bool Bootstrap(void)
 {
-	int index;
-
 	/*
 	**	Process the message loop until we are in focus. We need to be in focus to read pixels from
 	**	the screen.
@@ -2571,39 +2625,18 @@ static bool Bootstrap(void)
 	/*
 	 * House specific scheme palette initialization.
 	 */
-	memmove((unsigned char *)&SchemePalette[0], (void *)MFCD::Retrieve("UNITSNO.PAL"), sizeof(SchemePalette));
-
-	for (index = 0; index < 256; index++) {
-		SchemePalette[index] = RGBClass(
-				(unsigned char)(SchemePalette[index].Get_Red()<<2),
-				(unsigned char)(SchemePalette[index].Get_Green()<<2),
-				(unsigned char)(SchemePalette[index].Get_Blue()<<2));
-	}
+	Read_Palette(SchemePalette, DeploymentConfig.SchemePaletteFile.c_str());
 
 	/*
 	**	Default palette initialization.
 	*/
-	memmove((unsigned char *)&GamePalette[0], (void *)MFCD::Retrieve("TEMPERAT.PAL"), sizeof(GamePalette));
-
-	for (index = 0; index < 256; index++) {
-		GamePalette[index] = RGBClass(
-				(unsigned char)(GamePalette[index].Get_Red()<<2),
-				(unsigned char)(GamePalette[index].Get_Green()<<2),
-				(unsigned char)(GamePalette[index].Get_Blue()<<2));
-	}
+	Read_Palette(GamePalette, DeploymentConfig.GamePaletteFile.c_str());
 
 	OriginalPalette = GamePalette;
 	CCPalette = GamePalette;
 	WhitePalette[0] = BlackPalette[0];
 
-	memmove((unsigned char *)&WaypointPalette[0], (void *)MFCD::Retrieve("WAYPOINT.PAL"), sizeof(WaypointPalette));
-
-	for (index = 0; index < 256; index++) {
-		WaypointPalette[index] = RGBClass(
-				(unsigned char)(WaypointPalette[index].Get_Red()<<2),
-				(unsigned char)(WaypointPalette[index].Get_Green()<<2),
-				(unsigned char)(WaypointPalette[index].Get_Blue()<<2));
-	}
+	Read_Palette(WaypointPalette, "WAYPOINT.PAL");
 
 	/*
 	 * Voxel system initialization.
@@ -2629,54 +2662,21 @@ static bool Bootstrap(void)
 	 */
 	TerrainDrawer = new ConvertClass(GamePalette, GamePalette, *VisibleSurface, NUM_INTENSITY_LEVELS);
 
-	PaletteClass pal;
+	PaletteClass pal = BlackPalette;
 
-	memmove((unsigned char *)&pal[0], (void *)MFCD::Retrieve("ANIM.PAL"), sizeof(pal));
-	for (index = 0; index < 256; index++) {
-		pal[index] = RGBClass(
-				(unsigned char)(pal[index].Get_Red()<<2),
-				(unsigned char)(pal[index].Get_Green()<<2),
-				(unsigned char)(pal[index].Get_Blue()<<2));
-	}
-
+	Read_Palette(pal, "ANIM.PAL");
 	AnimDrawer = new ConvertClass(pal, GamePalette, *VisibleSurface, NUM_INTENSITY_LEVELS);
 
-	memmove((unsigned char *)&pal[0], (void *)MFCD::Retrieve("PALETTE.PAL"), sizeof(pal));
-	for (index = 0; index < 256; index++) {
-		pal[index] = RGBClass(
-				(unsigned char)(pal[index].Get_Red()<<2),
-				(unsigned char)(pal[index].Get_Green()<<2),
-				(unsigned char)(pal[index].Get_Blue()<<2));
-	}
-
+	Read_Palette(pal, "PALETTE.PAL");
 	NormalDrawer = new ConvertClass(pal, GamePalette, *VisibleSurface, NUM_INTENSITY_LEVELS);
 
-	memmove((unsigned char *)&pal[0], (void *)MFCD::Retrieve("UNITSNO.PAL"), sizeof(pal));
-	for (index = 0; index < 256; index++) {
-		pal[index] = RGBClass(
-				(unsigned char)(pal[index].Get_Red()<<2),
-				(unsigned char)(pal[index].Get_Green()<<2),
-				(unsigned char)(pal[index].Get_Blue()<<2));
-	}
-
+	Read_Palette(pal, DeploymentConfig.SchemePaletteFile.c_str());
 	VoxelDrawer = new ConvertClass(pal, GamePalette, *VisibleSurface, NUM_INTENSITY_LEVELS);
 
-	memmove((unsigned char *)&pal[0], (void *)MFCD::Retrieve("CAMEO.PAL"), sizeof(pal));
-	for (index = 0; index < 256; index++) {
-		pal[index] = RGBClass(
-				(unsigned char)(pal[index].Get_Red()<<2),
-				(unsigned char)(pal[index].Get_Green()<<2),
-				(unsigned char)(pal[index].Get_Blue()<<2));
-	}
+	Read_Palette(pal, "CAMEO.PAL");
 	CameoDrawer = new ConvertClass(pal, GamePalette, *VisibleSurface, NUM_INTENSITY_LEVELS);
 
-	memmove((unsigned char *)&pal[0], (void *)MFCD::Retrieve("MOUSEPAL.PAL"), sizeof(pal));
-	for (index = 0; index < 256; index++) {
-		pal[index] = RGBClass(
-				(unsigned char)(pal[index].Get_Red()<<2),
-				(unsigned char)(pal[index].Get_Green()<<2),
-				(unsigned char)(pal[index].Get_Blue()<<2));
-	}
+	Read_Palette(pal, "MOUSEPAL.PAL");
 	MouseDrawer = new ConvertClass(pal, GamePalette, *VisibleSurface);
 
 	TiberiumDrawer = VoxelDrawer;
@@ -2761,7 +2761,7 @@ static bool Init_Bulk_Data(void)
 		return(false);
 	}
 
-	if (Audio_Available() && !Debug_Quiet) {
+	if (AudioEngine.Is_Available() && !Debug_Quiet) {
 		if (SoundsMix != NULL && !SoundsMix->Cache()) {
 			return(false);
 		}
@@ -2776,16 +2776,9 @@ static bool Init_Bulk_Data(void)
 	**	Fetch the tutorial message data.
 	*/
 	INIClass ini;
-	CCFileClass file("TUTORIAL.INI");
+	CCFileClass file(DeploymentConfig.TutorialFile.c_str());
 	ini.Load(file);
-	int count = ini.Entry_Count("Tutorial");
-	for (int index = 0; index < count; index++) {
-		char buffer[300];
-		const char *entry = ini.Get_Entry("Tutorial", index);
-		if (ini.Get_String("Tutorial", entry, "", buffer, sizeof(buffer))) {
-			TutorialText.Add_Index(atoi(entry), (char *)strdup(buffer));
-		}
-	}
+	TutorialText.Read_Base(ini);
 
 	/*
 	**	Perform one-time game system initializations.
@@ -2943,7 +2936,7 @@ bool Cheat_Key_Process(char chr)
 {
 	static char _buffer[32] = "";
 
-	if (!isalnum(chr) || chr == '~') {
+	if (!isalnum((unsigned char)chr) || chr == '~') {
 		memset(_buffer, 0, sizeof(_buffer));
 		return(false);
 	}
@@ -2960,7 +2953,7 @@ bool Cheat_Key_Process(char chr)
 		_buffer[0] = 0;
 	}
 
-	_buffer[len] = toupper(chr);
+	_buffer[len] = toupper((unsigned char)chr);
 
 	for (int c = 0; c < ARRAY_SIZE(CheatEntries); c++) {
 		if (strstr(_buffer, CheatEntries[c].CheatString) != NULL) {
@@ -2980,19 +2973,19 @@ bool Cheat_Key_Process(char chr)
 /// stamp, and a description of the processor it finds itself running upon. It is the
 /// first thing to ask for when a player reports a problem.
 /// </summary>
-BOOL CALLBACK Version_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
+INT_PTR CALLBACK Version_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
 	HWND handle;
 	int *res;
 	char buffer[256];
 
-	int rc = OwnerDraw::Default_Dialog_Proc(window, message, wparam, lparam);
+	INT_PTR rc = OwnerDraw::Default_Dialog_Proc(window, message, wparam, lparam);
 
 	if (rc) {
 		return(rc);
 	}
 
-	res = (int *)GetWindowLong(window, DWL_USER);
+	res = (int *)GetWindowLongPtr(window, DWLP_USER);
 
 	switch (message) {
 		case WM_INITDIALOG:
@@ -3059,10 +3052,10 @@ void Version_Dialog(void)
 	HWND dialog;
 	int res = 0;
 
-	dialog = OwnerDraw::Begin_Dialog(IDD_VERSION, (DLGPROC)Version_Dialog_Proc);
+	dialog = OwnerDraw::Begin_Dialog(IDD_VERSION, Version_Dialog_Proc);
 
 	if (dialog != NULL) {
-		SetWindowLong(dialog, DWL_USER, (LONG)&res);
+		SetWindowLongPtr(dialog, DWLP_USER, (LONG_PTR)&res);
 		OwnerDraw::Display_Dialog(dialog);
 
 		while (res == 0) {
@@ -3098,11 +3091,11 @@ int Main_Menu(unsigned int timeout)
 
 	timeout = 0;
 
-	dialog = OwnerDraw::Begin_Dialog(IDD_MAIN_MENU, (DLGPROC) Main_Menu_Dialog_Proc);
+	dialog = OwnerDraw::Begin_Dialog(IDD_MAIN_MENU, Main_Menu_Dialog_Proc);
 	assert(dialog != NULL);
 
 	if (dialog != NULL) {
-		SetWindowLong(dialog, DWL_USER, (LONG)&retval);
+		SetWindowLongPtr(dialog, DWLP_USER, (LONG_PTR)&retval);
 		char *menu = Get_New_Menu()->Background;
 		Load_Title_Screen(menu, HiddenSurface, &CCPalette);
 		Draw_Version_Text(HiddenSurface);
@@ -3170,16 +3163,16 @@ int Main_Menu(unsigned int timeout)
 /// This routine records the button the player pressed into the result that Main_Menu is
 /// waiting upon, and greys out the load button when there is nothing to load.
 /// </summary>
-BOOL CALLBACK Main_Menu_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
+INT_PTR CALLBACK Main_Menu_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
 	int * res;
 
-	int rc = OwnerDraw::Default_Dialog_Proc(window, message, wparam, lparam);
+	INT_PTR rc = OwnerDraw::Default_Dialog_Proc(window, message, wparam, lparam);
 	if (rc) {
 		return(rc);
 	}
 
-	res = (int *) GetWindowLong(window, DWL_USER);
+	res = (int *) GetWindowLongPtr(window, DWLP_USER);
 
 	switch (message) {
 		case WM_INITDIALOG: {
@@ -3293,6 +3286,37 @@ void Draw_Version_Text(Surface * surface)
 
 static char _cmd_buffer[128];
 
+
+static void Select_Team_Members(int team)
+{
+	for (int i = 0; i < Technos.Count(); i++) {
+		TechnoClass * obj = Technos[i];
+		if (obj && !obj->IsInLimbo && obj->Group == team - 1 && obj->House->Is_Player_Control()) {
+			if (!obj->IsSelected) {
+				obj->Select();
+				AllowVoice = false;
+			}
+		}
+	}
+}
+
+
+static void Assign_Selection_To_Team(int team)
+{
+	for (int i = 0; i < Technos.Count(); i++) {
+		TechnoClass * obj = Technos[i];
+		if (obj && !obj->IsInLimbo && obj->House->Is_Player_Control()) {
+			if (obj->Group == team - 1) {
+				obj->Group = -1;
+			}
+			if (obj->IsSelected) {
+				obj->Group = team - 1;
+			}
+		}
+	}
+}
+
+
 class CreateTeamCommandClass : public CommandClass
 {
 	public:
@@ -3315,17 +3339,7 @@ class CreateTeamCommandClass : public CommandClass
 		}
 
 		virtual void Execute(void) const {
-			for (int i = 0; i < Technos.Count(); i++) {
-				TechnoClass * obj = Technos[i];
-				if (obj && !obj->IsInLimbo && obj->House->Is_Player_Control()) {
-					if (obj->Group == Team - 1) {
-						obj->Group = -1;
-					}
-					if (obj->IsSelected) {
-						obj->Group = Team - 1;
-					}
-				}
-			}
+			Assign_Selection_To_Team(Team);
 		}
 
 	private:
@@ -3360,26 +3374,33 @@ class SelectTeamCommandClass : public CommandClass
 			Map.Repair_Mode_Control(0);
 			Map.Sell_Mode_Control(0);
 
-			if (CurrentObject.Count()) {
-				if (!CurrentObject[0]->Is_Foot() || ((FootClass *)CurrentObject[0])->Group != (Team - 1)) {
-					Unselect_All();
-				}
+			bool already = CurrentObject.Count() > 0 && CurrentObject[0]->Is_Foot() && ((FootClass *)CurrentObject[0])->Group == (Team - 1);
+			if (CurrentObject.Count() > 0 && !already) {
+				Unselect_All();
 			}
-			for (int i = 0; i < Technos.Count(); i++) {
-				TechnoClass * obj = Technos[i];
-				if (obj && !obj->IsInLimbo && obj->Group == (Team - 1) && obj->House->Is_Player_Control()) {
-					if (!obj->IsSelected) {
-						obj->Select();
-						AllowVoice = false;
-					}
-				}
-			}
+			Select_Team_Members(Team);
 			AllowVoice = false;
 			TechnoClass::Reset_Action_Line_Timer();
+
+			// A second press within half a second brings a team that was already selected into view.
+			int now = TickCount;
+			bool repeat = already && LastTeam == Team && LastTick >= 0 && now - LastTick < TIMER_SECOND / 2;
+			LastTeam = Team;
+			LastTick = now;
+			if (repeat && CurrentObject.Count() > 0) {
+				Point2D pixel;
+				if (!TacticalMap->Coord_To_Pixel(CurrentObject[0]->Center_Coord(), pixel)) {
+					Map.Center_Map();
+					Map.Flag_To_Redraw(GS_REDRAW_TACTICAL);
+				}
+			}
 		}
 
 	private:
 		int Team;
+
+		inline static int LastTeam = -1;
+		inline static int LastTick = -1;
 };
 
 
@@ -3410,17 +3431,44 @@ class AddTeamCommandClass : public CommandClass
 			Map.Repair_Mode_Control(0);
 			Map.Sell_Mode_Control(0);
 
-			for (int i = 0; i < Technos.Count(); i++) {
-				TechnoClass * obj = Technos[i];
+			Select_Team_Members(Team);
+		}
 
-				if (obj && !obj->IsInLimbo && obj->Group == Team-1 && obj->House->Is_Player_Control()) {
+	private:
+		int Team;
+};
 
-					if (!obj->IsSelected) {
-						obj->Select();
-						AllowVoice = false;
-					}
-				}
-			}
+
+class AddToTeamCommandClass : public CommandClass
+{
+	public:
+		AddToTeamCommandClass(int team) : Team(team) {}
+
+		virtual char const * Get_Unique_Name(void) const {
+			sprintf(_cmd_buffer, "TeamAddTo_%d", Team);
+			return(_cmd_buffer);
+		}
+		virtual char const * Get_Display_Name(void) const {
+			sprintf(_cmd_buffer, Fetch_String(TXT_ADD_TO_TEAM), Team);
+			return(_cmd_buffer);
+		}
+		virtual char const * Get_Category(void) const {
+			return(Fetch_String((TXT_TEAM)));
+		}
+		virtual char const * Get_Description(void) const {
+			sprintf(_cmd_buffer, Fetch_String(TXT_ADD_TO_TEAM_DESC), Team);
+			return(_cmd_buffer);
+		}
+
+		virtual void Execute(void) const {
+			Map.Power_Mode_Control(0);
+			Map.Waypoint_Mode_Control(0);
+			Map.Repair_Mode_Control(0);
+			Map.Sell_Mode_Control(0);
+
+			// The team joins the selection first, or the assignment would drop its existing members.
+			Select_Team_Members(Team);
+			Assign_Selection_To_Team(Team);
 		}
 
 	private:
@@ -3459,15 +3507,7 @@ class CenterTeamCommandClass : public CommandClass
 				Unselect_All();
 			}
 
-			for (int i = 0; i < Technos.Count(); i++) {
-				TechnoClass * obj = Technos[i];
-				if (obj && !obj->IsInLimbo && obj->Group == Team - 1 && obj->House->Is_Player_Control()) {
-					if (!obj->IsSelected) {
-						obj->Select();
-						AllowVoice = false;
-					}
-				}
-			}
+			Select_Team_Members(Team);
 
 			Map.Center_Map();
 			Map.Flag_To_Redraw(GS_REDRAW_TACTICAL);
@@ -3605,8 +3645,23 @@ class GuardCommandClass : public CommandClass
 				AllowVoice = true;
 				for (int index = 0; index < CurrentObject.Count(); index++) {
 					TechnoClass * tech = dynamic_cast<TechnoClass *>(CurrentObject[index]);/// should be CurrentObject[index]->As_TechnoClass() but causes regswaps
-					if (tech != NULL && tech->Can_Player_Move() && tech->Can_Player_Fire()) {
-						tech->Player_Assign_Mission(MISSION_GUARD_AREA, tech->Get_Target_Cell_Ptr());
+					if (tech == NULL || !tech->Can_Player_Move()) {
+						continue;
+					}
+
+					// An unarmed harvester cannot guard, so the key sends it back to work unless it is unloading.
+					UnitClass * unit = (tech->RTTI == RTTI_UNIT) ? static_cast<UnitClass *>(tech) : NULL;
+					if (unit != NULL && (unit->Class->IsToHarvest || unit->Class->IsToVeinHarvest)) {
+						if (unit->Get_Mission() != MISSION_UNLOAD && !unit->IsDumping) {
+							unit->Player_Assign_Mission(MISSION_HARVEST);
+							AllowVoice = false;
+						}
+						continue;
+					}
+
+					if (tech->Can_Player_Fire()) {
+						// Without an anchor cell the object guards where it stands instead of walking to its destination.
+						tech->Player_Assign_Mission(MISSION_GUARD_AREA);
 						AllowVoice = false;
 					}
 				}
@@ -3702,7 +3757,7 @@ class CenterBaseCommandClass : public CommandClass
 					BuildingClass * building = Buildings[index];
 
 					if (building != NULL && !building->IsInLimbo && building->House->Is_Player_Control()) {
-						if (building->Class == Rule->BaseUnit->DeploysInto) {
+						if (Rule->BuildConst.Is_In_List(building->Class)) {
 							conyard_coord = building->Center_Coord();
 							if (building->IsLeader) {
 								break;
@@ -3724,7 +3779,7 @@ class CenterBaseCommandClass : public CommandClass
 				if (PlayerPtr->CurUnits) {
 					for (index = 0; index < Units.Count(); index++) {
 						UnitClass * unit = Units[index];
-						if (unit != NULL && !unit->IsInLimbo && unit->House->Is_Player_Control() && unit->Class == Rule->BaseUnit) {
+						if (unit != NULL && !unit->IsInLimbo && unit->House->Is_Player_Control() && Rule->BaseUnit.Is_In_List(unit->Class)) {
 							conyard_coord = unit->Center_Coord();
 							break;
 						}
@@ -4298,6 +4353,197 @@ class ScrollWCommandClass : public CommandClass
 };
 
 
+class ScrollNECommandClass : public CommandClass
+{
+	public:
+		virtual char const * Get_Unique_Name(void) const {
+			return("ScrollNorthEast");
+		}
+		virtual char const * Get_Display_Name(void) const {
+			return(Fetch_String(TXT_SCROLL_NE));
+		}
+		virtual char const * Get_Category(void) const {
+			return(Fetch_String((TXT_INTERFACE)));
+		}
+		virtual char const * Get_Description(void) const {
+			return(Fetch_String(TXT_SCROLL_NE_DESC));
+		}
+
+		virtual void Execute(void) const {
+			int distance = 34;
+			Map.Scroll_Map(FACING_NE, distance, true);
+		}
+};
+
+
+class ScrollSECommandClass : public CommandClass
+{
+	public:
+		virtual char const * Get_Unique_Name(void) const {
+			return("ScrollSouthEast");
+		}
+		virtual char const * Get_Display_Name(void) const {
+			return(Fetch_String(TXT_SCROLL_SE));
+		}
+		virtual char const * Get_Category(void) const {
+			return(Fetch_String((TXT_INTERFACE)));
+		}
+		virtual char const * Get_Description(void) const {
+			return(Fetch_String(TXT_SCROLL_SE_DESC));
+		}
+
+		virtual void Execute(void) const {
+			int distance = 34;
+			Map.Scroll_Map(FACING_SE, distance, true);
+		}
+};
+
+
+class ScrollSWCommandClass : public CommandClass
+{
+	public:
+		virtual char const * Get_Unique_Name(void) const {
+			return("ScrollSouthWest");
+		}
+		virtual char const * Get_Display_Name(void) const {
+			return(Fetch_String(TXT_SCROLL_SW));
+		}
+		virtual char const * Get_Category(void) const {
+			return(Fetch_String((TXT_INTERFACE)));
+		}
+		virtual char const * Get_Description(void) const {
+			return(Fetch_String(TXT_SCROLL_SW_DESC));
+		}
+
+		virtual void Execute(void) const {
+			int distance = 34;
+			Map.Scroll_Map(FACING_SW, distance, true);
+		}
+};
+
+
+class ScrollNWCommandClass : public CommandClass
+{
+	public:
+		virtual char const * Get_Unique_Name(void) const {
+			return("ScrollNorthWest");
+		}
+		virtual char const * Get_Display_Name(void) const {
+			return(Fetch_String(TXT_SCROLL_NW));
+		}
+		virtual char const * Get_Category(void) const {
+			return(Fetch_String((TXT_INTERFACE)));
+		}
+		virtual char const * Get_Description(void) const {
+			return(Fetch_String(TXT_SCROLL_NW_DESC));
+		}
+
+		virtual void Execute(void) const {
+			int distance = 34;
+			Map.Scroll_Map(FACING_NW, distance, true);
+		}
+};
+
+
+/// <summary>
+/// Scrolls the view as far as it goes in one direction.
+/// </summary>
+static void Jump_Camera(FacingType facing)
+{
+	// The tactical position is clamped to the map, so any distance of at least the map size lands on its edge.
+	int distance = Cell_To_Lepton(std::max(Map.PlayRect.Width, Map.PlayRect.Height));
+	Map.Scroll_Map(facing, distance, true);
+}
+
+
+class JumpCameraWCommandClass : public CommandClass
+{
+	public:
+		virtual char const * Get_Unique_Name(void) const {
+			return("JumpCameraWest");
+		}
+		virtual char const * Get_Display_Name(void) const {
+			return(Fetch_String(TXT_JUMP_CAMERA_W));
+		}
+		virtual char const * Get_Category(void) const {
+			return(Fetch_String((TXT_INTERFACE)));
+		}
+		virtual char const * Get_Description(void) const {
+			return(Fetch_String(TXT_JUMP_CAMERA_W_DESC));
+		}
+
+		virtual void Execute(void) const {
+			Jump_Camera(FACING_W);
+		}
+};
+
+
+class JumpCameraECommandClass : public CommandClass
+{
+	public:
+		virtual char const * Get_Unique_Name(void) const {
+			return("JumpCameraEast");
+		}
+		virtual char const * Get_Display_Name(void) const {
+			return(Fetch_String(TXT_JUMP_CAMERA_E));
+		}
+		virtual char const * Get_Category(void) const {
+			return(Fetch_String((TXT_INTERFACE)));
+		}
+		virtual char const * Get_Description(void) const {
+			return(Fetch_String(TXT_JUMP_CAMERA_E_DESC));
+		}
+
+		virtual void Execute(void) const {
+			Jump_Camera(FACING_E);
+		}
+};
+
+
+class JumpCameraNCommandClass : public CommandClass
+{
+	public:
+		virtual char const * Get_Unique_Name(void) const {
+			return("JumpCameraNorth");
+		}
+		virtual char const * Get_Display_Name(void) const {
+			return(Fetch_String(TXT_JUMP_CAMERA_N));
+		}
+		virtual char const * Get_Category(void) const {
+			return(Fetch_String((TXT_INTERFACE)));
+		}
+		virtual char const * Get_Description(void) const {
+			return(Fetch_String(TXT_JUMP_CAMERA_N_DESC));
+		}
+
+		virtual void Execute(void) const {
+			Jump_Camera(FACING_N);
+		}
+};
+
+
+class JumpCameraSCommandClass : public CommandClass
+{
+	public:
+		virtual char const * Get_Unique_Name(void) const {
+			return("JumpCameraSouth");
+		}
+		virtual char const * Get_Display_Name(void) const {
+			return(Fetch_String(TXT_JUMP_CAMERA_S));
+		}
+		virtual char const * Get_Category(void) const {
+			return(Fetch_String((TXT_INTERFACE)));
+		}
+		virtual char const * Get_Description(void) const {
+			return(Fetch_String(TXT_JUMP_CAMERA_S_DESC));
+		}
+
+		virtual void Execute(void) const {
+			Jump_Camera(FACING_S);
+		}
+};
+
+
 class View1CommandClass : public CommandClass
 {
 	public:
@@ -4630,6 +4876,81 @@ class ScreenCaptureCommandClass : public CommandClass
 };
 
 
+/// <summary>
+/// Plays the nearest allowed track in the given direction and names it on screen.
+/// </summary>
+static void Step_Theme(int step)
+{
+	int count = Theme.Max_Themes();
+	if (count <= 0) {
+		return;
+	}
+
+	ThemeType theme = Theme.What_Is_Playing();
+	if (theme < THEME_FIRST || theme >= count) {
+		theme = (step > 0) ? ThemeType(count - 1) : THEME_FIRST;
+	}
+
+	for (int tries = 0; tries < count; tries++) {
+		theme = ThemeType((theme + step + count) % count);
+		if (!Theme.Is_Allowed(theme)) {
+			continue;
+		}
+		// Stopping first keeps the queue from fading the current track out or refusing the request while one is pending.
+		Theme.Stop();
+		Theme.Queue_Song(theme);
+		char buffer[128];
+		snprintf(buffer, sizeof(buffer), Fetch_String(TXT_NOW_PLAYING), Theme.Full_Name(theme));
+		Session.Messages.Add_Message(NULL, 0, buffer, PlayerPtr->Scheme, TextPrintType(TPF_6PT_GRAD|TPF_USE_GRAD_PAL|TPF_FULLSHADOW), TICKS_PER_SECOND * 4);
+		return;
+	}
+}
+
+
+class PrevThemeCommandClass : public CommandClass
+{
+	public:
+		virtual char const * Get_Unique_Name(void) const {
+			return("PrevTheme");
+		}
+		virtual char const * Get_Display_Name(void) const {
+			return(Fetch_String(TXT_PREV_THEME));
+		}
+		virtual char const * Get_Category(void) const {
+			return(Fetch_String((TXT_INTERFACE)));
+		}
+		virtual char const * Get_Description(void) const {
+			return(Fetch_String(TXT_PREV_THEME_DESC));
+		}
+
+		virtual void Execute(void) const {
+			Step_Theme(-1);
+		}
+};
+
+
+class NextThemeCommandClass : public CommandClass
+{
+	public:
+		virtual char const * Get_Unique_Name(void) const {
+			return("NextTheme");
+		}
+		virtual char const * Get_Display_Name(void) const {
+			return(Fetch_String(TXT_NEXT_THEME));
+		}
+		virtual char const * Get_Category(void) const {
+			return(Fetch_String((TXT_INTERFACE)));
+		}
+		virtual char const * Get_Description(void) const {
+			return(Fetch_String(TXT_NEXT_THEME_DESC));
+		}
+
+		virtual void Execute(void) const {
+			Step_Theme(1);
+		}
+};
+
+
 class SelectSameTypeCommandClass : public CommandClass
 {
 	public:
@@ -4698,6 +5019,301 @@ class SelectSameTypeCommandClass : public CommandClass
 };
 
 
+/// <summary>
+/// Narrows a mixed selection to one tier at a time. The selection the filter started from is
+/// remembered, so repeated presses cycle through its tiers and the add-lower form grows it back.
+/// </summary>
+class SelectionFilterClass
+{
+	public:
+		typedef int (*TierFunction)(TechnoClass const * techno);
+
+		SelectionFilterClass(TierFunction tier) : Tier(tier) {}
+
+		void Execute(bool add_lower);
+		void Reset(void) { LastFull.clear(); }
+
+	private:
+		typedef std::vector<TechnoClass *> TechnoList;
+
+		static bool Same_Set(TechnoList a, TechnoList b);
+		static bool Is_Union(TechnoList const & current, TechnoList const & a, TechnoList const & b);
+		TechnoList Resolve_Last_Full(void) const;
+
+		TierFunction Tier;
+		std::vector<TargetClass> LastFull;
+};
+
+
+void SelectionFilterClass::Execute(bool add_lower)
+{
+	// Nothing can be selected while a building is being placed.
+	if (Map.PendingObject != NULL) {
+		return;
+	}
+
+	TechnoList current;
+	TechnoList current_tiers[3];
+	int best = 3;
+	int worst = -1;
+	for (int index = 0; index < CurrentObject.Count(); index++) {
+		ObjectClass * obj = CurrentObject[index];
+		if (obj == NULL || !obj->Is_Techno()) {
+			continue;
+		}
+		TechnoClass * techno = (TechnoClass *)obj;
+		if (!techno->House->Is_Player_Control()) {
+			continue;
+		}
+		int tier = Tier(techno);
+		current.push_back(techno);
+		current_tiers[tier].push_back(techno);
+		best = std::min(best, tier);
+		worst = std::max(worst, tier);
+	}
+	if (current.empty()) {
+		return;
+	}
+
+	TechnoList last_full = Resolve_Last_Full();
+	TechnoList last_tiers[3];
+	for (TechnoClass * techno : last_full) {
+		last_tiers[Tier(techno)].push_back(techno);
+	}
+
+	bool continuing = !last_full.empty() && (Same_Set(current, last_full)
+		|| Same_Set(current, last_tiers[0]) || Same_Set(current, last_tiers[1]) || Same_Set(current, last_tiers[2])
+		|| Is_Union(current, last_tiers[0], last_tiers[1]) || Is_Union(current, last_tiers[0], last_tiers[2]) || Is_Union(current, last_tiers[1], last_tiers[2]));
+
+	if (!continuing) {
+		// A fresh selection starts a filter at its best tier; there is nothing to add back to yet.
+		if (add_lower || best == worst) {
+			return;
+		}
+		LastFull.clear();
+		for (TechnoClass * techno : current) {
+			LastFull.push_back(TargetClass(techno));
+		}
+		for (int tier = best + 1; tier < 3; tier++) {
+			for (TechnoClass * techno : current_tiers[tier]) {
+				techno->Unselect();
+			}
+		}
+		for (TechnoClass * techno : current_tiers[best]) {
+			techno->Response_Select();
+		}
+		return;
+	}
+
+	int next = worst;
+	if (best != worst) {
+		next = Same_Set(current, last_full) ? best : ((best + worst) * 2) % 3;
+	} else {
+		for (int tries = 0; tries < 3; tries++) {
+			next = (next + 1) % 3;
+			if (!last_tiers[next].empty()) {
+				break;
+			}
+		}
+	}
+	if (last_tiers[next].empty()) {
+		return;
+	}
+
+	if (!add_lower) {
+		for (TechnoClass * techno : current) {
+			techno->Unselect();
+		}
+	}
+	for (TechnoClass * techno : last_tiers[next]) {
+		techno->Select();
+	}
+}
+
+
+bool SelectionFilterClass::Same_Set(TechnoList a, TechnoList b)
+{
+	std::sort(a.begin(), a.end());
+	std::sort(b.begin(), b.end());
+	return(a == b);
+}
+
+
+bool SelectionFilterClass::Is_Union(TechnoList const & current, TechnoList const & a, TechnoList const & b)
+{
+	if (a.empty() || b.empty() || current.size() != a.size() + b.size()) {
+		return(false);
+	}
+	TechnoList joined(a);
+	joined.insert(joined.end(), b.begin(), b.end());
+	return(Same_Set(current, joined));
+}
+
+
+SelectionFilterClass::TechnoList SelectionFilterClass::Resolve_Last_Full(void) const
+{
+	TechnoList list;
+	for (TargetClass const & target : LastFull) {
+		TechnoClass * techno = target.As_Techno();
+		if (techno != NULL && techno->IsActive && !techno->IsInLimbo && techno->House->Is_Player_Control()) {
+			list.push_back(techno);
+		}
+	}
+	return(list);
+}
+
+
+static int Veterancy_Tier(TechnoClass const * techno)
+{
+	if (techno->Veterancy.Is_Elite()) {
+		return(0);
+	}
+	if (techno->Veterancy.Is_Veteran()) {
+		return(1);
+	}
+	return(2);
+}
+
+
+static int Health_Tier(TechnoClass const * techno)
+{
+	double ratio = techno->Get_Health_Ratio();
+	if (ratio <= Rule->ConditionRed) {
+		return(0);
+	}
+	if (ratio <= Rule->ConditionYellow) {
+		return(1);
+	}
+	return(2);
+}
+
+
+class VeterancyFilterCommandClass : public CommandClass
+{
+	public:
+		virtual char const * Get_Unique_Name(void) const {
+			return("VeterancyFilter");
+		}
+		virtual char const * Get_Display_Name(void) const {
+			return(Fetch_String(TXT_VETERANCY_FILTER));
+		}
+		virtual char const * Get_Category(void) const {
+			return(Fetch_String((TXT_SELECTION)));
+		}
+		virtual char const * Get_Description(void) const {
+			return(Fetch_String(TXT_VETERANCY_FILTER_DESC));
+		}
+
+		virtual void Execute(void) const {
+			Filter.Execute(false);
+		}
+
+		inline static SelectionFilterClass Filter{&Veterancy_Tier};
+};
+
+
+class VeterancyFilterAddLowerCommandClass : public CommandClass
+{
+	public:
+		virtual char const * Get_Unique_Name(void) const {
+			return("VeterancyFilterAddLower");
+		}
+		virtual char const * Get_Display_Name(void) const {
+			return(Fetch_String(TXT_VETERANCY_FILTER_ADD));
+		}
+		virtual char const * Get_Category(void) const {
+			return(Fetch_String((TXT_SELECTION)));
+		}
+		virtual char const * Get_Description(void) const {
+			return(Fetch_String(TXT_VETERANCY_FILTER_ADD_DESC));
+		}
+
+		virtual void Execute(void) const {
+			VeterancyFilterCommandClass::Filter.Execute(true);
+		}
+};
+
+
+class HealthFilterCommandClass : public CommandClass
+{
+	public:
+		virtual char const * Get_Unique_Name(void) const {
+			return("HealthFilter");
+		}
+		virtual char const * Get_Display_Name(void) const {
+			return(Fetch_String(TXT_HEALTH_FILTER));
+		}
+		virtual char const * Get_Category(void) const {
+			return(Fetch_String((TXT_SELECTION)));
+		}
+		virtual char const * Get_Description(void) const {
+			return(Fetch_String(TXT_HEALTH_FILTER_DESC));
+		}
+
+		virtual void Execute(void) const {
+			Filter.Execute(false);
+		}
+
+		inline static SelectionFilterClass Filter{&Health_Tier};
+};
+
+
+class HealthFilterAddLowerCommandClass : public CommandClass
+{
+	public:
+		virtual char const * Get_Unique_Name(void) const {
+			return("HealthFilterAddLower");
+		}
+		virtual char const * Get_Display_Name(void) const {
+			return(Fetch_String(TXT_HEALTH_FILTER_ADD));
+		}
+		virtual char const * Get_Category(void) const {
+			return(Fetch_String((TXT_SELECTION)));
+		}
+		virtual char const * Get_Description(void) const {
+			return(Fetch_String(TXT_HEALTH_FILTER_ADD_DESC));
+		}
+
+		virtual void Execute(void) const {
+			HealthFilterCommandClass::Filter.Execute(true);
+		}
+};
+
+
+class SelectOneLessCommandClass : public CommandClass
+{
+	public:
+		virtual char const * Get_Unique_Name(void) const {
+			return("SelectOneLess");
+		}
+		virtual char const * Get_Display_Name(void) const {
+			return(Fetch_String(TXT_SELECT_ONE_LESS));
+		}
+		virtual char const * Get_Category(void) const {
+			return(Fetch_String((TXT_SELECTION)));
+		}
+		virtual char const * Get_Description(void) const {
+			return(Fetch_String(TXT_SELECT_ONE_LESS_DESC));
+		}
+
+		virtual void Execute(void) const {
+			if (CurrentObject.Count() > 0) {
+				CurrentObject[CurrentObject.Count() - 1]->Unselect();
+			}
+		}
+};
+
+
+/// <summary>
+/// Forgets the selections the veterancy and health filters were started from.
+/// </summary>
+void Reset_Selection_Filters(void)
+{
+	VeterancyFilterCommandClass::Filter.Reset();
+	HealthFilterCommandClass::Filter.Reset();
+}
+
+
 class ManualPlaceCommandClass : public CommandClass
 {
 	public:
@@ -4738,6 +5354,193 @@ class ManualPlaceCommandClass : public CommandClass
 			Map.IsTargettingMode = SUPER_NONE;
 
 			PlayerPtr->Manual_Place(builder, (BuildingClass *)pending);
+		}
+};
+
+
+/// <summary>
+/// Queues another of the last completed item of one kind while the sidebar still offers it.
+/// Structures do not queue, so one already under way or waiting to be placed refuses.
+/// </summary>
+static void Repeat_Last_Production(RTTIType type, int id)
+{
+	if (id < 0 || !Map.Is_On_Sidebar(type, id)) {
+		return;
+	}
+
+	if (type == RTTI_BUILDINGTYPE) {
+		FactoryClass * factory = PlayerPtr->Fetch_Factory(type);
+		if (factory != NULL && factory->Get_Object() != NULL) {
+			if (factory->Is_Building() || factory->Has_Production_Target()) {
+				Speak(VOX_NO_FACTORY);
+			}
+			return;
+		}
+	}
+
+	Speak(type == RTTI_INFANTRYTYPE ? VOX_TRAINING : VOX_BUILDING);
+	OutList.push_back(EventClass(PlayerPtr->HeapID, EventClass::PRODUCE, type, id));
+}
+
+
+class RepeatLastBuildingCommandClass : public CommandClass
+{
+	public:
+		virtual char const * Get_Unique_Name(void) const {
+			return("RepeatLastBuilding");
+		}
+		virtual char const * Get_Display_Name(void) const {
+			return(Fetch_String(TXT_REPEAT_LAST_BUILDING));
+		}
+		virtual char const * Get_Category(void) const {
+			return(Fetch_String((TXT_INTERFACE)));
+		}
+		virtual char const * Get_Description(void) const {
+			return(Fetch_String(TXT_REPEAT_LAST_BUILDING_DESC));
+		}
+
+		virtual void Execute(void) const {
+			Repeat_Last_Production(RTTI_BUILDINGTYPE, PlayerPtr->JustBuiltStructure);
+		}
+};
+
+
+class RepeatLastInfantryCommandClass : public CommandClass
+{
+	public:
+		virtual char const * Get_Unique_Name(void) const {
+			return("RepeatLastInfantry");
+		}
+		virtual char const * Get_Display_Name(void) const {
+			return(Fetch_String(TXT_REPEAT_LAST_INFANTRY));
+		}
+		virtual char const * Get_Category(void) const {
+			return(Fetch_String((TXT_INTERFACE)));
+		}
+		virtual char const * Get_Description(void) const {
+			return(Fetch_String(TXT_REPEAT_LAST_INFANTRY_DESC));
+		}
+
+		virtual void Execute(void) const {
+			Repeat_Last_Production(RTTI_INFANTRYTYPE, PlayerPtr->JustBuiltInfantry);
+		}
+};
+
+
+class RepeatLastUnitCommandClass : public CommandClass
+{
+	public:
+		virtual char const * Get_Unique_Name(void) const {
+			return("RepeatLastUnit");
+		}
+		virtual char const * Get_Display_Name(void) const {
+			return(Fetch_String(TXT_REPEAT_LAST_UNIT));
+		}
+		virtual char const * Get_Category(void) const {
+			return(Fetch_String((TXT_INTERFACE)));
+		}
+		virtual char const * Get_Description(void) const {
+			return(Fetch_String(TXT_REPEAT_LAST_UNIT_DESC));
+		}
+
+		virtual void Execute(void) const {
+			Repeat_Last_Production(RTTI_UNITTYPE, PlayerPtr->JustBuiltUnit);
+		}
+};
+
+
+class RepeatLastAircraftCommandClass : public CommandClass
+{
+	public:
+		virtual char const * Get_Unique_Name(void) const {
+			return("RepeatLastAircraft");
+		}
+		virtual char const * Get_Display_Name(void) const {
+			return(Fetch_String(TXT_REPEAT_LAST_AIRCRAFT));
+		}
+		virtual char const * Get_Category(void) const {
+			return(Fetch_String((TXT_INTERFACE)));
+		}
+		virtual char const * Get_Description(void) const {
+			return(Fetch_String(TXT_REPEAT_LAST_AIRCRAFT_DESC));
+		}
+
+		virtual void Execute(void) const {
+			Repeat_Last_Production(RTTI_AIRCRAFTTYPE, PlayerPtr->JustBuiltAircraft);
+		}
+};
+
+
+/// <summary>
+/// Whether a quick save or load may run: a campaign or skirmish game in play that is not
+/// being won or lost, with the player's input unlocked.
+/// </summary>
+static bool Quick_Save_Allowed(void)
+{
+	if (!ScenarioActive || Session.Play || Scen->IsInputLocked) {
+		return(false);
+	}
+	if (Session.Type != GAME_NORMAL && Session.Type != GAME_SKIRMISH) {
+		return(false);
+	}
+	return(!PlayerPtr->IsToWin && !PlayerPtr->IsToLose && !PlayerPtr->IsToDie);
+}
+
+
+class QuickSaveCommandClass : public CommandClass
+{
+	public:
+		virtual char const * Get_Unique_Name(void) const {
+			return("QuickSave");
+		}
+		virtual char const * Get_Display_Name(void) const {
+			return(Fetch_String(TXT_QUICK_SAVE));
+		}
+		virtual char const * Get_Category(void) const {
+			return(Fetch_String((TXT_INTERFACE)));
+		}
+		virtual char const * Get_Description(void) const {
+			return(Fetch_String(TXT_QUICK_SAVE_DESC));
+		}
+
+		virtual void Execute(void) const {
+			if (Quick_Save_Allowed()) {
+				SaveManager.Request_Quick_Save();
+			}
+		}
+};
+
+
+class QuickLoadCommandClass : public CommandClass
+{
+	public:
+		virtual char const * Get_Unique_Name(void) const {
+			return("QuickLoad");
+		}
+		virtual char const * Get_Display_Name(void) const {
+			return(Fetch_String(TXT_QUICK_LOAD));
+		}
+		virtual char const * Get_Category(void) const {
+			return(Fetch_String((TXT_INTERFACE)));
+		}
+		virtual char const * Get_Description(void) const {
+			return(Fetch_String(TXT_QUICK_LOAD_DESC));
+		}
+
+		virtual void Execute(void) const {
+			if (!Quick_Save_Allowed()) {
+				return;
+			}
+
+			AutosaveClass::KindType kind = Session.Type == GAME_NORMAL ? AutosaveClass::KindType::Campaign : AutosaveClass::KindType::Skirmish;
+			SaveVersionInfo info;
+			if (!Get_Savefile_Info(Quick_Save_File_Name(kind).c_str(), &info) || info.Get_Internal_Version() != ExpectedGameVersion) {
+				SaveManager.Post_Save_Notice(TXT_NO_QUICKSAVE);
+				return;
+			}
+
+			// The load has to wait until the frame is over, where the menu dialogs run.
+			SpecialDialog = SDLG_QUICKLOAD;
 		}
 };
 
@@ -4804,21 +5607,36 @@ class DeleteWaypointCommandClass : public CommandClass
 		}
 
 		virtual void Execute(void) const {
-			if (Map.DraggedWaypoint) {
-				char waypoint_id;
-				PathType path_type = PATH_NONE;
-				PlayerPtr->Fetch_Waypoint_Data(Map.DraggedWaypoint, path_type, waypoint_id);
-				PlayerPtr->Ensure_Path(path_type);
-				PlayerPtr->Paths[path_type]->Delete_Waypoint((int)waypoint_id);
-				Map.DraggedWaypoint = NULL;
+			WaypointClass * waypoint = Map.DraggedWaypoint;
+			bool held = (waypoint != NULL);
 
-				for (int i = Feet.Count() - 1; i >= 0; i--) {
-					FootClass *foot = Feet[i];
-					if (foot->House == PlayerPtr && foot->CurrentPath == path_type && foot->NextWaypoint > waypoint_id) {
-						foot->NextWaypoint--;
-					}
+			// With nothing picked up, the selected path loses its last waypoint.
+			if (!held) {
+				if (PlayerPtr->SelectedPath == PATH_NONE) {
+					return;
 				}
+				WaypointPathClass * path = PlayerPtr->Ensure_Path(PlayerPtr->SelectedPath);
+				waypoint = path->Get_Waypoint(path->Waypoint_Count() - 1);
+				if (waypoint == NULL) {
+					return;
+				}
+			}
 
+			char waypoint_id;
+			PathType path_type = PATH_NONE;
+			PlayerPtr->Fetch_Waypoint_Data(waypoint, path_type, waypoint_id);
+			PlayerPtr->Ensure_Path(path_type);
+			PlayerPtr->Paths[path_type]->Delete_Waypoint((int)waypoint_id);
+
+			for (int i = Feet.Count() - 1; i >= 0; i--) {
+				FootClass *foot = Feet[i];
+				if (foot->House == PlayerPtr && foot->CurrentPath == path_type && foot->NextWaypoint > waypoint_id) {
+					foot->NextWaypoint--;
+				}
+			}
+
+			if (held) {
+				Map.DraggedWaypoint = NULL;
 				Show_Mouse();
 			}
 		}
@@ -4870,6 +5688,16 @@ static void Init_Commands(void)
 	AllCommands.Add(new ScrollSCommandClass);
 	AllCommands.Add(new ScrollECommandClass);
 	AllCommands.Add(new ScrollWCommandClass);
+
+	AllCommands.Add(new ScrollNECommandClass);
+	AllCommands.Add(new ScrollSECommandClass);
+	AllCommands.Add(new ScrollSWCommandClass);
+	AllCommands.Add(new ScrollNWCommandClass);
+
+	AllCommands.Add(new JumpCameraWCommandClass);
+	AllCommands.Add(new JumpCameraECommandClass);
+	AllCommands.Add(new JumpCameraNCommandClass);
+	AllCommands.Add(new JumpCameraSCommandClass);
 
 	AllCommands.Add(new SidebarUpCommandClass);
 	AllCommands.Add(new LSidebarUpCommandClass);
@@ -4942,6 +5770,17 @@ static void Init_Commands(void)
 	AllCommands.Add(new AddTeamCommandClass(9));
 	AllCommands.Add(new AddTeamCommandClass(10));
 
+	AllCommands.Add(new AddToTeamCommandClass(1));
+	AllCommands.Add(new AddToTeamCommandClass(2));
+	AllCommands.Add(new AddToTeamCommandClass(3));
+	AllCommands.Add(new AddToTeamCommandClass(4));
+	AllCommands.Add(new AddToTeamCommandClass(5));
+	AllCommands.Add(new AddToTeamCommandClass(6));
+	AllCommands.Add(new AddToTeamCommandClass(7));
+	AllCommands.Add(new AddToTeamCommandClass(8));
+	AllCommands.Add(new AddToTeamCommandClass(9));
+	AllCommands.Add(new AddToTeamCommandClass(10));
+
 	AllCommands.Add(new CenterTeamCommandClass(1));
 	AllCommands.Add(new CenterTeamCommandClass(2));
 	AllCommands.Add(new CenterTeamCommandClass(3));
@@ -4957,9 +5796,26 @@ static void Init_Commands(void)
 
 	AllCommands.Add(new ScreenCaptureCommandClass);
 
+	AllCommands.Add(new PrevThemeCommandClass);
+	AllCommands.Add(new NextThemeCommandClass);
+
 	AllCommands.Add(new SelectSameTypeCommandClass);
 
+	AllCommands.Add(new VeterancyFilterCommandClass);
+	AllCommands.Add(new VeterancyFilterAddLowerCommandClass);
+	AllCommands.Add(new HealthFilterCommandClass);
+	AllCommands.Add(new HealthFilterAddLowerCommandClass);
+	AllCommands.Add(new SelectOneLessCommandClass);
+
 	AllCommands.Add(new ManualPlaceCommandClass);
+
+	AllCommands.Add(new RepeatLastBuildingCommandClass);
+	AllCommands.Add(new RepeatLastInfantryCommandClass);
+	AllCommands.Add(new RepeatLastUnitCommandClass);
+	AllCommands.Add(new RepeatLastAircraftCommandClass);
+
+	AllCommands.Add(new QuickSaveCommandClass);
+	AllCommands.Add(new QuickLoadCommandClass);
 
 	const CommandClass * chatallcmd = new ChatToAllCommandClass;
 	AllCommands.Add(chatallcmd);
@@ -5173,7 +6029,7 @@ void Delete_All_Objects(void)
 	}
 	Process_Deferred_Deletion();
 	while (Bullets.Count()) {
-		Bullets[0]->Release();
+		delete Bullets[0];
 	}
 	Process_Deferred_Deletion();
 	while (Objects.Count()) {
@@ -5321,18 +6177,20 @@ void Delete_All_Objects(void)
  *=============================================================================================*/
 void Init_Theater(TheaterType theater)
 {
-	char			fullname[16];
-	char			shortname[16];
-	char			isofullname[16];
+	TheaterClass const & data = TheaterClass::As_Reference(theater);
+
+	char			fullname[_MAX_PATH];
+	char			shortname[_MAX_PATH];
+	char			isofullname[_MAX_PATH];
 
 	/*
 	**	Unload old mixfiles, and cache the new ones
 	*/
-	wsprintf(fullname, "%s.MIX", Theaters[theater].Root);
-	wsprintf(isofullname, "%s.MIX", Theaters[theater].IsoRoot);
-	wsprintf(shortname, "%s.MIX", Theaters[theater].Suffix);
+	snprintf(fullname, sizeof(fullname), "%s.MIX", data.Root.c_str());
+	snprintf(isofullname, sizeof(isofullname), "%s.MIX", data.IsoRoot.c_str());
+	snprintf(shortname, sizeof(shortname), "%s.MIX", data.Suffix.c_str());
 
-	DebugString("Init theater %s\n", Theaters[theater].Name);
+	DebugString("Init theater %s\n", data.Name());
 
 	/*
 	**	Save the new theater value
@@ -5366,7 +6224,7 @@ void Init_Theater(TheaterType theater)
 		**	Load the custom palette associated with this theater.
 		**	The fading palettes will have to be generated as well.
 		*/
-		wsprintf(fullname, "%s.PAL", Theaters[theater].Root);
+		snprintf(fullname, sizeof(fullname), "%s.PAL", data.Root.c_str());
 
 		unsigned char * ptr = (unsigned char *)MFCD::Retrieve(fullname);
 
@@ -5387,21 +6245,10 @@ void Init_Theater(TheaterType theater)
 		OriginalPalette = GamePalette;
 
 		PaletteClass * unitpal = NULL;
-		char const * palname = NULL;
 
-		bool valid = false;
-		switch (theater) {
-			case THEATER_TEMPERATE:
-				valid = true;
-				palname ="UNITTEM.PAL";
-				break;
-			case THEATER_SNOW:
-				valid = true;
-				palname = "UNITSNO.PAL";
-				break;
-		};
-
-		if (valid) {
+		if (!data.Suffix.empty()) {
+			char palname[_MAX_PATH];
+			snprintf(palname, sizeof(palname), "UNIT%s.PAL", data.Suffix.c_str());
 			unitpal = (PaletteClass *)MFCD::Retrieve(palname);
 		}
 
@@ -5522,7 +6369,7 @@ bool Prep_For_Side(SideType side)
 	}
 
 	sprintf(name, "SIDENC%02d.MIX", id);
-	DebugString("     Initilizing %s\n", name);
+	DebugString("     Initializing %s\n", name);
 
 	if (CCFileClass(name).Is_Available()) {
 		SideNCMix = new MFCD(name, &FastKey);
@@ -5536,7 +6383,7 @@ bool Prep_For_Side(SideType side)
 			sprintf(name, "E%02dSCD%02d.MIX", Get_Required_Addon(), id);
 		}
 
-		DebugString("     Initilizing %s\n", name);
+		DebugString("     Initializing %s\n", name);
 		if (CCFileClass(name).Is_Available()) {
 			SideCDMix = new MFCD(name, &FastKey);
 		}
@@ -5545,6 +6392,9 @@ bool Prep_For_Side(SideType side)
 			return(false);
 		}
 	}
+
+	// A side archive may carry its own copy of the file.
+	UIControls.Read_INI_File(DeploymentConfig.UIFile.c_str(), true);
 
 	Map.Init_For_House();
 
@@ -5567,6 +6417,9 @@ bool Prep_Speech_For_Side(SideType side)
 	if (side == SIDE_NONE) {
 		return(false);
 	}
+
+	// A line still streaming from the old archive must be closed before it goes.
+	Stop_Speaking();
 
 	if (SpeechMix != NULL) {
 		DebugString("     Releasing %s\n", SpeechMix->Filename);
@@ -5594,7 +6447,7 @@ bool Prep_Speech_For_Side(SideType side)
 	}
 
 	sprintf(name, "SPEECH%02d.MIX", id);
-	DebugString("     Initilizing %s\n", name);
+	DebugString("     Initializing %s\n", name);
 	if (CCFileClass(name).Is_Available()) {
 		SpeechMix = new MFCD(name, &FastKey);
 	}
@@ -5605,6 +6458,38 @@ bool Prep_Speech_For_Side(SideType side)
 	}
 
 	return(true);
+}
+
+
+/// <summary>
+/// Prepares a side's art and interface archives, or the first side's when that side has none.
+/// </summary>
+/// <returns>Returns with the side prepared, or SIDE_NONE when neither could be.</returns>
+SideType Prep_For_Side_Or_First(SideType side)
+{
+	if (Prep_For_Side(side)) {
+		return(side);
+	}
+	if (side != SIDE_FIRST && Prep_For_Side(SIDE_FIRST)) {
+		return(SIDE_FIRST);
+	}
+	return(SIDE_NONE);
+}
+
+
+/// <summary>
+/// Prepares a side's speech archives, or the first side's when that side has none.
+/// </summary>
+/// <returns>Returns with the side prepared, or SIDE_NONE when neither could be.</returns>
+SideType Prep_Speech_For_Side_Or_First(SideType side)
+{
+	if (Prep_Speech_For_Side(side)) {
+		return(side);
+	}
+	if (side != SIDE_FIRST && Prep_Speech_For_Side(SIDE_FIRST)) {
+		return(SIDE_FIRST);
+	}
+	return(SIDE_NONE);
 }
 
 
@@ -5743,9 +6628,7 @@ int New_Main_Menu(void)
 
 	if (Session.Type != GAME_NORMAL) {
 		Session.Read_MultiPlayer_Settings();
-		for (int i = 0; i < HouseTypes.Count(); i++) {
-			HouseTypes[i]->Read_INI(*RuleINI);
-		}
+		Prepare_Side_Roster();
 		Session.Suspended = false;
 		Session.Read_Scenario_Descriptions();
 		return(SEL_MULTIPLAYER_GAME);

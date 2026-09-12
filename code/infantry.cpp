@@ -79,13 +79,13 @@
  *   InfantryClass::~InfantryClass -- Default destructor for infantry units.                   *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-#define INCLUDE_COM
 #include "always.h"
 
 #include "infantry.h"
 
 #include "_bench.h"
 #include "_convert.h"
+#include "_keyboar.h"
 #include "_mixfile.h"
 #include "_rtti.h"
 #include "_rules.h"
@@ -99,6 +99,7 @@
 #include "builtype.h"
 #include "ccrand.h"
 #include "cell.h"
+#include "classids.h"
 #include "combat.h"
 #include "data.h"
 #include "draw.h"
@@ -107,7 +108,6 @@
 #include "goptions.h"
 #include "house.h"
 #include "houstype.h"
-#include "ilocos.h"
 #include "incdec.h"
 #include "infatype.h"
 #include "inline.h"
@@ -249,7 +249,7 @@ InfantryClass::InfantryClass(InfantryTypeClass const * type, HouseClass * house)
 	Init();
 
 	if (Class != NULL) {
-		Locomotion.CreateInstance(Class->Locomotor, NULL, CLSCTX_ALL);
+		Locomotion = Create_Locomotor(Class->Locomotor);
 		Locomotion->Link_To_Object(this);
 	}
 
@@ -631,11 +631,9 @@ void InfantryClass::Draw_It(Point2D const & xpoint, Rect const & cliprect) const
 	Cell cell = Get_Target_Cell();
 
 	if (CurrentTube == -1) {
-		IPersistPtr persist = Locomotion;
-		CLSID clsid;
-		persist->GetClassID(&clsid);
+		ClassID const clsid = Locomotion_Class_ID(Locomotion.get());
 
-		if (HeightAGL > 0 && clsid == CLSID_BallisticLocomotion) {
+		if (HeightAGL > 0 && clsid == ClassID_BallisticLocomotion) {
 			ShapeSet const * shapefile = (ShapeSet const *)MFCD::Retrieve("POD.SHP");
 			Point2D spoint = xpoint + Point2D(Locomotion->Shadow_Point());
 			Draw_Shape(
@@ -1173,10 +1171,8 @@ void InfantryClass::Assign_Destination(AbstractClass * target, bool immediate)
 	}
 
 	if (target != NULL && Class->IsJumpJet && Locomotion->Is_Moving()) {
-		IPersistPtr persist(Locomotion);
-		CLSID clsid;
-		persist->GetClassID(&clsid);
-		if (clsid == CLSID_WalkLocomotion) {
+		ClassID const clsid = Locomotion_Class_ID(Locomotion.get());
+		if (clsid == ClassID_WalkLocomotion) {
 			NavQueue.Add_Head(target);
 			target = Get_Target_Cell_Ptr();
 			if (target != NULL && ((CellClass *)target)->IsUnderBridge) {
@@ -1189,26 +1185,26 @@ void InfantryClass::Assign_Destination(AbstractClass * target, bool immediate)
 		bool should_fly = Should_JumpJet_Fly(Destination_Coord().As_Cell(), target->Center_Coord().As_Cell());
 		if (Is_JumpJet()) {
 			if (!should_fly) {
-				IPiggybackPtr piggy(Locomotion);
+				IPiggyback * piggy = Piggyback_Of(Locomotion.get());
 				if (piggy != NULL) {
 					if (piggy->Is_Piggybacking() && piggy->Is_Ok_To_End()) {
-						piggy->End_Piggyback(&Locomotion);
+						Locomotion = piggy->End_Piggyback();
 					}
 				}
-				ILocomotionPtr walk(CLSID_WalkLocomotion);
+				std::unique_ptr<ILocomotion> walk = Create_Locomotor(ClassID_WalkLocomotion);
 				walk->Link_To_Object(this);
-				piggy = IPiggybackPtr(walk);
+				piggy = Piggyback_Of(walk.get());
 				if (piggy != NULL) {
 					piggy->Begin_Piggyback(Locomotion);
-					Locomotion = walk;
+					Locomotion = std::move(walk);
 				}
 			}
 		} else {
 			if (should_fly) {
-				IPiggybackPtr piggy(Locomotion);
+				IPiggyback * piggy = Piggyback_Of(Locomotion.get());
 				if (piggy != NULL) {
 					if (piggy->Is_Piggybacking() && piggy->Is_Ok_To_End()) {
-						piggy->End_Piggyback(&Locomotion);
+						Locomotion = piggy->End_Piggyback();
 					}
 				}
 			}
@@ -1942,13 +1938,11 @@ MoveType InfantryClass::Can_Enter_Cell(CellClass const * cellptr, FacingType dir
  *=============================================================================================*/
 FireErrorType InfantryClass::Can_Fire(AbstractClass * target, int which) const
 {
-	/*
-	**	If a medic is shooting at a healed target, let's declare the target
-	**	illegal so he won't be constantly healing healed infantrymen.
-	*/
+	// A healer refuses a patient it cannot mend and one that is already whole, so that it
+	// does not stand over a finished target healing it forever.
 	if (Combat_Damage() < 0) {
-		InfantryClass * targ = target->As_InfantryClass();
-		if (targ == NULL || targ->HealthRatio >= Rule->ConditionGreen) {
+		TechnoClass const * targ = Dynamic_Cast<TechnoClass const *>((AbstractClass const *)target);
+		if (!Can_Heal(targ) || targ->HealthRatio >= Rule->ConditionGreen) {
 			return(FIRE_ILLEGAL);
 		}
 	}
@@ -2688,23 +2682,18 @@ ActionType InfantryClass::What_Action(ObjectClass const * object, bool disallow_
 
 	}
 
-	/*
-	**	If this is a medic, and the cursor's over a friendly infantryman,
-	**	execute an action-attack.  In CSII, if this is a mechanic and the
-	**	cursor's over a friendly vehicle, execute an action-attack.
-	*/
+	// Force-move outranks a healer's offer over a transport, and is the only way to board one.
 	if (Combat_Damage() < 0 && House->Is_Player_Control()) {
 		if (House->Is_Ally(object)) {
-			if (object->RTTI == RTTI_INFANTRY) {
-				if (object != this) {
-					if (object->HealthRatio < Rule->ConditionGreen) {
-						return(ACTION_HEAL);
-					}
-				} else {
-					return(ACTION_GUARD_AREA);
-				}
+			if (object == this) {
+				return(ACTION_GUARD_AREA);
 			}
 			const TechnoClass *tech = ::Dynamic_Cast<TechnoClass const *>(object);
+			bool boarding = !disallow_force && tech != NULL && tech->TClass->Max_Passengers() > 0
+				&& (Keyboard->Down(Options.KeyForceMove1) || Keyboard->Down(Options.KeyForceMove2));
+			if (!boarding && Can_Heal(object) && object->HealthRatio < Rule->ConditionGreen) {
+				return(object->RTTI == RTTI_INFANTRY ? ACTION_HEAL : ACTION_GREPAIR);
+			}
 			if (tech == NULL || !tech->TClass->Max_Passengers()) {
 				if (action == ACTION_GUARD_AREA || action == ACTION_MOVE) {
 					return(action);
@@ -2725,7 +2714,7 @@ ActionType InfantryClass::What_Action(ObjectClass const * object, bool disallow_
 			return(ACTION_SELECT);
 		}
 		if (((UnitClass *)object)->House != House) {
-			if (Scen->Special.IsHarvesterImmune && Rule->HarvesterUnit.Is_In_List((UnitTypeClass const *)object)) {
+			if (Scen->Special.IsHarvesterImmune && Rule->HarvesterUnit.Is_In_List(((UnitClass *)object)->Class)) {
 				return(ACTION_SELECT);
 			}
 			return(ACTION_CAPTURE);
@@ -2796,37 +2785,8 @@ ActionType InfantryClass::What_Action(ObjectClass const * object, bool disallow_
 	/*
 	**	Check to see if it can enter a transporter.
 	*/
-	if (action != ACTION_NO_ENTER &&
-		House->Is_Ally(object) &&
-		House->Is_Player_Control() && ::Dynamic_Cast<TechnoClass const *>(object) != NULL &&
-		action != ACTION_ATTACK) {
-
-		TechnoTypeClass const * tclass = object->TClass;
-		if (tclass != NULL && tclass->Max_Passengers() > 0) {
-			bool try_enter = true;
-			if (object->Is_Foot()) {
-				FootClass * foot = (FootClass *)object;
-				if ((foot->Team != NULL && !foot->Team->Class->IsLoadable) || foot->Locomotion->Is_Moving()) {
-					action = ACTION_NO_ENTER;
-					try_enter = false;
-				}
-			}
-
-			if (try_enter) {
-				switch (((InfantryClass *)this)->Transmit_Message(RADIO_CAN_LOAD, (TechnoClass*)object)) {
-					case RADIO_ROGER:
-						action = ACTION_ENTER;
-						break;
-
-					case RADIO_NEGATIVE:
-						action = ACTION_NO_ENTER;
-						break;
-
-					default:
-						break;
-				}
-			}
-		}
+	if (action != ACTION_NO_ENTER && action != ACTION_ATTACK) {
+		action = Transport_Enter_Action(object, action);
 	}
 
 	if (House->Is_Player_Control() && Class->IsCapture) {
@@ -2913,6 +2873,9 @@ bool InfantryClass::Active_Click_With(ActionType action, ObjectClass * object, b
 
 	switch (action) {
 		case ACTION_GREPAIR:
+			action = Combat_Damage() < 0 ? ACTION_ATTACK : ACTION_CAPTURE;
+			break;
+
 		case ACTION_DAMAGE:
 		case ACTION_CAPTURE:
 			action = ACTION_CAPTURE;
@@ -3140,7 +3103,6 @@ ObjectTypeClass const * InfantryClass::Class_Of(void) const
 void InfantryClass::Read_INI(CCINIClass const & ini)
 {
 	InfantryClass	* infantry;			// Working infantry pointer.
-	HousesType		inhouse;			// Infantry house.
 	InfantryType	classid;			// Infantry class.
 	char			buf[128];
 	char			* validation;
@@ -3159,12 +3121,8 @@ void InfantryClass::Read_INI(CCINIClass const & ini)
 		/*
 		**	1st token: house name.
 		*/
-		inhouse = HouseTypeClass::From_Name(strtok(buf, ","));
-		if (inhouse != HOUSE_NONE) {
-			HouseClass * inhousep = House_From_HousesType(inhouse);
-			if (inhousep == NULL) {
-				continue;
-			}
+		HouseClass * inhousep = House_From_Name(strtok(buf, ","));
+		if (inhousep != NULL) {
 
 			/*
 			**	2nd token: infantry type name.
@@ -3542,7 +3500,7 @@ void InfantryClass::Firing_AI(void)
 				case FIRE_ILLEGAL:
 					if (Combat_Damage(primary) < 0) {
 						ObjectClass * targ = dynamic_cast<ObjectClass *>(TarCom);
-						if (Is_Target_Infantry(targ)) {
+						if (Can_Heal(targ)) {
 							if (targ->HealthRatio >= Rule->ConditionGreen) {
 								Assign_Target(NULL);
 							}
@@ -3980,8 +3938,8 @@ void InfantryClass::Clear_Occupy_Bit(Coord const & coord)
 /// since the one it is about to be given is the one it was saved with. Post_Load enters it
 /// again once that identity has arrived.
 /// </summary>
-/// <returns>Returns with S_OK if the object was read successfully.</returns>
-HRESULT STDMETHODCALLTYPE InfantryClass::Load(IStream * stream)
+/// <returns>bool; Was the record read whole?</returns>
+bool InfantryClass::Load(SaveStreamClass & stream)
 {
 	TargetTracker.Remove_Index(Fetch_ID());
 	return(BASECLASS::Load(stream));
@@ -4191,15 +4149,15 @@ bool InfantryClass::JumpJet_To_Walk(void)
 	if (path_length >= 4) return(false);
 
 	if (Is_JumpJet()) {
-		IPiggybackPtr piggy(Locomotion);
+		IPiggyback * piggy = Piggyback_Of(Locomotion.get());
 		if (piggy != NULL && !piggy->Is_Piggybacking()) {
-			ILocomotionPtr walk(CLSID_WalkLocomotion);
+			std::unique_ptr<ILocomotion> walk = Create_Locomotor(ClassID_WalkLocomotion);
 			walk->Link_To_Object(this);
-			piggy = IPiggybackPtr(walk);
+			piggy = Piggyback_Of(walk.get());
 			if (piggy != NULL) {
 				Path[0] = FACING_NONE;
 				piggy->Begin_Piggyback(Locomotion);
-				Locomotion = walk;
+				Locomotion = std::move(walk);
 				Locomotion->Move_To(NavCom->Center_Coord());
 				return(true);
 			}
@@ -4234,10 +4192,8 @@ bool InfantryClass::Is_JumpJet(void) const
 		return(false);
 	}
 
-	IPersistPtr persist(Locomotion);
-	CLSID clsid;
-	persist->GetClassID(&clsid);
-	return((clsid == CLSID_JumpjetLocomotion) ? true : false);
+	ClassID const clsid = Locomotion_Class_ID(Locomotion.get());
+	return((clsid == ClassID_JumpjetLocomotion) ? true : false);
 }
 
 
@@ -4344,18 +4300,9 @@ int InfantryClass::Do_MISSION_GUARD(void)
 }
 
 
-/// <summary>
-/// Fetches the class identifier used to persist this object.
-/// The save system records this identifier alongside the object data so that the
-/// correct kind of object can be created again when the stream is read back.
-/// </summary>
-/// <param name="retval">Pointer to the buffer to fill in with the class identifier.</param>
-/// <returns>Returns with S_OK, or E_POINTER if no buffer was supplied.</returns>
-HRESULT STDMETHODCALLTYPE InfantryClass::GetClassID(CLSID * retval)
+ClassID InfantryClass::Class_ID(void) const
 {
-	if (retval == NULL) return(E_POINTER);
-	*retval = CLSID_InfantryClass;
-	return(S_OK);
+	return(ClassID_InfantryClass);
 }
 
 

@@ -76,11 +76,13 @@
 #include "_theater.h"
 #include "_tooltip.h"
 #include "_wsproto.h"
+#include "autosave.h"
 #include "cctooltip.h"
 #include "chat.h"
 #include "data.h"
 #include "dbgprint.h"
-#include "dsaudio.h"
+#include "audio/audioengine.h"
+#include "desyncdlg.h"
 #include "gamedirs.h"
 #include "gamedlg.h"
 #include "globals.h"
@@ -90,9 +92,12 @@
 #include "ipxmgr.h"
 #include "keyboard.h"
 #include "language/language.h"
+#include "loaddlg.h"
 #include "logic.h"
 #include "mainloop.h"
+#include "msgbox.h"
 #include "movie.h"
+#include "movieskip.h"
 #include "mplayer.h"
 #include "msgloop.h"
 #include "netdlg.h"
@@ -102,6 +107,7 @@
 #include "progress.h"
 #include "queue.h"
 #include "rules.h"
+#include "savemgr.h"
 #include "scenario.h"
 #include "session.h"
 #include "sidebar.h"
@@ -116,6 +122,7 @@
 
 #include "special.hh"
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -221,6 +228,27 @@ void Ingame_Menu_Dialog(void)
 					SpecialDialog = SDLG_NONE;
 					break;
 
+				case SDLG_QUICKLOAD:
+					{
+						AutosaveClass::KindType kind = Session.Type == GAME_NORMAL ? AutosaveClass::KindType::Campaign : AutosaveClass::KindType::Skirmish;
+						if (LoadOptionsClass().Load_File(Quick_Save_File_Name(kind).c_str())) {
+							Keyboard->Clear();
+							IgnoreInput = Scen->IsInputLocked;
+							if (!MouseCursor->Is_Hidden() && Scen->IsInputLocked) {
+								Hide_Mouse();
+							} else if (MouseCursor->Is_Hidden() && !Scen->IsInputLocked) {
+								Show_Mouse();
+							}
+							Map.Flag_To_Redraw(GS_REDRAW_ALL);
+							SpecialDialog = SDLG_NONE;
+						} else {
+							// The scenario may already be gone, so the player is left in the options menu as a failed dialog load leaves them.
+							WWMessageBox().Process(TXT_ERROR_LOADING_GAME, TXT_OK, TXT_NONE, TXT_NONE);
+							SpecialDialog = SDLG_OPTIONS;
+						}
+					}
+					break;
+
 				case SDLG_SETTINGS:
 					GameControlsClass().Dialog();
 					if (SpecialDialog != SDLG_SETTINGS) {
@@ -232,6 +260,10 @@ void Ingame_Menu_Dialog(void)
 				case SDLG_SOUND:
 					SoundControlsClass().Dialog();
 					SpecialDialog = SDLG_SETTINGS;
+					break;
+
+				case SDLG_LOAD:
+					SpecialDialog = SaveManager.Multiplayer_Load_Prompt() ? SDLG_NONE : SDLG_OPTIONS;
 					break;
 
 				case SDLG_KEYBOARD:
@@ -499,8 +531,9 @@ void Call_Back(void)
 	/*
 	**	Music and speech maintenance
 	*/
-	if (Audio_Available() && GameInFocus == true) {
-		Audio.Sound_Callback();
+	if (AudioEngine.Is_Available() && GameInFocus == true) {
+		AudioEngine.Sound_Callback();
+		Sound_Effect_AI();
 		Theme.AI();
 		Speak_AI();
 	}
@@ -587,6 +620,7 @@ static NetGlobal::ValidationContext Global_Validation_Context(NodeNameType const
 		context.SenderPlayerID = sender->Player.ID;
 		context.SenderPlayerColor = sender->Player.Color;
 	}
+	context.MasterPlayerID = Session.Master_Player_ID();
 	return(context);
 }
 
@@ -594,14 +628,17 @@ static NetGlobal::ValidationContext Global_Validation_Context(NodeNameType const
 /// <summary>
 /// Handles the network maintenance for a network game.
 /// This routine services the network connection and deals with the global packets that
-/// have arrived -- players signing off, chat messages, kick proposals, and the loading
-/// progress the other machines report. It needs to be called as often as possible.
+/// have arrived -- players signing off, chat messages, kick proposals, movie skip votes, and
+/// the loading progress the other machines report. It needs to be called as often as possible.
 /// </summary>
 void IPX_Call_Back(void)
 {
 	Windows_Message_Handler();
 
 	Ipx.Service();
+
+	// The dialog's heartbeats must keep going while a nested dialog owns the message loop.
+	DesyncDialog.Service();
 
 	/*
 	**	Read packets only if the game is "closed", so we don't steal global
@@ -637,10 +674,15 @@ void IPX_Call_Back(void)
 							break;
 
 						case NET_SIGN_OFF: {
-							int const connection = Ipx.Connection_Index(sender->Player.ID);
-							if (connection >= 0) {
-								Forget_Kick_Player(sender->Player.ID);
-								Destroy_Connection(sender->Player.ID, 0);
+							int const house = sender->Player.ID;
+							std::string const name = sender->Name;
+							if (Ipx.Connection_Index(house) >= 0) {
+								Forget_Kick_Player(house);
+								Destroy_Connection(house, 0);
+								DesyncDialog.Notify_Player_Left(house, name.c_str());
+							} else if (SaveManager.Multiplayer_Load_Is_In_Progress()) {
+								// The connections are rebuilt after the load, so the seat itself goes.
+								SaveManager.Multiplayer_Load_Unseat(sender_index);
 							}
 							break;
 						}
@@ -649,12 +691,39 @@ void IPX_Call_Back(void)
 							Chat_Receive(Session.GPacket, Session.GAddress);
 							break;
 
+						case NET_HOST_ANNOUNCE:
+							if (Session.MasterPlayerID == -1 || Session.MasterPlayerID == sender->Player.ID) {
+								DebugString("Adopting %s (house %d) as master\n", sender->Name, sender->Player.ID);
+								Session.Adopt_Master(sender->Player.ID, sender->Name);
+								DesyncDialog.Notify_Master_Changed();
+							} else {
+								DebugString("Ignoring a host announcement from %s while %s is master\n",
+									sender->Name, Session.MasterPlayerName);
+							}
+							break;
+
+						case NET_DESYNC_HEARTBEAT:
+							DesyncDialog.Notify_Heartbeat(sender->Player.ID);
+							break;
+
+						case NET_DESYNC_CONTINUE:
+							DesyncDialog.Notify_Continue();
+							break;
+
+						case NET_LOAD_GAME:
+							SaveManager.Multiplayer_Load_Receive(Session.GPacket.LoadGame.Slot);
+							break;
+
 						case NET_PROGRESS_REPORT:
 							DebugString("Received progress message - %d%% from %s\n", Session.GPacket.Progress.Percent, sender->Name);
 							Progress.Set_Progress_Percent(sender_index, Session.GPacket.Progress.Percent);
 							break;
 
 						case NET_READY_TO_GO:
+							break;
+
+						case NET_MOVIE_SKIP:
+							MovieSkip::Receive(sender->Player.ID, Session.GPacket);
 							break;
 
 						default:
@@ -722,36 +791,6 @@ char const * Name_From_Source(SourceType source)
 		return(SourceName[source]);
 	}
 	return("None");
-}
-
-
-/***********************************************************************************************
- * Theater_From_Name -- Converts ASCII name into a theater number.                             *
- *                                                                                             *
- *    This routine converts an ASCII representation of a theater and converts it into a        *
- *    matching theater number. If no match was found, then THEATER_NONE is returned.           *
- *                                                                                             *
- * INPUT:   name  -- Pointer to ASCII name to convert.                                         *
- *                                                                                             *
- * OUTPUT:  Returns with the name converted into a theater number.                             *
- *                                                                                             *
- * WARNINGS:   none                                                                            *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   10/01/1994 JLB : Created.                                                                 *
- *=============================================================================================*/
-TheaterType Theater_From_Name(char const * name)
-{
-	TheaterType	index;
-
-	//if (name) {
-		for (index = THEATER_FIRST; index < THEATER_COUNT; index++) {
-			if (stricmp(name, Theaters[index].Name) == 0) {
-				return(index);
-			}
-		}
-	//}
-	return(THEATER_NONE);
 }
 
 
@@ -1163,12 +1202,6 @@ TechnoTypeClass const * Fetch_Techno_Type(RTTIType type, int id)
 unsigned int Disk_Space_Available(void)
 {
 	ULARGE_INTEGER freebytecount;		// Free bytes on disk available to caller (caller may not have access to entire disk).
-	ULARGE_INTEGER totalbytecount;		// Total bytes on disk.
-	ULARGE_INTEGER totalfreebytecount;
-	unsigned int diskspace;
-
-	/// This pointer is declared as returning bool, where the API it is bound to returns BOOL.
-	bool (__stdcall *getfreediskspaceex) (LPCTSTR, PULARGE_INTEGER, PULARGE_INTEGER, PULARGE_INTEGER);
 
 	DebugString("Checking available disk space\n");
 
@@ -1179,46 +1212,16 @@ unsigned int Disk_Space_Available(void)
 	std::string const user_directory = User_File_Write_Name("");
 	LPCTSTR const disk = user_directory.empty() ? NULL : user_directory.c_str();
 
-	// Get the free disk space on the drive.
-	// NOTE IML: For Win'95, must query for support for GetDiskFreeSpaceEx before using it - otherwise use GetDiskFreeSpace().
-	HINSTANCE kernel = GetModuleHandle("KERNEL32.DLL");
-	if (kernel != NULL) {
-		getfreediskspaceex = (bool (_stdcall*) (LPCTSTR, PULARGE_INTEGER, PULARGE_INTEGER, PULARGE_INTEGER)) GetProcAddress (kernel, "GetDiskFreeSpaceExA");
-		if (getfreediskspaceex != NULL) {
-
-			DebugString("Using GetDiskFreeSpaceEx\n");
-
-			// NOTE: This function uses GetDiskFreeSpaceEx() and therefore assumes Win '95 OSR2 or greater.
-			if (!getfreediskspaceex(disk, &freebytecount, &totalbytecount, &totalfreebytecount)) {
-				DWORD const error = GetLastError();
-				DebugString("GetDiskFreeSpaceEx failed with error code %d - %s\n", error, Last_Error_Text(error));
-			} else {
-				/// Convert to a 32-bit integer.
-				diskspace = int(((int)freebytecount.LowPart + ((int)freebytecount.HighPart * (double)((__int64)UINT_MAX + 1))) / (double)1024);
-				DebugString("Free disk space is %d Mb\n", diskspace / 1024);
-				return(diskspace);
-			}
-		} else {
-			DWORD const error = GetLastError();
-			DebugString("GetProcAddress failed with error code %d - %s\n", error, Last_Error_Text(error));
-		}
-	} else {
-		DebugString("Failed to get module handle for KERNEL32.DLL\n");
+	if (!GetDiskFreeSpaceEx(disk, &freebytecount, NULL, NULL)) {
+		DWORD const error = GetLastError();
+		DebugString("GetDiskFreeSpaceEx failed with error code %d - %s\n", error, Last_Error_Text(error));
+		return(0);
 	}
 
-	DWORD sectorspercluster, bytespersector, freeclustercount, totalclustercount;
-
-	// The Ex version is not available. Use the Win'95 version.
-	// QUESTION: SDK docs say that values returned by this function are erroneous if partition > 2Gb.
-	//				 Does that mean that the partition is guaranteed to be <= 2Gb if Ex is not available?
-
-	if (GetDiskFreeSpace(disk, &sectorspercluster, &bytespersector, &freeclustercount, &totalclustercount)) {
-		diskspace = ((sectorspercluster * bytespersector) / 1024) * freeclustercount;
-		DebugString("Free disk space is %d Mb\n", diskspace / 1024);
-		return(diskspace);
-	}
-
-	return(0);
+	// The kilobyte count saturates rather than wrapping.
+	unsigned int const diskspace = (unsigned int)std::min<ULONGLONG>(freebytecount.QuadPart / 1024, UINT_MAX);
+	DebugString("Free disk space is %u Mb\n", diskspace / 1024);
+	return(diskspace);
 }
 
 

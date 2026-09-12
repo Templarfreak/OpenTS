@@ -70,7 +70,6 @@
  *   _Is_It_Playing -- Determines if unit is active and an initiated team member.              *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-#define INCLUDE_COM
 #include "always.h"
 
 #include "team.h"
@@ -2296,18 +2295,9 @@ void TeamClass::Serialize(SaveStreamClass & stream)
 }
 
 
-/// <summary>
-/// Fetches the class identifier of this object.
-/// This routine is part of the persistence contract and is what allows the save game loader
-/// to recognize a team when it reads one back in.
-/// </summary>
-/// <param name="retval">Pointer to the identifier to fill in.</param>
-/// <returns>Returns with S_OK, or E_POINTER if no destination was supplied.</returns>
-HRESULT STDMETHODCALLTYPE TeamClass::GetClassID(CLSID * retval)
+ClassID TeamClass::Class_ID(void) const
 {
-	if (retval == NULL) return(E_POINTER);
-	*retval = CLSID_TeamClass;
-	return(S_OK);
+	return(ClassID_TeamClass);
 }
 
 
@@ -2581,11 +2571,14 @@ void TeamClass::TMission_SCATTER(TeamMissionClass * mission, bool)
 /// </summary>
 void TeamClass::TMission_CHANGE_HOUSE(TeamMissionClass * mission, bool)
 {
-	FootClass *unit = Member;
-	while (unit != NULL) {
-		FootClass *next = unit->Member;
-		unit->Captured(House_From_HousesType(mission->Data.House));
-		unit = next;
+	HouseClass * newowner = House_From_HousesType(mission->Data.House);
+	if (newowner != NULL) {
+		FootClass *unit = Member;
+		while (unit != NULL) {
+			FootClass *next = unit->Member;
+			unit->Captured(newowner);
+			unit = next;
+		}
 	}
 	IsNextMission = true;
 }
@@ -3227,7 +3220,9 @@ void TeamClass::TMission_REDUCE_TIBERIUM(TeamMissionClass * mission, bool)
 /// </summary>
 void TeamClass::TMission_BEGIN_PRODUCTION(TeamMissionClass * mission, bool)
 {
-	Class->House->IsStarted = true;
+	if (Class->House != NULL) {
+		Class->House->IsStarted = true;
+	}
 	IsNextMission = true;
 }
 
@@ -3239,7 +3234,9 @@ void TeamClass::TMission_BEGIN_PRODUCTION(TeamMissionClass * mission, bool)
 /// </summary>
 void TeamClass::TMission_FIRE_SALE(TeamMissionClass * mission, bool)
 {
-	Class->House->State = STATE_ENDGAME;
+	if (Class->House != NULL) {
+		Class->House->State = STATE_ENDGAME;
+	}
 	IsNextMission = true;
 }
 

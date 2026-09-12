@@ -34,7 +34,7 @@ class SuperWeaponTypeClass : public AbstractTypeClass
 		SuperWeaponTypeClass(char const * ininame = NULL);
 		virtual ~SuperWeaponTypeClass(void) override;
 
-		virtual HRESULT STDMETHODCALLTYPE GetClassID(CLSID * retval) override;
+		virtual ClassID Class_ID(void) const override;
 
 		virtual void Serialize(SaveStreamClass & stream) override;
 		virtual void Post_Load(void) override;
@@ -113,6 +113,12 @@ class SuperWeaponTypeClass : public AbstractTypeClass
 		 * SidebarImage. A missing shape falls back on the generic icon.
 		 */
 		ShapeSet const * CameoData;
+
+		/*
+		 * Where this super weapon's cameo sorts among the others of its kind on the sidebar,
+		 * lowest first.
+		 */
+		int CameoSortOrder;
 
 		/*
 		 * This is the mouse action the player performs to aim this super weapon. It decides

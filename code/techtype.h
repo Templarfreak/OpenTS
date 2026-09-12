@@ -14,6 +14,7 @@
 #pragma once
 
 #include "_weapon.h"
+#include "classids.h"
 #include "objtype.h"
 #include "typelist.h"
 
@@ -122,7 +123,7 @@ class TechnoTypeClass : public ObjectTypeClass
 		 * about. It is what decides whether the object drives, walks, hovers, flies or
 		 * tunnels, and an instance of it is created for every object as it is unlimboed.
 		 */
-		CLSID Locomotor;
+		ClassID Locomotor;
 
 		/*
 		 * These are the half extents of this object's voxel model, measured off the artwork
@@ -208,6 +209,12 @@ class TechnoTypeClass : public ObjectTypeClass
 		UnitTypeClass *UndeploysInto;
 
 		/*
+		 * The vehicle type this one is drawn as while it stands at a dock handing its load
+		 * over. It overrides the single UnloadingHarvester the rules name for every harvester.
+		 */
+		UnitTypeClass const * UnloadingClass;
+
+		/*
 		 * These are the voice responses this object gives, one list per occasion. The
 		 * response is picked at random from the applicable list, so a type given several
 		 * alternatives will not repeat itself.
@@ -248,9 +255,26 @@ class TechnoTypeClass : public ObjectTypeClass
 
 		/*
 		**	If this is a transporter object (e.g., hovercraft, chinook, APC), then this
-		**	value specifies the maximum number of passengers it may carry.
+		**	value specifies the total passenger size it may carry at once.
 		*/
 		int MaxPassengers;
+
+		/*
+		 * This is how much room an object of this type takes up as a passenger. The default
+		 * of one spends a transport's capacity as a plain head count.
+		 */
+		int Size;
+
+		/*
+		 * This is the largest single passenger this object will carry, whatever room is
+		 * left in its hold.
+		 */
+		int SizeLimit;
+
+		/*
+		 * Whether this object carries units as well as infantry.
+		 */
+		bool IsVehicleTransport;
 
 		/*
 		**	Most objects have the ability to reveal the terrain around themselves.
@@ -338,6 +362,12 @@ class TechnoTypeClass : public ObjectTypeClass
 		const void * CameoData;
 
 		/*
+		 * Where this type's cameo sorts among the others of its kind on the sidebar, lowest
+		 * first.
+		 */
+		int CameoSortOrder;
+
+		/*
 		**	The number of animation frames allotted to rotation is specified here.
 		**	For an object that has no rotation, this value will be 1. For normal
 		**	vehicles this value will be 32. There are some special case units that
@@ -369,6 +399,12 @@ class TechnoTypeClass : public ObjectTypeClass
 		**	This is the default explosion to use when this vehicle is destroyed.
 		*/
 		TypeList<AnimTypeClass const *> Explosion;
+
+		/*
+		 * These are the animations spent in place of Explosion while scrap wreckage is
+		 * switched on. An empty list leaves Explosion in use.
+		 */
+		TypeList<AnimTypeClass const *> ScrapExplosion;
 
 		/*
 		 * This is the particle system that a building of this type runs continuously --
@@ -580,10 +616,24 @@ class TechnoTypeClass : public ObjectTypeClass
 		bool IsCloakable;
 
 		/*
-		**	Can this object self heal up to half strength? Mammoth tanks from C&C had this
-		**	feature.
+		**	Can this object self heal? Mammoth tanks from C&C had this feature.
 		*/
 		bool IsSelfHealing;
+
+		/*
+		 * A value below zero takes the game-wide self healing setting instead.
+		 */
+		int SelfHealingStep;
+		double SelfHealingRate;
+		double SelfHealingCap;
+
+		/*
+		 * These redirect a healing weapon away from the kind of object its owner would
+		 * otherwise mend. OmniHealer overrides Mechanic where both are set, and neither
+		 * means anything without a weapon that deals negative damage.
+		 */
+		bool IsMechanic;
+		bool IsOmniHealer;
 
 		/*
 		**	If this object explodes violently when destroyed, then this flag will be true.
@@ -766,8 +816,12 @@ class TechnoTypeClass : public ObjectTypeClass
 		virtual bool Legal_Placement(Cell const & pos, HouseClass * house) const;
 		virtual int Raw_Cost(void) const;
 		int Max_Passengers(void) const {return(MaxPassengers);}
+		TypeList<AnimTypeClass const *> const & Explosion_Set(void) const;
 		virtual int Repair_Cost(void) const;
 		virtual int Repair_Step(void) const;
+		int Self_Heal_Step(void) const;
+		double Self_Heal_Rate(void) const;
+		double Self_Heal_Cap(void) const;
 		virtual int Flight_Level(void) const;
 		virtual void const * Get_Cameo_Data(void) const override;
 		virtual int Cost_Of(HouseClass * house = NULL) const override;

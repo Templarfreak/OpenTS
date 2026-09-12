@@ -38,7 +38,7 @@
 #include "dialog.hh"
 #include "diff.hh"
 
-class HouseTypeClass;
+class HouseClass;
 class TActionClass;
 class TEventClass;
 class TriggerClass;
@@ -55,7 +55,7 @@ class TriggerTypeClass : public AbstractTypeClass
 
 		static TriggerTypeClass * Find_Or_Make(char const * ininame = NULL);
 
-		virtual HRESULT STDMETHODCALLTYPE GetClassID(CLSID * retval) override;
+		virtual ClassID Class_ID(void) const override;
 
 		/*
 		**	File I/O routines
@@ -147,7 +147,7 @@ class TriggerTypeClass : public AbstractTypeClass
 		/*
 		**	For house-specific events, this is the house for that event.
 		*/
-		HouseTypeClass * House;
+		HouseClass * House;
 
 		/*
 		 * This points to the next trigger type hanging off the same tag, or is NULL if this

@@ -15,7 +15,6 @@
 
 #include "vqa.h"
 
-#include "_keyboar.h"
 #include "ccfile.h"
 #include "dbgprint.h"
 #include "globals.h"
@@ -31,7 +30,7 @@
 #include "special.hh"
 
 // lib includes here.
-#include "ahandle.h"
+#include "audio/audiomovie.h"
 
 #include <unvq.h>
 #include <vqaplay.h>
@@ -39,10 +38,10 @@
 
 DynamicVectorClass<VQHandle *> IngameVQ;
 
-long __cdecl VQAMixFileHandler(VQAHandle * vqa, long action, void * buffer, long nbytes);
-long __cdecl VQACCFileHandler(VQAHandle * vqa, long action, void * buffer, long nbytes);
-long __cdecl VQAEventHandler(VQAHandle * vqa, long action, void * buffer, long nbytes);
-long __cdecl VQAMemoryHandler(VQAHandle * vqa, long action, void * buffer, long nbytes);
+intptr_t __cdecl VQAMixFileHandler(VQAHandle * vqa, long action, void * buffer, long nbytes);
+intptr_t __cdecl VQACCFileHandler(VQAHandle * vqa, long action, void * buffer, long nbytes);
+intptr_t __cdecl VQAEventHandler(VQAHandle * vqa, long action, void * buffer, long nbytes);
+intptr_t __cdecl VQAMemoryHandler(VQAHandle * vqa, long action, void * buffer, long nbytes);
 
 bool VQA_Message_Handler(void)
 {
@@ -76,7 +75,7 @@ bool VQA_Message_Handler(void)
  *                                                                         *
  * HISTORY: See PVCS log                                                   *
  *=========================================================================*/
-VQAClass::VQAClass(char const * filename, int flags, VQA_SURF_LOCK_CALLBACK surface_lock, VQA_SURF_UNLOCK_CALLBACK surface_unlock, VQA_SURF_DRAW_CALLBACK surface_draw, int frame_rate, int draw_rate)
+VQAClass::VQAClass(char const * filename, int flags, VQA_SURF_LOCK_CALLBACK surface_lock, VQA_SURF_UNLOCK_CALLBACK surface_unlock, VQA_SURF_DRAW_CALLBACK surface_draw, VQA_IDLE_CALLBACK idle, int frame_rate, int draw_rate)
 {
 	unsigned char buffer;
 
@@ -178,7 +177,6 @@ VQAClass::VQAClass(char const * filename, int flags, VQA_SURF_LOCK_CALLBACK surf
 	} else {
 		Config.TimerCallback = Timer_Callback_Audio_Handler;
 		Config.RefreshRate = 60;
-		Config.LatencyAdjustment = Options.SoundLatency;
 	}
 
 	Config.AudioHandler = Stream_Audio_Handler;
@@ -207,6 +205,8 @@ VQAClass::VQAClass(char const * filename, int flags, VQA_SURF_LOCK_CALLBACK surf
 	SurfaceLockCallback = surface_lock;
 	SurfaceUnlockCallback = surface_unlock;
 	SurfaceDrawCallback = surface_draw;
+	IdleCallback = idle;
+	PauseOnFocusLoss = true;
 	IsFileOpen = false;
 
 	// Initially, vqa is not open.
@@ -299,7 +299,7 @@ long VQAClass::CacheHandler(long action, void * buffer, long nbytes)
 			break;
 
 		case VQACMD_SEEK:
-			switch ((int)buffer) {
+			switch ((int)(intptr_t)buffer) {
 				case 1:
 					Cache.file_buffer_pos += nbytes;
 					rc = 0;
@@ -495,9 +495,9 @@ int VQAClass::Play_VQA(int last_frame_to_play, bool nobreakout)
 		if (cmode == 1) {
 			Hicolor_Init_Table(PrimaryColorMode);
 			if (Get_Option(OPTION_ALTERNATE_UNVQ)) {
-				VQA_SetUnVQ(Handle, ASM_UnVQ1_C1_TABLE_ALT, UnVQ2_4x2_Table);
+				VQA_SetUnVQ(Handle, UnVQ1_C1_TABLE_ALT, UnVQ2_4x2_Table);
 			} else {
-				VQA_SetUnVQ(Handle, ASM_UnVQ1_C1_TABLE, UnVQ2_4x4_Table);
+				VQA_SetUnVQ(Handle, UnVQ1_C1_TABLE, UnVQ2_4x4_Table);
 			}
 		} else if (cmode == 4) {
 			Hicolor_Init_Table(PrimaryColorMode);
@@ -522,6 +522,11 @@ int VQAClass::Play_VQA(int last_frame_to_play, bool nobreakout)
 		//
 		VQA_Message_Handler();
 
+		if (IdleCallback != NULL && IdleCallback() && !nobreakout) {
+			brokeout = true;
+			continue;
+		}
+
 		if (sleeping == true) {
 			if (!GameInFocus) {
 				Sleep((1000/30));
@@ -533,7 +538,7 @@ int VQAClass::Play_VQA(int last_frame_to_play, bool nobreakout)
 			}
 		}
 
-		if (GameInFocus == true && !IsPaused) {
+		if ((GameInFocus == true || !PauseOnFocusLoss) && !IsPaused) {
 
 			//
 			// Maybe draw another frame.
@@ -560,10 +565,6 @@ int VQAClass::Play_VQA(int last_frame_to_play, bool nobreakout)
 				IsPaused = true;
 				DebugString("Movie is sleeping\n");
 			}
-		}
-
-		if (!nobreakout && Keyboard->Check() && Keyboard->Get() == (KN_ESC|WWKEY_RLS_BIT)) {
-			brokeout = true;
 		}
 	}
 
@@ -629,7 +630,7 @@ bool VQAClass::Advance_Frame(bool & finished)
 			if (cmode == 1 || cmode == 4) {
 				Hicolor_Init_Table(PrimaryColorMode);
 				if (cmode == 1) {
-					VQA_SetUnVQ(Handle, ASM_UnVQ1_C1_TABLE, UnVQ2_4x4_Table);
+					VQA_SetUnVQ(Handle, UnVQ1_C1_TABLE, UnVQ2_4x4_Table);
 				}
 			}
 		}
@@ -854,17 +855,17 @@ long VQAClass::CCFileHandler(long action, void * buffer, long nbytes)
 		**	VQAERR_SEEK.
 		*/
 		case VQACMD_SEEK:
-			error = (FileHandle.Seek(nbytes, (int)buffer) == 0);
+			error = (FileHandle.Seek(nbytes, (int)(intptr_t)buffer) == 0);
 			break;
 
 		case VQACMD_SEEKPEEK:
 			if (nbytes > 0) {
-				error = FileHandle.Seek(nbytes - sizeof(tmp), (int)buffer) == 0;
+				error = FileHandle.Seek(nbytes - sizeof(tmp), (int)(intptr_t)buffer) == 0;
 				if (error == 0) {
 					error = FileHandle.Read(&tmp, sizeof(tmp)) != sizeof(tmp);
 				}
 			} else {
-				error = FileHandle.Seek(nbytes, (int)buffer) == 0;
+				error = FileHandle.Seek(nbytes, (int)(intptr_t)buffer) == 0;
 				if (error == 0) {
 					error = FileHandle.Read(&tmp, sizeof(tmp)) != sizeof(tmp);
 					if (error == 0) {
@@ -911,7 +912,7 @@ long VQAClass::CCFileHandler(long action, void * buffer, long nbytes)
 }
 
 
-long __cdecl VQACCFileHandler(VQAHandle * vqa, long action, void * buffer, long nbytes)
+intptr_t __cdecl VQACCFileHandler(VQAHandle * vqa, long action, void * buffer, long nbytes)
 {
 	VQAHandleP *vqap = (VQAHandleP *)vqa;
 	VQAConfig *config = &vqap->Config;
@@ -981,17 +982,17 @@ long VQAClass::MixFileHandler(long action, void * buffer, long nbytes)
 		**	VQAERR_SEEK.
 		*/
 		case VQACMD_SEEK:
-			error = (FileHandle.Seek(nbytes, (int)buffer) == 0);
+			error = (FileHandle.Seek(nbytes, (int)(intptr_t)buffer) == 0);
 			break;
 
 		case VQACMD_SEEKPEEK:
 			if (nbytes > 0) {
-				error = FileHandle.Seek(nbytes - sizeof(tmp), (int)buffer) == 0;
+				error = FileHandle.Seek(nbytes - sizeof(tmp), (int)(intptr_t)buffer) == 0;
 				if (error == 0) {
 					error = FileHandle.Read(&tmp, sizeof(tmp)) != sizeof(tmp);
 				}
 			} else {
-				error = FileHandle.Seek(nbytes, (int)buffer) == 0;
+				error = FileHandle.Seek(nbytes, (int)(intptr_t)buffer) == 0;
 				if (error == 0) {
 					error = FileHandle.Read(&tmp, sizeof(tmp)) != sizeof(tmp);
 					if (error == 0) {
@@ -1038,7 +1039,7 @@ long VQAClass::MixFileHandler(long action, void * buffer, long nbytes)
 }
 
 
-long __cdecl VQAMixFileHandler(VQAHandle * vqa, long action, void * buffer, long nbytes)
+intptr_t __cdecl VQAMixFileHandler(VQAHandle * vqa, long action, void * buffer, long nbytes)
 {
 	VQAHandleP *vqap = (VQAHandleP *)vqa;
 	VQAConfig *config = &vqap->Config;
@@ -1048,7 +1049,7 @@ long __cdecl VQAMixFileHandler(VQAHandle * vqa, long action, void * buffer, long
 }
 
 
-long /*__cdecl*/ VQACacheHandler(VQAHandle * vqa, long action, void * buffer, long nbytes)
+intptr_t /*__cdecl*/ VQACacheHandler(VQAHandle * vqa, long action, void * buffer, long nbytes)
 {
 	VQAHandleP *vqap = (VQAHandleP *)vqa;
 	VQAConfig *config = &vqap->Config;
@@ -1058,14 +1059,14 @@ long /*__cdecl*/ VQACacheHandler(VQAHandle * vqa, long action, void * buffer, lo
 }
 
 
-long __cdecl VQAMemoryHandler(VQAHandle * vqa, long action, void * buffer, long nbytes)
+intptr_t __cdecl VQAMemoryHandler(VQAHandle * vqa, long action, void * buffer, long nbytes)
 {
-	long error = 0;
+	intptr_t error = 0;
 
 	switch (action) {
 
 		case VQAMEM_ALLOC:
-			error = (int)malloc(nbytes);
+			error = (intptr_t)malloc(nbytes);
 			break;
 
 		case VQAMEM_FREE:
@@ -1075,7 +1076,7 @@ long __cdecl VQAMemoryHandler(VQAHandle * vqa, long action, void * buffer, long 
 
 		case VQAMEM_LOCK:
 		case VQAMEM_UNLOCK:
-			error = (int)buffer;
+			error = (intptr_t)buffer;
 			break;
 
 		default:
@@ -1105,13 +1106,13 @@ static void VQAScalePalette(unsigned char *palette)
 }
 
 
-long __cdecl VQAEventHandler(VQAHandle * vqa, long action, void * buffer, long nbytes)
+intptr_t __cdecl VQAEventHandler(VQAHandle * vqa, long action, void * buffer, long nbytes)
 {
 	VQAHandleP *vqap = (VQAHandleP *)vqa;
 	VQAConfig *config = &vqap->Config;
 	VQAClass *_this = config->Owner;
 
-	long error = 0;
+	intptr_t error = 0;
 
 	switch (action) {
 		case VQAEVENT_PALETTE:
@@ -1125,7 +1126,7 @@ long __cdecl VQAEventHandler(VQAHandle * vqa, long action, void * buffer, long n
 			break;
 
 		case VQAEVENT_LOCK:
-			error = (int)_this->Handle_Lock_Event();
+			error = (intptr_t)_this->Handle_Lock_Event();
 			break;
 
 		case VQAEVENT_UNLOCK:

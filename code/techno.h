@@ -60,6 +60,8 @@
 #include "threat.hh"
 #include "zgrad.hh"
 
+#include <cstdint>
+
 
 class ParticleSystemClass;
 class WaveClass;
@@ -550,6 +552,8 @@ class TechnoClass :	public RadioClass,
 		bool Is_Allowed_To_Retaliate(TechnoClass const * source, WarheadTypeClass const * warhead) const;
 		virtual bool Is_Players_Army(void) const override;
 		int Combat_Damage(int which=-1) const;
+		ThreatType Heal_Threats(void) const;
+		bool Can_Heal(ObjectClass const * object) const;
 
 		Cell Nearby_Location(TechnoClass const * from=NULL) const;
 		//bool Is_Visible_On_Radar(void) const;
@@ -587,6 +591,7 @@ class TechnoClass :	public RadioClass,
 		double Area_Modify(Cell const & cell) const;
 		void Base_Is_Attacked(TechnoClass const * enemy);
 		void Kill_Cargo(TechnoClass * source);
+		bool Can_Fit_Passenger(ObjectClass const * passenger) const;
 		virtual void Record_The_Kill(TechnoClass * source) override;
 		virtual void Reduce_Ammunition(void);
 		virtual bool Target_Something_Nearby(Coord const & coord, ThreatType threat=THREAT_NORMAL);
@@ -635,7 +640,7 @@ class TechnoClass :	public RadioClass,
 		virtual void Renovate(void);
 		virtual void AI(void) override;
 		virtual bool Revealed(HouseClass * house) override;
-		virtual RadioMessageType Receive_Message(RadioClass * from, RadioMessageType message, int & param) override;
+		virtual RadioMessageType Receive_Message(RadioClass * from, RadioMessageType message, intptr_t & param) override;
 		virtual void Cloaking_AI(bool=false);
 		virtual void Rocking_AI(void);
 		virtual void Try_To_Cloak(void);

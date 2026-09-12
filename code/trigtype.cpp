@@ -46,7 +46,6 @@
  *   TriggerTypeClass::~TriggerTypeClass -- Deleting a trigger type deletes associated triggers*
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-#define INCLUDE_COM
 #include "always.h"
 
 #include "trigtype.h"
@@ -107,6 +106,7 @@ TriggerTypeClass::TriggerTypeClass(char const * name) :
 {
 	EventActionPtrTracker.Add(this);
 	AbstractTypePtrTracker.Add(this);
+	HousePtrTracker.Add(this);
 
 	HeapID = TriggerTypes.Count();
 	TriggerTypes.Add(this);
@@ -149,6 +149,7 @@ TriggerTypeClass::~TriggerTypeClass(void)
 
 	AbstractTypePtrTracker.Delete(this);
 	EventActionPtrTracker.Delete(this);
+	HousePtrTracker.Delete(this);
 }
 
 
@@ -322,6 +323,10 @@ bool TriggerTypeClass::Is_Linked_To_Local(int local) const
 void TriggerTypeClass::Detach(AbstractClass const * target, bool all)
 {
 	BASECLASS::Detach(target, all);
+
+	if (House == target) {
+		House = NULL;
+	}
 
 	if (LinkedTo != NULL && LinkedTo == target) {
 		LinkedTo = LinkedTo->LinkedTo;
@@ -497,9 +502,8 @@ bool TriggerTypeClass::Read_INI(CCINIClass const & ini)
 
 	if (!line.empty()) {
 		char * token = strtok(line.data(), ",");
-		HousesType house = stricmp(token, "<none>") == 0 ? HOUSE_FIRST : HouseTypeClass::From_Name(token);
-		if (house == HOUSE_NONE || House_From_HousesType(house) == NULL) return(false);
-		House = HouseTypes[house];
+		House = stricmp(token, "<none>") == 0 ? House_From_HousesType(HOUSE_FIRST) : House_From_Name(token);
+		if (House == NULL) return(false);
 		token = strtok(NULL, ",");
 		LinkedTo = NULL;
 		if (stricmp(token, "<none>") != 0) {
@@ -623,7 +627,7 @@ bool TriggerTypeClass::Write_INI(CCINIClass & ini) const
 	char buffer[INIClass::MAX_LINE_LENGTH];
 
 	sprintf(buffer, "%s,%s,%s,%d,%d,%d,%d,%d",
-		(House != NULL) ? (char const *)House->IniName : "<none>",
+		(House != NULL) ? (char const *)House->Class->IniName : "<none>",
 		(LinkedTo != NULL) ? (char const *)LinkedTo->IniName : "<none>",
 		(char const *)GivenName,
 		IsEnabled ? 0 : 1,
@@ -645,7 +649,7 @@ bool TriggerTypeClass::Write_INI(CCINIClass & ini) const
 	tevent = FirstEvent;
 	while (tevent != NULL) {
 		strcat(buffer, ",");
-		tevent->Build_INI_Entry(buffer);
+		tevent->Build_INI_Entry(buffer, sizeof(buffer));
 		tevent = tevent->Next;
 	}
 	ini.Put_String(INI_EVENT_NAME, IniName, buffer);
@@ -799,25 +803,16 @@ void TriggerTypeClass::Compute_CRC(CRCEngine & crc) const
 {
 	BASECLASS::Compute_CRC(crc);
 
-	crc(House->Fetch_ID());
+	if (House != NULL) crc(House->Fetch_ID());
 	if (LinkedTo != NULL) crc(LinkedTo->Fetch_ID());
 	if (FirstEvent != NULL) crc(FirstEvent->Fetch_ID());
 	if (FirstAction != NULL) crc(FirstAction->Fetch_ID());
 }
 
 
-/// <summary>
-/// Fetches the class identifier of this object.
-/// The save game system uses this identifier to know which kind of object to build
-/// when the stream is read back in.
-/// </summary>
-/// <param name="retval">Pointer to the location to store the class identifier.</param>
-/// <returns>Returns with S_OK, or E_POINTER if no storage location was supplied.</returns>
-HRESULT STDMETHODCALLTYPE TriggerTypeClass::GetClassID(CLSID * retval)
+ClassID TriggerTypeClass::Class_ID(void) const
 {
-	if (retval == NULL) return(E_POINTER);
-	*retval = CLSID_TriggerTypeClass;
-	return(S_OK);
+	return(ClassID_TriggerTypeClass);
 }
 
 

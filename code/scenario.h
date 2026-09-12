@@ -36,6 +36,7 @@
 #include "coord.h"
 #include "ftimer.h"
 #include "random.h"
+#include "scenfile.h"
 #include "special.h"
 #include "stimer.h"
 #include "timer.h"
@@ -100,12 +101,14 @@ class ScenarioClass {
 		bool Read_INI(CCINIClass const & ini);
 		bool Write_INI(CCINIClass & ini, bool mplayer=false) const;
 
-		void Save(IStream * stream) const;
-		void Load(IStream * stream);
+		void Save(SaveStreamClass & stream) const;
+		void Load(SaveStreamClass & stream);
 
 		void Serialize(SaveStreamClass & stream);
 
 		void Compute_CRC(CRCEngine & crc) const;
+
+		bool Is_Campaign_Base_AI(void) const;
 
 		Cell Get_Waypoint_Cell(WAYPOINT waypoint) const;
 		Coord Get_Waypoint_Coord(WAYPOINT waypoint) const;
@@ -115,6 +118,7 @@ class ScenarioClass {
 		char const * First_Unused_Waypoint_Name(void) const;
 
 		void Read_Waypoints(CCINIClass const & ini);
+		void Flag_Waypoint_Cells(void);
 		void Write_Waypoints(CCINIClass & ini) const;
 
 		bool Is_Valid_Waypoint(WAYPOINT waypoint) const;
@@ -232,6 +236,9 @@ class ScenarioClass {
 		*/
 		char ScenarioName[_MAX_PATH];
 
+		// The scenario file as it was read, so that a restart replays what was started.
+		ScenarioFileClass SourceFile;
+
 		/*
 		**	Description of the scenario.
 		*/
@@ -288,9 +295,20 @@ class ScenarioClass {
 		ThemeType TransitTheme;
 
 		/*
-		**	The house that the player is to be (obsolete).
-		*/
+		 * The country the player is playing, and its side, which decides which art, speech and
+		 * interface archives the scenario is presented with. The side is kept as well because a
+		 * load mounts the archives before the countries are back to look it up in.
+		 */
 		HousesType PlayerHouse;
+		SideType PlayerSide;
+
+		/*
+		 * The picture a launch file asked to show while the scenario loads, and where its bars
+		 * go, kept so that a mission restarted or resumed from a save shows the same picture.
+		 */
+		char LoadScreen[_MAX_PATH];
+		int LoadScreenX;
+		int LoadScreenY;
 
 		/*
 		**	The percentage of money that is allowed to be carried over into the
@@ -445,14 +463,12 @@ class ScenarioClass {
 		 */
 		bool IsIgnoreGlobalAITriggers;
 
-		/*
-		 * If the player is fighting for GDI in this scenario, then this flag will be true.
-		 * It picks the side's art, speech and interface before the mission is read in.
-		 */
-		bool IsGDI;
-
 		/// Unused. Round-trips through the scenario INI and feeds the CRC, but nothing acts on it.
 		bool IsMultiplayerOnly;
+
+		// Set by the map: outside a campaign the computer follows the base plan written for its
+		// start position and builds as it does in a campaign.
+		bool IsMPAIBaseNodes;
 
 		/*
 		 * If the map being played was built by the random map generator rather than read
@@ -580,8 +596,18 @@ class ScenarioClass {
 
 
 void Write_Scenario_INI(char const * root, bool mplayer=false);
-bool Read_Scenario_INI(char const * root, bool fresh=true);
-bool Read_Scenario_INI(CCINIClass const & ini, bool is_mapgen=false);
+
+// Why a scenario read stopped. Scoped because success is zero, which an unscoped result would
+// let a caller test as a bool and read backwards.
+enum class ScenarioState {
+	Ok,
+	NotRead,
+	TerrainDamaged,
+};
+
+ScenarioState Read_Scenario_INI(char const * root, bool fresh=true);
+ScenarioState Read_Scenario_INI(CCINIClass const & ini, bool is_mapgen=false);
+SideType Side_For_Player(void);
 int Scan_Place_Object(ObjectClass * obj, Cell const & cell, int min_dist = 1, int max_dist = 31);
 void Assign_Houses(void);
 

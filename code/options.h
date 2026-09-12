@@ -111,6 +111,13 @@ class OptionsClass {
 		bool SidebarCameoText;
 
 		/*
+		 * If the sidebar cameos are to be sorted rather than left in the order they were
+		 * offered, then this flag will be true. Clearing it stops further sorting without
+		 * undoing any already done.
+		 */
+		bool SidebarSorting;
+
+		/*
 		 * If selected objects are to draw a line to their target, then this flag will be true.
 		 */
 		bool ActionLines;
@@ -122,9 +129,15 @@ class OptionsClass {
 
 		/*
 		 * The palette index drawn behind each glyph of the in-game message list, or zero for
-		 * none. The CnCNet client writes 12, black, for its chat background option.
+		 * none. Twelve, black, is the value the CnCNet client's chat background option writes.
 		 */
 		int TextBackgroundColor;
+
+		/*
+		 * Frames between automatic saves of a game started from the menu, or zero for none.
+		 * A launch file's own interval takes its place.
+		 */
+		int AutoSaveInterval;
 
 		/*
 		 * These are the dimensions of the game screen, expressed in pixels. The tactical

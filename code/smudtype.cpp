@@ -44,7 +44,6 @@
  *   SmudgetypeClass::Occupy_List -- Determines occupation list for smudge object.             *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-#define INCLUDE_COM
 #include "always.h"
 
 #include "smudtype.h"
@@ -172,7 +171,7 @@ void SmudgeTypeClass::Init(TheaterType theater)
 			SmudgeTypeClass * smudge = SmudgeTypes[index];
 			char fullname[_MAX_FNAME+_MAX_EXT];	// Fully constructed smudge data set name.
 			if (smudge->IsTheater) {
-				_makepath(fullname, NULL, NULL, smudge->Name(), Theaters[theater].Suffix);
+				_makepath(fullname, NULL, NULL, smudge->Name(), TheaterClass::As_Reference(theater).Suffix);
 				smudge->ImageData = (ShapeSet const *)MFCD::Retrieve(fullname);
 			}
 		}
@@ -282,7 +281,7 @@ bool SmudgeTypeClass::Read_INI(CCINIClass const & ini)
 			_makepath(fullname, NULL, NULL, (char const *)Graphic_Name(), ".SHP");
 			ImageData = (ShapeSet const *)MFCD::Retrieve(fullname);
 		} else {
-			_makepath(fullname, NULL, NULL, (char const *)Graphic_Name(), Theaters[Scen->Theater].Suffix);
+			_makepath(fullname, NULL, NULL, (char const *)Graphic_Name(), TheaterClass::As_Reference(Scen->Theater).Suffix);
 			ImageData = (ShapeSet const *)MFCD::Retrieve(fullname);
 		}
 		return(true);
@@ -337,17 +336,9 @@ void SmudgeTypeClass::Serialize(SaveStreamClass & stream)
 }
 
 
-/// <summary>
-/// Fetches the class identifier of this object.
-/// The save system asks for this so that it knows which class to construct when the object
-/// is read back out of a save file.
-/// </summary>
-/// <returns>Returns with S_OK, or E_POINTER if no destination was supplied.</returns>
-HRESULT STDMETHODCALLTYPE SmudgeTypeClass::GetClassID(CLSID * retval)
+ClassID SmudgeTypeClass::Class_ID(void) const
 {
-	if (retval == NULL) return(E_POINTER);
-	*retval = CLSID_SmudgeTypeClass;
-	return(S_OK);
+	return(ClassID_SmudgeTypeClass);
 }
 
 

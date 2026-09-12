@@ -54,10 +54,11 @@
 ****************************************************************************/
 
 #include <stdio.h>
+#include <string.h>
 #include "vqaplay.h"
 #include "vqaplayp.h"
 #include "video.h"
-#include "ahandle.h"
+#include "audio/audiomovie.h"
 #include "lcw.h"
 #include "vqadebug.h"
 
@@ -98,14 +99,14 @@ long Load_CLIP(VQAHandleP *vqap, unsigned long iffsize);
 long Load_MFCI(VQAHandleP *vqap);
 long Load_MSCI(VQAHandleP *vqap);
 
-long __cdecl VQA_Memory_Handler(VQAHandle *vqa, long action, void *buffer, long nbytes);
-long __cdecl Disk_VQA_Stream_Handler(VQAHandle *vqa, long action, void *buffer, long nbytes);
+intptr_t __cdecl VQA_Memory_Handler(VQAHandle *vqa, long action, void *buffer, long nbytes);
+intptr_t __cdecl Disk_VQA_Stream_Handler(VQAHandle *vqa, long action, void *buffer, long nbytes);
 
 long VQA_LargestLoop(VQAHandleP *vqap, long);
 
-extern void __cdecl UnVQ_Nop(unsigned char *codebook, unsigned char *pointers,
-		unsigned char *buffer, unsigned long blocksperrow,
-		unsigned long numrows, unsigned long bufwidth);
+extern void __cdecl UnVQ_Nop(uint8_t *codebook, uint8_t *pointers,
+		uint8_t *buffer, size_t blocksperrow,
+		size_t numrows, size_t bufwidth);
 
 /****************************************************************************
 *
@@ -1679,11 +1680,11 @@ long User_Update(VQAHandle *vqa)
 
 	if (config->EventHandler != NULL) {
 		if (curframe->Flags & VQAFRMF_LOOPED) {
-			config->EventHandler((VQAHandle *)vqap, VQAEVENT_LOOPED, (void *)curframe->FrameNum, vqap->LoopID);
+			config->EventHandler((VQAHandle *)vqap, VQAEVENT_LOOPED, (void *)(intptr_t)curframe->FrameNum, vqap->LoopID);
 			curframe->Flags &= ~VQAFRMF_LOOPED;
 		}
 		if (curframe->Flags & VQAFRMF_LOOPJMP) {
-			config->EventHandler((VQAHandle *)vqap, VQAEVENT_LOOPJUMP, (void *)curframe->FrameNum, vqap->LoopID);
+			config->EventHandler((VQAHandle *)vqap, VQAEVENT_LOOPJUMP, (void *)(intptr_t)curframe->FrameNum, vqap->LoopID);
 			curframe->Flags &= ~VQAFRMF_LOOPJMP;
 		}
 		if (curframe->Flags & VQAFRMF_CHUNKS) {

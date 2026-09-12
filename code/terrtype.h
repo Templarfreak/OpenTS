@@ -111,7 +111,7 @@ class TerrainTypeClass : public ObjectTypeClass
 		TerrainTypeClass(char const * ininame = NULL);
 		virtual ~TerrainTypeClass(void) override;
 
-		virtual HRESULT STDMETHODCALLTYPE GetClassID(CLSID * retval) override;
+		virtual ClassID Class_ID(void) const override;
 
 		virtual void Serialize(SaveStreamClass & stream) override;
 		virtual void Post_Load(void) override;
@@ -122,7 +122,7 @@ class TerrainTypeClass : public ObjectTypeClass
 
 		static TerrainType From_Name(char const * name);
 		static TerrainTypeClass * Find_Or_Make(const char * name);
-		static void Init(TheaterType theater = THEATER_TEMPERATE);
+		static void Init(TheaterType theater = THEATER_FIRST);
 		static void One_Time(void){}
 
 		virtual bool Read_INI(CCINIClass const & ini) override;

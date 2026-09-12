@@ -102,7 +102,6 @@
  *   BuildingClass::~BuildingClass -- Destructor for building type objects.                    *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-#define INCLUDE_COM
 #include "always.h"
 
 #include "building.h"
@@ -124,6 +123,7 @@
 #include "bullettype.h"
 #include "ccrand.h"
 #include "cell.h"
+#include "classids.h"
 #include "combat.h"
 #include "conquer.h"
 #include "dbgprint.h"
@@ -138,7 +138,6 @@
 #include "house.h"
 #include "houstype.h"
 #include "iloco.h"
-#include "ilocos.h"
 #include "incdec.h"
 #include "infantry.h"
 #include "infatype.h"
@@ -181,6 +180,7 @@
 #include "color.hh"
 
 #include <algorithm>
+#include <limits>
 
 
 char const * const BuildingClass::INI_NAME = "Structures";
@@ -264,7 +264,10 @@ BuildingClass::BuildingClass(BuildingTypeClass const * type, HouseClass * house)
 	TranslucencyLevel(0),
 	Brightness(NORMAL_LIGHT),
 	UpgradeLevel(0),
-	GateFrame(-1)
+	GateFrame(-1),
+	ProduceCashTimer(0),
+	ProduceCashRemaining(0),
+	IsProduceCashStartupPaid(false)
 {
 	Create_ID();
 
@@ -384,7 +387,7 @@ BuildingClass::~BuildingClass(void)
  *   06/26/1995 JLB : Forces refinery load anim to start immediately.                          *
  *   08/13/1995 JLB : Uses ScenarioInit for special loose "CAN_LOAD" check.                    *
  *=============================================================================================*/
-RadioMessageType BuildingClass::Receive_Message(RadioClass * from, RadioMessageType message, int & param)
+RadioMessageType BuildingClass::Receive_Message(RadioClass * from, RadioMessageType message, intptr_t & param)
 {
 	switch (message) {
 
@@ -493,7 +496,7 @@ RadioMessageType BuildingClass::Receive_Message(RadioClass * from, RadioMessageT
 					}
 					Transmit_Message(RADIO_RUN_AWAY);
 				} else {
-					param = (int)&Map[Get_Coord()];
+					param = (intptr_t)&Map[Get_Coord()];
 					Transmit_Message(RADIO_MOVE_HERE, param);
 				}
 				return(RADIO_ROGER);
@@ -528,9 +531,9 @@ RadioMessageType BuildingClass::Receive_Message(RadioClass * from, RadioMessageT
 			}
 
 			if (Transmit_Message(RADIO_NEED_TO_MOVE) == RADIO_ROGER || needs_to_move) {
-				param = (int)this;
+				param = (intptr_t)this;
 				if (Class->IsDockUnload || Class->IsWeeder) {
-					param = (int)&Map[Get_Cell() + Cell(2, 1)];
+					param = (intptr_t)&Map[Get_Cell() + Cell(2, 1)];
 
 					/*
 					**	Tell the harvester to move to the docking pad of the building.
@@ -547,7 +550,7 @@ RadioMessageType BuildingClass::Receive_Message(RadioClass * from, RadioMessageT
 						}
 					}
 				} else if (Class->IsHelipad) {
-					param = (int)this;
+					param = (intptr_t)this;
 					if (Transmit_Message(RADIO_MOVE_HERE, param) == RADIO_YEA_NOW_WHAT) {
 						Transmit_Message(RADIO_TETHER);
 					}
@@ -1736,6 +1739,8 @@ void BuildingClass::AI(void)
 		Factory_AI();
 	}
 
+	Produce_Cash_AI();
+
 	/*
 	**	Check for demolition timeout. When timeout has expired, the building explodes.
 	*/
@@ -2053,7 +2058,7 @@ bool BuildingClass::Unlimbo(Coord const & coord, Dir256 dir)
 			IsLeader = true;
 		}
 
-		if (Class == Rule->BuildConst[0]) {
+		if (Rule->BuildConst.Is_In_List(Class)) {
 			House->ConYards.Add(this);
 		}
 
@@ -2146,11 +2151,11 @@ void BuildingClass::Do_Destruction(TechnoClass *last_contact, TechnoClass *sourc
 				new AnimClass(Rule->LargeFire, pos, Random_Pick(0, 7), Random_Pick(1, 3));
 			}
 		}
-		if (Class->Explosion.Count() > 0) {
+		if (Class->Explosion_Set().Count() > 0) {
 			coord.Z = PositionCoord.Z;
 			Coord ccoord = cell;
 			pos = coord + Coord_Scatter(ccoord, CELL_LEPTON / 4);
-			new AnimClass((Class->Explosion.Pick(Scen->RandomNumber())), pos, Random_Pick(0, 3), 1);
+			new AnimClass((Class->Explosion_Set().Pick(Scen->RandomNumber())), pos, Random_Pick(0, 3), 1);
 		}
 	}
 
@@ -3592,6 +3597,12 @@ void BuildingClass::Grand_Opening(bool captured)
 			IsReadyToCommence = true;
 		}
 
+		// The budget test reads HasOpened, so it must run before it is set below.
+		if (!HasOpened || (captured && Class->IsProduceCashResetOnCapture)) {
+			ProduceCashRemaining = (Class->ProduceCashBudget > 0) ? Class->ProduceCashBudget : -1;
+		}
+		ProduceCashTimer = Class->ProduceCashDelay;
+
 		House->IsRecalcNeeded = true;
 
 		HasOpened = true;
@@ -3660,7 +3671,7 @@ void BuildingClass::Grand_Opening(bool captured)
 		/*
 		**	Helicopter pads get a free attack helicopter.
 		*/
-		if (!Rule->IsSeparate && Class->IsHoverPad && !captured) {
+		if (!Rule->IsSeparate && Class->IsHoverPad && !captured && Rule->PadAircraft.Count() > 0) {
 			ScenarioInit++;
 			AircraftClass * air = new AircraftClass(Rule->PadAircraft[0], House);
 			if (air) {
@@ -3866,13 +3877,12 @@ ActionType BuildingClass::What_Action(ObjectClass const * object, bool disallow_
 		}
 	}
 
-	/*
-	**	Don't allow targeting of SAM sites, even if the CTRL key
-	**	is held down. Also don't allow targeting if the object is too
-	**	far away.
-	*/
+	// Offer the attack only where the weapon could take the shot, CTRL key or not.
 	if (action == ACTION_ATTACK && PrimaryWeapon != NULL) {
-		if (!In_Range((ObjectClass *)object, 0) || !PrimaryWeapon->Bullet->IsAntiGround) {
+		bool engageable = PrimaryWeapon->Bullet->IsAntiGround
+			|| (object->In_Air() && PrimaryWeapon->Bullet->IsAntiAircraft);
+
+		if (!In_Range((ObjectClass *)object, 0) || !engageable) {
 			action = ACTION_NONE;
 		} else if (Class->IsEMPulseCannon || Class->IsLimpetMine || !PrimaryWeapon->WarheadPtr->AllowAcquiring) {
 			action = ACTION_NONE;
@@ -4312,7 +4322,7 @@ bool BuildingClass::Captured(HouseClass * newowner)
 		TargetClass tocap = this;
 
 		IsCaptured = true;
-		if (Class == Rule->BuildConst[0]) {
+		if (Rule->BuildConst.Is_In_List(Class)) {
 			oldowner->ConYards.Delete(this);
 		}
 
@@ -4336,7 +4346,7 @@ bool BuildingClass::Captured(HouseClass * newowner)
 			House->ToCapture = NULL;
 		}
 
-		if (oldowner->Is_Player_Control() && Class->IsConstructionYard && oldowner->BQuantity.Value(Rule->BuildConst[0]->HeapID) == 0) {
+		if (oldowner->Is_Player_Control() && Class->IsConstructionYard && !oldowner->Owns_Any(oldowner->BQuantity, Rule->BuildConst)) {
 			Map.PendingObjectPtr = NULL;
 			Map.PendingObject = NULL;
 			Map.PendingHouse = HOUSE_NONE;
@@ -4350,6 +4360,11 @@ bool BuildingClass::Captured(HouseClass * newowner)
 
 		IsRepairing = false;
 		Grand_Opening(true);
+
+		// The bonus is decided by the house the building came from, not by its new owner.
+		if (oldowner->Class->IsMultiplayPassive) {
+			Produce_Cash_Startup();
+		}
 
 		if (Class->IsLaserFencePost) {
 			Init_Laser_Fence();
@@ -4374,7 +4389,7 @@ bool BuildingClass::Captured(HouseClass * newowner)
 
 		Update_Anim_Appearance();
 
-		if (Class == Rule->BuildConst[0]) {
+		if (Rule->BuildConst.Is_In_List(Class)) {
 			newowner->ConYards.Add(this);
 		}
 
@@ -5524,10 +5539,8 @@ int BuildingClass::Do_MISSION_REPAIR(void)
 					**	distance check.  Fixed-wing aircraft are very inaccurate with
 					**	their landings.
 					*/
-					IPersistPtr persist(tech->Locomotion);
-					CLSID clsid;
-					persist->GetClassID(&clsid);
-					bool hover = (clsid == CLSID_HoverLocomotion) != 0;
+					ClassID const clsid = Locomotion_Class_ID(tech->Locomotion.get());
+					bool hover = (clsid == ClassID_HoverLocomotion) != 0;
 					if (hover) {
 						distance = 0x96;
 					}
@@ -5986,7 +5999,7 @@ int BuildingClass::Do_MISSION_MISSILE(void)
 							Status = DONE;
 							return(1);
 						} else {
-							bullet->Release();
+							delete bullet;
 							Begin_Mode(BSTATE_IDLE);	// keep the door closed.
 							Assign_Mission(MISSION_GUARD);
 							LastSuperWeaponIndex = -1;
@@ -6249,27 +6262,25 @@ int BuildingClass::Do_MISSION_UNLOAD(void)
 					if (unit) {
 						unit->Assign_Mission(MISSION_MOVE);
 
-						IPersistPtr persist(unit->Locomotion);
-						CLSID clsid;
-						persist->GetClassID(&clsid);
+						ClassID const clsid = Locomotion_Class_ID(unit->Locomotion.get());
 
-						if (clsid == CLSID_TunnelLocomotion) {
-							IPiggybackPtr piggy(unit->Locomotion);
+						if (clsid == ClassID_TunnelLocomotion) {
+							IPiggyback * piggy = Piggyback_Of(unit->Locomotion.get());
 							if (piggy != NULL && piggy->Is_Piggybacking()) {
-								piggy->End_Piggyback(&unit->Locomotion);
+								unit->Locomotion = piggy->End_Piggyback();
 							}
-							ILocomotionPtr walk(CLSID_DriveLocomotion);
+							std::unique_ptr<ILocomotion> walk = Create_Locomotor(ClassID_DriveLocomotion);
 							walk->Link_To_Object(unit);
-							piggy = IPiggybackPtr(walk);
+							piggy = Piggyback_Of(walk.get());
 							if (piggy != NULL) {
 								piggy->Begin_Piggyback(unit->Locomotion);
-								unit->Locomotion = walk;
+								unit->Locomotion = std::move(walk);
 								unit->Locomotion->Force_Track(DriveLocomotionClass::OUT_OF_WEAPON_FACTORY, coord);
 							} else {
 								int damage = unit->Strength;
 								unit->Take_Damage(damage, 0, Rule->C4Warhead, NULL, true);
 							}
-						} else if (clsid != CLSID_DriveLocomotion) {
+						} else if (clsid != ClassID_DriveLocomotion) {
 							unit->Assign_Destination(&Map[Get_Cell() + Cell(3, 1)]);
 						} else {
 							Coord cs;
@@ -6899,7 +6910,6 @@ void BuildingClass::Update_Radar_Spied(void)
 void BuildingClass::Read_INI(CCINIClass const & ini)
 {
 	BuildingClass			* b;        // Working unit pointer.
-	HousesType				bhouse;     // Building house.
 	HouseClass				* bhptr;    // Building house.
 	StructType				classid;    // Building type.
 	Cell						cell;   // Cell of building.
@@ -6925,14 +6935,9 @@ void BuildingClass::Read_INI(CCINIClass const & ini)
 		/*
 		**	1st token: house name.
 		*/
-		bhouse = HouseTypeClass::From_Name(strtok(buf, ","));
-		bhptr = House_From_HousesType(bhouse);
+		bhptr = House_From_Name(strtok(buf, ","));
 
 		if (bhptr == NULL) {
-			continue;
-		}
-
-		if (Session.Type != GAME_NORMAL && bhptr == PlayerPtr) {
 			continue;
 		}
 
@@ -6941,7 +6946,7 @@ void BuildingClass::Read_INI(CCINIClass const & ini)
 		*/
 		classid = BuildingTypeClass::From_Name(strtok(NULL, ","));
 
-		if (bhouse != HOUSE_NONE && classid != STRUCT_NONE) {
+		if (classid != STRUCT_NONE) {
 			int	strength;
 			Dir256 facing;
 
@@ -7460,6 +7465,89 @@ void BuildingClass::Repair_AI(void)
 			IsRepairing = false;
 		}
 	}
+}
+
+
+/// <summary>
+/// Pays this building's owner the cash its type produces, once the interval has run out.
+/// A building pays only while it is open for business, not being sold, and, if it runs on
+/// power, supplied with all of it.
+/// </summary>
+void BuildingClass::Produce_Cash_AI(void)
+{
+	if (!HasOpened || Class->ProduceCashDelay <= 0 || ProduceCashRemaining == 0) {
+		return;
+	}
+
+	// The most negative amount cannot be negated for the drain path.
+	int amount = Class->ProduceCashAmount;
+	if (amount == 0 || amount == std::numeric_limits<int>::min()) {
+		return;
+	}
+
+	if (Mission == MISSION_DECONSTRUCTION || MissionQueue == MISSION_DECONSTRUCTION) {
+		return;
+	}
+
+	if (House->Class->IsMultiplayPassive) {
+		return;
+	}
+
+	// The house's supply is consulted even for a building that drains none of it.
+	if (Class->IsPowered && (!Is_Powered_On() || House->Power_Fraction() < 1.0)) {
+		ProduceCashTimer.Stop();
+		return;
+	}
+	ProduceCashTimer.Start();
+
+	if (ProduceCashTimer != 0) {
+		return;
+	}
+	ProduceCashTimer = Class->ProduceCashDelay;
+
+	// Clamping lands the budget exactly on zero, so the last installment is paid in full.
+	if (ProduceCashRemaining > 0) {
+		amount = std::clamp(amount, -ProduceCashRemaining, ProduceCashRemaining);
+	}
+
+	// A payment the credits cannot hold is refused rather than charged against the budget.
+	if (amount > 0 && House->Credits > std::numeric_limits<int>::max() - amount) {
+		return;
+	}
+
+	if (ProduceCashRemaining > 0) {
+		ProduceCashRemaining -= (amount < 0) ? -amount : amount;
+	}
+
+	if (amount > 0) {
+		House->Refund_Money(amount);
+	} else {
+		House->Spend_Money(-amount);
+	}
+}
+
+
+/// <summary>
+/// Pays this building's current owner the capture bonus its type grants.
+/// The caller decides whether the house the building came from qualifies. A type granting the
+/// bonus once will not grant it again, and a house outside the contest is paid nothing.
+/// </summary>
+void BuildingClass::Produce_Cash_Startup(void)
+{
+	if (Class->ProduceCashStartup <= 0 || House->Class->IsMultiplayPassive) {
+		return;
+	}
+
+	if (Class->IsProduceCashStartupOneTime && IsProduceCashStartupPaid) {
+		return;
+	}
+
+	if (House->Credits > std::numeric_limits<int>::max() - Class->ProduceCashStartup) {
+		return;
+	}
+
+	IsProduceCashStartupPaid = true;
+	House->Refund_Money(Class->ProduceCashStartup);
 }
 
 
@@ -8764,9 +8852,8 @@ void BuildingClass::Clear_Occupy_Bit(Coord const & coord)
 /// since the one it is about to be given is the one it was saved with. Post_Load enters it
 /// again once that identity has arrived.
 /// </summary>
-/// <returns>Returns with S_OK if the building was read, or the failure code from the
-/// underlying stream.</returns>
-HRESULT STDMETHODCALLTYPE BuildingClass::Load(IStream *stream)
+/// <returns>bool; Was the record read whole?</returns>
+bool BuildingClass::Load(SaveStreamClass & stream)
 {
 	TargetTracker.Remove_Index(Fetch_ID());
 	return(BASECLASS::Load(stream));
@@ -8829,6 +8916,9 @@ void BuildingClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(Brightness);
 	stream.Serialize(UpgradeLevel);
 	stream.Serialize(GateFrame);
+	stream.Serialize(ProduceCashTimer);
+	stream.Serialize(ProduceCashRemaining);
+	stream.Serialize(IsProduceCashStartupPaid);
 }
 
 
@@ -8904,6 +8994,9 @@ void BuildingClass::Compute_CRC(CRCEngine & crc) const
 	crc(IsDamagedAnims);
 	crc(Brightness);
 	crc(UpgradeLevel);
+	crc((int)ProduceCashTimer);
+	crc(ProduceCashRemaining);
+	crc(IsProduceCashStartupPaid);
 }
 
 
@@ -10261,18 +10354,9 @@ void BuildingClass::Discharge_Turret(void)
 }
 
 
-/// <summary>
-/// Fetches the persistent class identifier for this building.
-/// This routine is part of the persistence support. The save code writes this identifier
-/// ahead of the object so that the loader knows what kind of object to create.
-/// </summary>
-/// <param name="retval">Pointer to the identifier to fill in.</param>
-/// <returns>Returns with S_OK, or E_POINTER if no destination was supplied.</returns>
-HRESULT STDMETHODCALLTYPE BuildingClass::GetClassID(CLSID * retval)
+ClassID BuildingClass::Class_ID(void) const
 {
-	if (retval == NULL) return(E_POINTER);
-	*retval = CLSID_BuildingClass;
-	return(S_OK);
+	return(ClassID_BuildingClass);
 }
 
 

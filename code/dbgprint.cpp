@@ -1,4 +1,4 @@
-﻿/*******************************************************************************
+/*******************************************************************************
  *                                O P E N  T S
  *******************************************************************************
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -171,6 +171,10 @@ static void Init_Console_Locked(void)
 	}
 
 	SetConsoleTitle(CONSOLE_WINDOW_NAME);
+
+	// A new console decodes output in the OEM page, and the log lines it shows are UTF-8.
+	SetConsoleOutputCP(CP_UTF8);
+	SetConsoleCP(CP_UTF8);
 
 	// Redirecting the standard streams is what lets ordinary stdio output, such as the
 	// command line help, reach the console of a windowed application.
@@ -381,7 +385,7 @@ R"ART(
 
 	char line[512];
 
-	snprintf(line, sizeof(line), "Version  : OpenTS %s (%s build)\n", OPENTS_VERSION, BuildType);
+	snprintf(line, sizeof(line), "Version  : OpenTS %s (%s %s build)\n", OPENTS_VERSION, OPENTS_ARCH, BuildType);
 	Write_Message_Locked(line, false);
 
 	snprintf(line, sizeof(line), "Commit   : %s on %s%s\n", OPENTS_COMMIT, OPENTS_BRANCH,
@@ -416,6 +420,10 @@ R"ART(
 	}
 
 	snprintf(line, sizeof(line), "System   : %s\n", system);
+	Write_Message_Locked(line, false);
+
+	// Windows before 10 version 1903 ignores the manifest's request for UTF-8.
+	snprintf(line, sizeof(line), "Codepage : ANSI %u, OEM %u\n", GetACP(), GetOEMCP());
 	Write_Message_Locked(line, false);
 
 	// The arguments only. The executable path usually carries the account name, and re-joining

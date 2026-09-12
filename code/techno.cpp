@@ -140,6 +140,8 @@
 #include "_rules.h"
 #include "_surface.h"
 #include "_tactica.h"
+#include "_uicontrol.h"
+#include "actionline.h"
 #include "aircraft.h"
 #include "airctype.h"
 #include "anim.h"
@@ -192,6 +194,7 @@
 #include "team.h"
 #include "techtype.h"
 #include "tracker.h"
+#include "uicontrol.h"
 #include "unit.h"
 #include "unittype.h"
 #include "vanim.h"
@@ -311,19 +314,6 @@ TechnoClass::TechnoClass(HouseClass * house) :
 		ParticleSystems[i] = NULL;
 	}
 	SoundRandomSeed = Scen->RandomNumber();
-}
-
-
-/// <summary>
-/// Fetches the marker rectangle for a target laser end point.
-/// This routine is used by the target laser display to build the small block that is
-/// drawn over the aim point.
-/// </summary>
-/// <param name="point">The screen pixel that the marker should be centered upon.</param>
-/// <returns>Returns with the marker rectangle, centered about the pixel specified.</returns>
-static inline Rect Target_Laser_Rect(Point2D const & point)
-{
-	return(Rect(point - Point2D(2, 2), 3, 3));
 }
 
 
@@ -606,6 +596,49 @@ int TechnoClass::Combat_Damage(int which) const
 }
 
 
+/// <summary>
+/// Fetches the threat bits a healing weapon on this object scans with.
+/// Callers are expected to have established that the object heals at all; the answer says
+/// nothing about the weapon. THREAT_ALLIES is always present because it is the only thing
+/// that makes Greatest_Threat test ownership.
+/// </summary>
+/// <returns>ThreatType; What kinds of object should a healer of this type look for?</returns>
+ThreatType TechnoClass::Heal_Threats(void) const
+{
+	if (TClass->IsOmniHealer) {
+		return(ThreatType(THREAT_INFANTRY|THREAT_VEHICLES|THREAT_ALLIES));
+	}
+	if (TClass->IsMechanic || RTTI != RTTI_INFANTRY) {
+		return(ThreatType(THREAT_VEHICLES|THREAT_ALLIES));
+	}
+	return(ThreatType(THREAT_INFANTRY|THREAT_ALLIES));
+}
+
+
+/// <summary>
+/// Determines whether a healing weapon on this object may be turned on the given object.
+/// Only the kind of the target is judged. Ownership, health, range and the state of the
+/// weapon itself remain the caller's business.
+/// </summary>
+/// <param name="object">The object being considered as a patient.</param>
+/// <returns>bool; Is this object of a kind that a healer of this type mends?</returns>
+bool TechnoClass::Can_Heal(ObjectClass const * object) const
+{
+	if (object == NULL) {
+		return(false);
+	}
+
+	ThreatType threats = Heal_Threats();
+	if ((threats & THREAT_INFANTRY) && object->RTTI == RTTI_INFANTRY) {
+		return(true);
+	}
+	if ((threats & THREAT_VEHICLES) && object->Considered_Vehicle()) {
+		return(true);
+	}
+	return(false);
+}
+
+
 /***********************************************************************************************
  * TechnoClass::Fire_Coord -- Determine the coordinate where bullets appear.                   *
  *                                                                                             *
@@ -722,7 +755,7 @@ void TechnoClass::Debug_Dump(MonoClass * mono) const
 		mono->Set_Cursor(69, 5);mono->Printf("%08X", ArchiveTarget);
 	}
 	mono->Set_Cursor(47, 3);mono->Printf("%02X:%02X", PrimaryFacing.Current(), PrimaryFacing.Desired());
-	mono->Set_Cursor(64, 1);mono->Printf("%d(%d)", Cloak, CloakingDevice);
+	mono->Set_Cursor(64, 1);mono->Printf("%d(%d)", Cloak, CloakingDevice.Fetch_Stage());
 
 	mono->Fill_Attrib(14, 15, 12, 1, IsUseless ? MonoClass::INVERSE : MonoClass::NORMAL);
 	mono->Fill_Attrib(14, 16, 12, 1, IsTickedOff ? MonoClass::INVERSE : MonoClass::NORMAL);
@@ -967,7 +1000,7 @@ bool TechnoClass::Mark(MarkType mark)
  *   10/17/1994 JLB : Created.                                                                 *
  *   06/17/1995 JLB : Handles tether contact messages.                                         *
  *=============================================================================================*/
-RadioMessageType TechnoClass::Receive_Message(RadioClass * from, RadioMessageType message, int & param)
+RadioMessageType TechnoClass::Receive_Message(RadioClass * from, RadioMessageType message, intptr_t & param)
 {
 	switch (message) {
 
@@ -2026,18 +2059,20 @@ bool TechnoClass::Evaluate_Object(ThreatType method, int mask, int range, Techno
 				BEnd(BENCH_EVAL_OBJECT);
 				return(false);
 			}
-			if (object->RTTI == RTTI_AIRCRAFT && RTTI == RTTI_UNIT) {
-				if (object->HeightAGL > 0) {
+			if (Combat_Damage() < 0) {
+				if (object->RTTI == RTTI_AIRCRAFT) {
+					if (object->HeightAGL > 0) {
+						BEnd(BENCH_EVAL_OBJECT);
+						return(false);
+					}
+					if (Map[object->Center_Coord()].Cell_Building()) {
+						BEnd(BENCH_EVAL_OBJECT);
+						return(false);
+					}
+				} else if (!Can_Heal(object)) {
 					BEnd(BENCH_EVAL_OBJECT);
 					return(false);
 				}
-				if (Map[object->Center_Coord()].Cell_Building()) {
-					BEnd(BENCH_EVAL_OBJECT);
-					return(false);
-				}
-			} else if (RTTI == RTTI_UNIT && !object->Considered_Vehicle()) {
-				BEnd(BENCH_EVAL_OBJECT);
-				return(false);
 			}
 		} else {
 			BEnd(BENCH_EVAL_OBJECT);
@@ -2100,7 +2135,7 @@ bool TechnoClass::Evaluate_Object(ThreatType method, int mask, int range, Techno
 		return(false);		// Mask failure.
 	}
 
-	if (Session.Type != GAME_NORMAL && object->House->Class->IsMultiplayPassive) {
+	if (Session.Type != GAME_NORMAL && object->House->Class->IsMultiplayPassive && !Session.Options.AttackNeutralUnits) {
 		BEnd(BENCH_EVAL_OBJECT);
 		return(false);
 	}
@@ -2161,9 +2196,11 @@ bool TechnoClass::Evaluate_Object(ThreatType method, int mask, int range, Techno
 	**	if the building is not aggressive. That is, unless it is part of a team. A team
 	**	is allowed to pick any target it so chooses.
 	*/
+	// A weapon that reaches nowhere leaves the building as harmless as an unarmed one.
 	if ((!Is_Foot() || !((FootClass *)this)->Team != NULL) &&
 			House->Is_Human_Player() && !object->Considered_Vehicle() &&
-			otype == RTTI_BUILDING && object->PrimaryWeapon == NULL) {
+			otype == RTTI_BUILDING &&
+			(object->PrimaryWeapon == NULL || object->PrimaryWeapon->Range == 0)) {
 
 		if (!engineer) {
 			BEnd(BENCH_EVAL_OBJECT);
@@ -2361,7 +2398,7 @@ bool TechnoClass::Evaluate_Cell(ThreatType method, int mask, Cell const & cell, 
 			tech = Dynamic_Cast<TechnoClass *>((ObjectClass *)tentative);
 			if (tech) {
 				if (Combat_Damage() < 0) {
-					if (tech->HealthRatio < Rule->ConditionGreen && House->Is_Ally(tech)) break;
+					if (tech->HealthRatio < Rule->ConditionGreen && House->Is_Ally(tech) && Can_Heal(tech)) break;
 				} else {
 					if (!House->Is_Ally(tech)
 						|| (RTTI == RTTI_INFANTRY
@@ -2548,13 +2585,13 @@ AbstractClass * TechnoClass::Greatest_Threat(ThreatType method, Coord const & co
 	*/
 	if (RTTI == RTTI_INFANTRY) {
 		if (Combat_Damage() < 0) {
-			method = ThreatType(THREAT_INFANTRY|THREAT_ALLIES|(method & (THREAT_RANGE|THREAT_AREA)));
+			method = ThreatType(Heal_Threats()|(method & (THREAT_RANGE|THREAT_AREA)));
 		} else if (((InfantryClass *)this)->Class->IsEngineer) {
 			method = ThreatType(method & ~(THREAT_INFANTRY|THREAT_VEHICLES));
 		}
 	} else if (RTTI == RTTI_UNIT) {
 		if (Combat_Damage() < 0) {
-			method = ThreatType(THREAT_VEHICLES|THREAT_ALLIES|(method & (THREAT_RANGE|THREAT_AREA)));
+			method = ThreatType(Heal_Threats()|(method & (THREAT_RANGE|THREAT_AREA)));
 		}
 	}
 
@@ -2987,11 +3024,11 @@ void TechnoClass::AI(void)
 	if (!IsActive) return;
 
 	/*
-	**	If this is a vehicle that heals itself (e.g., Mammoth Tank), then it will perform
+	**	If this is an object that heals itself (e.g., Mammoth Tank), then it will perform
 	**	the heal logic here.
 	*/
 	if (Should_Self_Heal_Now()) {
-		Strength++;
+		Strength = std::min(Strength + TClass->Self_Heal_Step(), TClass->MaxStrength);
 		if (HealthRatio > Rule->ConditionYellow || HeightAGL < -10) {
 			if (ParticleSystems[ATTACHED_PARTICLE_DAMAGE] != NULL) {
 				ParticleSystems[ATTACHED_PARTICLE_DAMAGE]->Delete_Me();
@@ -3038,7 +3075,7 @@ void TechnoClass::AI(void)
 
 	if (TarCom != NULL && TarCom->RTTI == RTTI_AIRCRAFT) {
 		AircraftClass * tarcom = (AircraftClass *)TarCom;
-		if (RTTI == RTTI_UNIT && Combat_Damage() < 0 && (tarcom->HeightAGL > 0 || Map[tarcom->Get_Coord()].Cell_Building() != NULL)) {
+		if (Combat_Damage() < 0 && (tarcom->HeightAGL > 0 || Map[tarcom->Get_Coord()].Cell_Building() != NULL)) {
 			Assign_Target(NULL);
 		}
 	}
@@ -4027,7 +4064,7 @@ BulletClass * TechnoClass::Fire_At(AbstractClass * target, int which)
 
 		if (valid_arc) {
 			if (!bullet->Unlimbo(turret_coord, velocity)) {
-				bullet->Release();
+				delete bullet;
 				bullet = NULL;
 			} else {
 
@@ -4068,10 +4105,8 @@ BulletClass * TechnoClass::Fire_At(AbstractClass * target, int which)
 				**	Perform any animation effect for this weapon.
 				*/
 				AnimTypeClass const * a = NULL;
-				if (weapon->Anim.Count() == 8) {
-					a = weapon->Anim[(Fire_Direction().As_Dir8() + FACING_45) % FACING_COUNT];
-				} else if (weapon->Anim.Count() > 0) {
-					a = weapon->Anim[0];
+				if (weapon->Anim.Count() > 0) {
+					a = weapon->Anim[Shape_Facing_Index(Fire_Direction(), weapon->Anim.Count())];
 				}
 
 				/*
@@ -4102,7 +4137,7 @@ BulletClass * TechnoClass::Fire_At(AbstractClass * target, int which)
 				}
 
 				if (TClass->IsTargetLaser && House->Is_Player_Control()) {
-					TargetingLaserTimer = TICKS_PER_SECOND;
+					TargetingLaserTimer = UIControls.TargetLaserTime;
 				}
 
 				/*
@@ -4152,7 +4187,7 @@ BulletClass * TechnoClass::Fire_At(AbstractClass * target, int which)
 				}
 			}
 		} else {
-			bullet->Release();
+			delete bullet;
 			bullet = NULL;
 		}
 	}
@@ -4162,51 +4197,13 @@ BulletClass * TechnoClass::Fire_At(AbstractClass * target, int which)
 
 
 /// <summary>
-/// Draws the targeting laser line from this object's firing coordinate to its current target:
-/// a small box at each endpoint connected by an animated dashed red line.
+/// Draws the targeting laser line from this object's firing coordinate to its current
+/// target, styled by UI.INI.
 /// </summary>
 void TechnoClass::Draw_Target_Laser(void) const
 {
-	static bool _pattern[16] = {
-		true,
-		false,
-		true,
-		false,
-		true,
-		false,
-		true,
-		false,
-		true,
-		false,
-		true,
-		false,
-		true,
-		false,
-		true,
-		false
-	};
-
 	if (TarCom != NULL) {
-
-		Coord coord = Turret_Coord(0);
-		Coord predicted = Predict_Target_Coord();
-
-		Point2D point;
-		Point2D point2;
-
-		TacticalMap->Coord_To_Pixel(coord, point);
-		TacticalMap->Coord_To_Pixel(predicted, point2);
-
-		point.Y += TacticalRect.Y;
-		point2.Y += TacticalRect.Y;
-
-		LogicalSurface->Fill_Rect(Intersect(TacticalRect, Rect(point, 3, 3) - Point2D(2, 2)), NormalDrawer->Convert_Pixel(RED));
-		LogicalSurface->Fill_Rect(Intersect(TacticalRect, Target_Laser_Rect(point2)), NormalDrawer->Convert_Pixel(RED));
-
-		Rect tacticalr = TacticalRect;
-		if (Clip_Line_To_Rect(point, point2, tacticalr)) {
-			LogicalSurface->Draw_Dashed_Line(point, point2, NormalDrawer->Convert_Pixel(RED), _pattern, 7 * Frame % 16);
-		}
+		Draw_Action_Line_Segment(*LogicalSurface, Turret_Coord(0), Predict_Target_Coord(), UIControls.Target_Laser_Style(), 2, 1, 0);
 	}
 }
 
@@ -6512,6 +6509,25 @@ void TechnoClass::Kill_Cargo(TechnoClass * source)
 }
 
 
+/// <summary>
+/// Whether this transport accepts the passenger: its kind against IsVehicleTransport, and
+/// its Size against both the room left in the hold and this transport's SizeLimit.
+/// Every route into a hold consults this, from a player's order to the check on arrival.
+/// </summary>
+bool TechnoClass::Can_Fit_Passenger(ObjectClass const * passenger) const
+{
+	if (passenger == NULL) return(false);
+
+	TechnoTypeClass const * ptype = passenger->TClass;
+	if (ptype == NULL) return(false);
+
+	if (passenger->RTTI == RTTI_UNIT && !TClass->IsVehicleTransport) return(false);
+
+	return(ptype->Size <= TClass->SizeLimit &&
+		Cargo.Total_Size() + ptype->Size <= TClass->Max_Passengers());
+}
+
+
 /***********************************************************************************************
  * TechnoClass::Crew_Type -- Fetches the kind of crew this object contains.                    *
  *                                                                                             *
@@ -7225,7 +7241,7 @@ int TechnoClass::Pip_Count(void) const
 	switch (TClass->PipScale) {
 
 		case PIPSCALE_PASSENGERS:
-			current = Cargo.How_Many();
+			current = Cargo.Total_Size();
 			maximum = TClass->Max_Passengers();
 			valid = true;
 			break;
@@ -7555,6 +7571,8 @@ void TechnoClass::Draw_Pips(Point2D const & bottomleft, Point2D const & center, 
 	*/
 	if (TClass->Max_Passengers() > 0) {
 		ObjectClass const * object = Cargo.Attached_Object();
+		int remaining = (object != NULL) ? object->TClass->Size : 0;
+
 		for (int index = 0; index < Class_Of()->Max_Pips(); index++) {
 			PipEnum pip = PIP_EMPTY;
 
@@ -7563,7 +7581,13 @@ void TechnoClass::Draw_Pips(Point2D const & bottomleft, Point2D const & center, 
 				if (object->RTTI == RTTI_INFANTRY) {
 					pip = ((InfantryClass *)object)->Class->Pip;
 				}
-				object = object->Next;
+
+				// A passenger claims as many pips as it claims hold space.
+				remaining--;
+				if (remaining <= 0) {
+					object = object->Next;
+					remaining = (object != NULL) ? object->TClass->Size : 0;
+				}
 			}
 			Draw_Shape(*LogicalSurface, *NormalDrawer, pip_shapes, pip, xy + offset * index, rect, ShapeFlags_Type(SHAPE_CENTER|SHAPE_WIN_REL));
 		}
@@ -8180,8 +8204,9 @@ int TechnoClass::Get_Predator_Offset(void) const
 /// <summary>
 /// Should this object mend a little of its damage now?
 /// Only objects that can heal themselves qualify, whether by their nature or by the grace
-/// of veterancy, and only while they are hurt badly enough to be in the yellow. The healing
-/// is doled out on a slow tick, so this routine says no far more often than it says yes.
+/// of veterancy, and only while they are hurt and still under their healing ceiling. The
+/// healing is doled out on a slow tick, so this routine says no far more often than it
+/// says yes.
 /// </summary>
 /// <returns>bool; Should the object self heal this frame?</returns>
 bool TechnoClass::Should_Self_Heal_Now(void) const
@@ -8191,10 +8216,18 @@ bool TechnoClass::Should_Self_Heal_Now(void) const
 			return(false);
 		}
 	}
-	if ((Frame % (int)(Rule->RepairRate * TICKS_PER_MINUTE)) != 0) {
+	// An aircraft killed in the air flies on until it lands, and both the descent and the
+	// kill on contact test for zero strength.
+	if (Strength <= 0) {
 		return(false);
 	}
-	return(HealthRatio > Rule->ConditionYellow ? false : true);
+	if (Strength >= TClass->MaxStrength) {
+		return(false);
+	}
+	if ((Frame % std::max((int)(TClass->Self_Heal_Rate() * TICKS_PER_MINUTE), 1)) != 0) {
+		return(false);
+	}
+	return(HealthRatio > TClass->Self_Heal_Cap() ? false : true);
 }
 
 

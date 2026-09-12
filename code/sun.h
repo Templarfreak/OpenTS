@@ -13,9 +13,7 @@
 
 #pragma once
 
-#ifdef INCLUDE_COM
-#include "isun.h"
-#endif
+#include "classids.h"
 #include <cstring>
 
 /// Everything from here on is the content of defines.h.
@@ -60,15 +58,12 @@
 **	as the largest speech sample, plus a few bytes for overhead
 **	(16 bytes is sufficient).
 */
-#define SPEECH_BUFFER_SIZE		126000L
 
 
 /**********************************************************************
 **	Filenames of the data files it can create at run time.
 */
 #define FAME_FILE_NAME			"HALLFAME.DAT"
-#define NET_SAVE_FILE_NAME		"SAVEGAME.NET"
-#define CONFIG_FILE_NAME		"SUN.INI"
 
 
 /**********************************************************************

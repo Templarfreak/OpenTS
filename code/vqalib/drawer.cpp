@@ -82,7 +82,7 @@ long PageFlip_MCGABuf(VQAHandle *vqa);
 long DrawFrame_MCGA(VQAHandle *vqa);
 long PageFlip_MCGA(VQAHandle *vqa);
 
-void __cdecl UnVQ_Nop(unsigned char *codebook, unsigned char *pointers, unsigned char *buffer, unsigned long blocksperrow, unsigned long numrows, unsigned long bufwidth);
+void __cdecl UnVQ_Nop(uint8_t *codebook, uint8_t *pointers, uint8_t *buffer, size_t blocksperrow, size_t numrows, size_t bufwidth);
 long PageFlip_Nop(VQAHandle *vqa);
 
 void VQA_SetTimer(VQAHandleP *vqap, long time);
@@ -185,7 +185,7 @@ long VQA_Configure_Drawer(VQAHandleP *vqap)
 		case BLOCK_4X2:
 			switch (header->ColorMode) {
 				case 0:
-					vqap->UnVQ1 = ASM_UnVQ_4x2;
+					vqap->UnVQ1 = UnVQ_4x2;
 
 					if (header->Flags & VQAHDF_TRANS) {
 						if (vqap->Config.DrawFlags & VQACFGF_NOTRANS) {
@@ -214,12 +214,12 @@ long VQA_Configure_Drawer(VQAHandleP *vqap)
 					break;
 
 				case 1:
-					vqap->UnVQ1 = ASM_UnVQ1_C1_4x4;
+					vqap->UnVQ1 = UnVQ1_C1_4x4;
 					vqap->UnVQ2 = UnVQ2_C1_4x4;
 					break;
 
 				case 0:
-					vqap->UnVQ1 = ASM_UnVQ_4x4;
+					vqap->UnVQ1 = UnVQ_4x4;
 
 					if (header->Flags & VQAHDF_TRANS) {
 						if (vqap->Config.DrawFlags & VQACFGF_NOTRANS) {
@@ -231,7 +231,7 @@ long VQA_Configure_Drawer(VQAHandleP *vqap)
 						}
 					} else {
 						if (vqap->Config.DrawFlags & VQACFGF_HALFSIZE) {
-							vqap->UnVQ1 = ASM_UnVQ_4x4_HALF;
+							vqap->UnVQ1 = UnVQ_4x4_HALF;
 						}
 					}
 					break;
@@ -421,12 +421,12 @@ STATIC long Select_Frame(VQAHandleP *vqap)
 		/* Dispatch any pending frame events. */
 		if (config->EventHandler != NULL) {
 			if (curframe->Flags & VQAFRMF_LOOPED) {
-				config->EventHandler((VQAHandle *)vqap, VQAEVENT_LOOPED, (void *)curframe->FrameNum, vqap->LoopID);
+				config->EventHandler((VQAHandle *)vqap, VQAEVENT_LOOPED, (void *)(intptr_t)curframe->FrameNum, vqap->LoopID);
 				curframe->Flags &= ~VQAFRMF_LOOPED;
 			}
 
 			if (curframe->Flags & VQAFRMF_LOOPJMP) {
-				config->EventHandler((VQAHandle *)vqap, VQAEVENT_LOOPJUMP, (void *)curframe->FrameNum, vqap->LoopID);
+				config->EventHandler((VQAHandle *)vqap, VQAEVENT_LOOPJUMP, (void *)(intptr_t)curframe->FrameNum, vqap->LoopID);
 				curframe->Flags &= ~VQAFRMF_LOOPJMP;
 			}
 
@@ -1187,8 +1187,8 @@ STATIC long PageFlip_MCGABuf(VQAHandle *vqa)
 * SYNOPSIS
 *     UnVQ_Nop(Codebook, Pointers, Buffer, BPR, Rows, BufWidth)
 *
-*     void UnVQ_Nop(unsigned char *, unsigned char *, unsigned char *,
-*                   unsigned long, unsigned long, unsigned long);
+*     void UnVQ_Nop(uint8_t *, uint8_t *, uint8_t *,
+*                   size_t, size_t, size_t);
 * FUNCTION
 *
 * INPUTS
@@ -1204,9 +1204,9 @@ STATIC long PageFlip_MCGABuf(VQAHandle *vqa)
 *
 ****************************************************************************/
 
-STATIC void __cdecl UnVQ_Nop(unsigned char *codebook, unsigned char *pointers,
-		unsigned char *buffer, unsigned long blocksperrow,
-		unsigned long numrows, unsigned long bufwidth)
+STATIC void __cdecl UnVQ_Nop(uint8_t *codebook, uint8_t *pointers,
+		uint8_t *buffer, size_t blocksperrow,
+		size_t numrows, size_t bufwidth)
 {
 	/* Suppress compiler warnings */
 	codebook = codebook;

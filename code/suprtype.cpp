@@ -7,7 +7,6 @@
  * See LICENSE.md for applicable additional terms and warranty disclaimers.
  ******************************************************************************/
 
-#define INCLUDE_COM
 #include "always.h"
 
 #include "suprtype.h"
@@ -74,6 +73,7 @@ SuperWeaponTypeClass::SuperWeaponTypeClass(char const * ininame) :
 	Weapon(NULL),
 	RechargeTime(4500),
 	CameoData(NULL),
+	CameoSortOrder(0),
 	Action(ACTION_NONE),
 	DisallowedAction(ACTION_EMPULSE_RANGE),
 	AuxBuilding(NULL),
@@ -107,17 +107,9 @@ SuperWeaponTypeClass::~SuperWeaponTypeClass(void)
 }
 
 
-/// <summary>
-/// Fetches the class identifier of this object.
-/// The save game system uses this to know which class to construct when the object is
-/// read back in.
-/// </summary>
-/// <returns>Returns with S_OK, or E_POINTER if no destination was supplied.</returns>
-HRESULT STDMETHODCALLTYPE SuperWeaponTypeClass::GetClassID(CLSID * retval)
+ClassID SuperWeaponTypeClass::Class_ID(void) const
 {
-	if (retval == NULL) return(E_POINTER);
-	*retval = CLSID_SuperWeaponTypeClass;
-	return(S_OK);
+	return(ClassID_SuperWeaponTypeClass);
 }
 
 
@@ -163,6 +155,7 @@ void SuperWeaponTypeClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(DeliveredInfantryTypes);
 	stream.Serialize(OGDropPod);
 	// CameoData -- artwork, fetched from the mix files again as this loads.
+	stream.Serialize(CameoSortOrder);
 	stream.Serialize(Action);
 	stream.Serialize(DisallowedAction);
 	stream.Serialize(AuxBuilding);
@@ -290,6 +283,7 @@ bool SuperWeaponTypeClass::Read_INI(CCINIClass const & ini)
 		AuxBuilding = TGet_Class(ini, IniName, "AuxBuilding", AuxBuilding);
 		UseChargeDrain = ini.Get_Bool(IniName, "UseChargeDrain", UseChargeDrain);
 		IsManualControl = ini.Get_Bool(IniName, "ManualControl", IsManualControl);
+		CameoSortOrder = ini.Get_Int(IniName, "CameoSortOrder", CameoSortOrder);
 
 		float recharge = ini.Get_Float(IniName, "RechargeTime");
 		if (recharge != 0.0) {

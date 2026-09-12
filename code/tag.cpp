@@ -7,7 +7,6 @@
  * See LICENSE.md for applicable additional terms and warranty disclaimers.
  ******************************************************************************/
 
-#define INCLUDE_COM
 #include "always.h"
 
 #include "tag.h"
@@ -97,7 +96,7 @@ TagClass::~TagClass(void)
 
 	if (GameActive && ScenarioActive &&
 		Trigger != NULL && Trigger->Class != NULL && Trigger->Class->House != NULL && Class->Is_Allow_Win()) {
-		HouseClass *hptr = House_From_HousesType(Trigger->Class->House->House);
+		HouseClass *hptr = Trigger->Class->House;
 
 		if (hptr->Blockage) hptr->Blockage--;
 		hptr->BorrowedTime = TICKS_PER_SECOND*4;
@@ -424,16 +423,9 @@ void TagClass::Detach(AbstractClass const * target, bool all)
 }
 
 
-/// <summary>
-/// Fetches the class identifier that this tag persists under.
-/// </summary>
-/// <param name="retval">Pointer to the identifier to fill in.</param>
-/// <returns>Returns with S_OK, or E_POINTER if no destination was supplied.</returns>
-HRESULT STDMETHODCALLTYPE TagClass::GetClassID(CLSID * retval)
+ClassID TagClass::Class_ID(void) const
 {
-	if (retval == NULL) return(E_POINTER);
-	*retval = CLSID_TagClass;
-	return(S_OK);
+	return(ClassID_TagClass);
 }
 
 

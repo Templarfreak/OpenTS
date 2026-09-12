@@ -45,7 +45,6 @@
  *   UnitTypeClass::operator new -- Allocates an object from the unit type class heap.         *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-#define INCLUDE_COM
 #include "always.h"
 
 #include "unittype.h"
@@ -115,6 +114,7 @@ UnitTypeClass::UnitTypeClass(char const * ininame) :
 	IsDeployToFire(false),
 	IsUseTurretShadow(false),
 	IsTooBigToFitUnderBridge(false),
+	IsTotable(true),
 	IsSmallVisceroid(false),
 	IsLargeVisceroid(false),
 	IsCarriesCrate(false),
@@ -134,6 +134,8 @@ UnitTypeClass::UnitTypeClass(char const * ininame) :
 	StartDeathFrame(-1),
 	MaxDeathCounter(-1),
 	Facings(FACING_COUNT),
+	TurretFacings(32),
+	StartTurretFrame(-1),
 	WalkFrames(12),
 	FiringFrames(0),
 	HeapID(UNIT_NONE),
@@ -379,6 +381,7 @@ bool UnitTypeClass::Read_INI(CCINIClass const & ini)
 		IsCarriesCrate = ini.Get_Bool(Name(), "CarriesCrate", IsCarriesCrate);
 		IsLockTurret = !IsTurretEquipped;
 		IsTooBigToFitUnderBridge = ini.Get_Bool(Name(), "TooBigToFitUnderBridge", IsTooBigToFitUnderBridge);
+		IsTotable = ini.Get_Bool(Name(), "Totable", IsTotable);
 
 		HalfDamageSmokeLocation = ini.Get_Point(Name(), "HalfDamageSmokeLocation", HalfDamageSmokeLocation);
 
@@ -424,6 +427,8 @@ bool UnitTypeClass::Read_INI(CCINIClass const & ini)
 		}
 
 		Facings = ArtINI.Get_Int(Graphic_Name(), "Facings", Facings);
+		TurretFacings = ArtINI.Get_Int(Graphic_Name(), "TurretFacings", TurretFacings);
+		StartTurretFrame = ArtINI.Get_Int(Graphic_Name(), "StartTurretFrame", StartTurretFrame);
 
 		if (StartWalkFrame == -1) {
 			StartWalkFrame = 0;
@@ -489,15 +494,9 @@ int UnitTypeClass::Repair_Step(void) const
 }
 
 
-/// <summary>
-/// Fetches the persistent class identifier for the unit type.
-/// </summary>
-/// <returns>Returns with S_OK, or E_POINTER if no destination was supplied.</returns>
-HRESULT STDMETHODCALLTYPE UnitTypeClass::GetClassID(CLSID * retval)
+ClassID UnitTypeClass::Class_ID(void) const
 {
-	if (retval == NULL) return(E_POINTER);
-	*retval = CLSID_UnitTypeClass;
-	return(S_OK);
+	return(ClassID_UnitTypeClass);
 }
 
 
@@ -519,6 +518,7 @@ void UnitTypeClass::Compute_CRC(CRCEngine & crc) const
 	crc(IsNoFireWhileMoving);
 	crc(IsTilter);
 	crc(IsUseTurretShadow);
+	crc(IsTotable);
 }
 
 
@@ -564,6 +564,7 @@ void UnitTypeClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(IsTilter);
 	stream.Serialize(IsUseTurretShadow);
 	stream.Serialize(IsTooBigToFitUnderBridge);
+	stream.Serialize(IsTotable);
 	stream.Serialize(IsSmallVisceroid);
 	stream.Serialize(IsLargeVisceroid);
 	stream.Serialize(IsCarriesCrate);
@@ -585,6 +586,8 @@ void UnitTypeClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(StartDeathFrame);
 	stream.Serialize(MaxDeathCounter);
 	stream.Serialize(Facings);
+	stream.Serialize(TurretFacings);
+	stream.Serialize(StartTurretFrame);
 	stream.Serialize(WalkFrames);
 	stream.Serialize(FiringFrames);
 	stream.Serialize(AltImageFile);

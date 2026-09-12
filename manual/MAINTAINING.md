@@ -114,8 +114,8 @@ To publish a release:
 1. Confirm that the development entry names the release and that the commit to
    be tagged contains everything it ships.
 2. Create and publish the GitHub release from a `v<version>` tag on that
-   commit. The `Engine release` workflow builds the tag, attaches the packaged
-   zip, and appends
+   commit. The `Engine release` workflow builds the tag, attaches a packaged
+   zip per platform, and appends
    `python manual/tools/manage.py release-notes <version>` output to the release
    body.
 3. Tag before opening the next development cycle. The tagged commit's CMake
@@ -178,6 +178,12 @@ The site reads these build-time settings:
 | `DOCS_REPOSITORY_URL` | Source repository URL used for source and feedback links |
 | `DOCS_REVISION` | Revision used in source links and feedback metadata |
 | `DOCS_DEMO` | Explicitly marks an alternate build as a demo |
+
+`DOCS_REVISION` renders on every page and is excluded from the search index.
+Pagefind splits a hash into letter and digit runs, so indexing it would put
+tokens such as `6` on every page and flatten the ranking that the artifact
+search check asserts. Keep any other per-build value out of the index for the
+same reason.
 
 The Pages workflow derives the repository URL and project path from GitHub's
 repository context, so it works in staging and the final OpenTS repository.

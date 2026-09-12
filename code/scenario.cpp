@@ -62,6 +62,7 @@
 #include "scenario.h"
 
 #include "_bench.h"
+#include "_deploymentconfig.h"
 #include "_keyboar.h"
 #include "_logic.h"
 #include "_map.h"
@@ -79,10 +80,12 @@
 #include "aitrig.h"
 #include "anim.h"
 #include "astar.h"
+#include "savemgr.h"
 #include "bench.h"
 #include "building.h"
 #include "builtype.h"
 #include "campaign.h"
+#include "ccfile.h"
 #include "ccrand.h"
 #include "cctooltip.h"
 #include "cell.h"
@@ -91,6 +94,7 @@
 #include "crc.h"
 #include "data.h"
 #include "dbgprint.h"
+#include "deploymentconfig.h"
 #include "egos.h"
 #include "empulse.h"
 #include "enviro.h"
@@ -116,17 +120,21 @@
 #include "misc.h"
 #include "mouse.h"
 #include "movie.h"
+#include "movieskip.h"
 #include "mpu.h"
 #include "msgbox.h"
 #include "netdlg.h"
 #include "newmenu.h"
 #include "overlay.h"
 #include "overtype.h"
+#include "ownrdraw.h"
 #include "partsys.h"
+#include "pcx.h"
 #include "preview.h"
 #include "progress.h"
 #include "psystype.h"
 #include "queue.h"
+#include "restate.h"
 #include "revent.h"
 #include "rules.h"
 #include "savestream.h"
@@ -135,6 +143,7 @@
 #include "script.h"
 #include "session.h"
 #include "smudge.h"
+#include "spawnhouse.h"
 #include "stats.h"
 #include "surface.h"
 #include "swizzle.h"
@@ -147,27 +156,35 @@
 #include "teamtype.h"
 #include "terrain.h"
 #include "theme.h"
+#include "voc.h"
 #include "tiberium.h"
 #include "tracker.h"
 #include "trigger.h"
 #include "trigtype.h"
+#include "trim.h"
 #include "tube.h"
+#include "tutorial.h"
 #include "unit.h"
 #include "unittype.h"
 #include "vein.h"
 #include "vox.h"
 #include "wave.h"
 #include "waypoint.h"
+#include "win.h"
 #include "wsproto.h"
+#include "xstraw.h"
 
 #include "bench.hh"
 
 #include <algorithm>
+#include <utility>
+#include <vector>
 
 CDTimerClass<SystemTimerClass> ScenUnusedTimer;
 
 
-static void Remove_AI_Players(void);
+static void Assign_Start_Positions(bool official);
+static void Read_Spawn_Houses(CCINIClass const & ini);
 static void Create_Units(bool official);
 static Cell const Clip_Scatter(Cell const & cell, int maxdist);
 static Cell const Clip_Move(Cell const & cell, FacingType facing, int dist);
@@ -253,6 +270,10 @@ void ScenarioClass::Reset(void)
 	PreMapSelectMovie = VQ_NONE;
 	TransitTheme = THEME_NONE;
 	PlayerHouse = HOUSE_FIRST;
+	PlayerSide = SIDE_FIRST;
+	LoadScreen[0] = '\0';
+	LoadScreenX = 0;
+	LoadScreenY = 0;
 	CarryOverPercent = 0;
 	CarryOverCap = 0;
 	Percent = 0;
@@ -273,8 +294,8 @@ void ScenarioClass::Reset(void)
 	IsTruckCrate = false;
 	IsMoneyTiberium = false;
 	IsIgnoreGlobalAITriggers = false;
-	IsGDI = true;
 	IsMultiplayerOnly = false;
+	IsMPAIBaseNodes = false;
 	IsCrateBeenPickedUp = false;
 	FadeTimer = 0;
 	StartingDropships = 0;
@@ -365,9 +386,35 @@ bool Start_Scenario(char const * name, bool briefing, CampaignType campaign)
 	**	If there's no briefing movie, restate the mission at the beginning.
 	*/
 	char buffer[25];
+	bool has_briefing_movie = Scen->BriefMovie != VQ_NONE;
 
-	if (Scen->BriefMovie != VQ_NONE) {
-		wsprintf(buffer, "%s.VQA", Movies[Scen->BriefMovie]);
+	if (has_briefing_movie) {
+		snprintf(buffer, sizeof(buffer), "%s.VQA", Movies[Scen->BriefMovie]);
+		has_briefing_movie = CCFileClass(buffer).Is_Available();
+	}
+
+	bool transit_playing = false;
+
+	if (briefing && Session.Type == GAME_NORMAL && !has_briefing_movie) {
+
+		// No dialog has been put up in a game a client launched, so the artwork it draws with
+		// is not built yet.
+		OwnerDraw::Prepare_Resources(MainWindow);
+
+		if (Scen->TransitTheme != THEME_NONE) {
+			Theme.Play_Song(Scen->TransitTheme);
+			transit_playing = true;
+		}
+
+		Restate_Mission(Scen);
+	}
+
+	/*
+	 * An action movie carries its own sound, so the music the page opened with makes way for
+	 * it rather than playing underneath.
+	 */
+	if (transit_playing && briefing && Scen->ActionMovie != VQ_NONE) {
+		Theme.Stop(true);
 	}
 
 	if (Scen->StartingDropships > 0) {
@@ -379,7 +426,9 @@ bool Start_Scenario(char const * name, bool briefing, CampaignType campaign)
 	}
 
 	if (Scen->ActionMovie == VQ_NONE && Scen->TransitTheme != THEME_NONE) {
-		Theme.Queue_Song(Scen->TransitTheme);
+		// The song the mission opened with is already the transit theme, and queuing it again
+		// would start it over; the scheduler still needs something pending either way.
+		Theme.Queue_Song(transit_playing ? THEME_PICK_ANOTHER : Scen->TransitTheme);
 	} else {
 		Theme.Queue_Song(THEME_PICK_ANOTHER);
 	}
@@ -393,6 +442,27 @@ bool Start_Scenario(char const * name, bool briefing, CampaignType campaign)
 	Update_Visible_Surface();
 
 	Scen->ElapsedTimer.Start();
+	SaveManager.Autosave.Schedule(Frame);
+
+	if (Session.Type == GAME_NORMAL) {
+		/*
+		 * A mission is named by how hard it is rather than by the slot the computer plays at,
+		 * and the two run opposite ways: the computer on its easiest table is the hardest game.
+		 */
+		static int const _difficulty_names[DIFF_COUNT] = { TXT_HARD, TXT_MEDIUM, TXT_EASY };
+
+		char message[64];
+		char const * named = Session.DifficultyName;
+
+		if (named[0] == '\0') {
+			named = Fetch_String(_difficulty_names[std::clamp((int)Scen->CDifficulty, 0, DIFF_COUNT - 1)]);
+		}
+
+		sprintf(message, Fetch_String(TXT_DIFFICULTY_LEVEL), named);
+		Session.Messages.Add_Message(NULL, 0, message, PlayerPtr->Scheme,
+			TextPrintType(TPF_6PT_GRAD|TPF_USE_GRAD_PAL|TPF_FULLSHADOW),
+			int(Rule->MessageDelay * TICKS_PER_MINUTE));
+	}
 
 	ScenarioActive = true;
 	TacticalActive = true;
@@ -503,7 +573,7 @@ bool Wait_For_Players_To_Load(void)
 	CDTimerClass<SystemTimerClass> wait_timeout;
 	CDTimerClass<SystemTimerClass> timer = TIMER_SECOND * 5;
 
-	wait_timeout = 60 * TIMER_SECOND;
+	wait_timeout = Session.ConnTimeout;
 	double last_progress = Progress.Get_Current_Progress();
 
 	for (;;) {
@@ -528,7 +598,7 @@ bool Wait_For_Players_To_Load(void)
 		}
 
 		if (current_progress != last_progress) {
-			wait_timeout = 60 * TIMER_SECOND;
+			wait_timeout = Session.ConnTimeout;
 			last_progress = current_progress;
 		}
 
@@ -538,6 +608,40 @@ bool Wait_For_Players_To_Load(void)
 		}
 	}
 	return(true);
+}
+
+
+/// <summary>
+/// Puts the picture a launch file asked for, or without one the picture the scenario kept from
+/// the launch that started it, in place of the game's own loading backdrop, and its bar position
+/// in place of the game's. A picture that is missing leaves both alone. The position is taken
+/// to be within the picture, so it is centered along with it.
+/// </summary>
+/// <returns>Returns with where the picture came from, or NULL when the game's own stands.</returns>
+static char const * Apply_Custom_Load_Screen(char const * & background, Point2D & bar)
+{
+	bool launched = Session.LoadScreen[0] != '\0';
+	char const * name = launched ? Session.LoadScreen : Scen->LoadScreen;
+	int x = launched ? Session.LoadScreenX : Scen->LoadScreenX;
+	int y = launched ? Session.LoadScreenY : Scen->LoadScreenY;
+	if (name[0] == '\0') {
+		return(NULL);
+	}
+
+	CCFileClass file(name);
+	if (!file.Is_Available()) {
+		DebugString("The load screen %s is missing.\n", name);
+		return(NULL);
+	}
+
+	background = name;
+
+	int width = 0;
+	int height = 0;
+	if (x > 0 && y > 0 && Read_PCX_Size(file, width, height)) {
+		bar = Point2D(x, y) + Point2D((VisibleRect.Width - width) / 2, (VisibleRect.Height - height) / 2);
+	}
+	return(launched ? "from the launch file" : "kept by the scenario");
 }
 
 
@@ -563,7 +667,6 @@ bool Wait_For_Players_To_Load(void)
  *=============================================================================================*/
 bool Read_Scenario(char const * fname)
 {
-	bool read_ok = true;
 	char name[_MAX_PATH];
 
 	strcpy(name, fname);
@@ -599,6 +702,8 @@ bool Read_Scenario(char const * fname)
 
 		Point2D prog_bar_pos;
 		char const * background = Pick_Load_Background_Name(prog_bar_pos);
+		char const * source = Apply_Custom_Load_Screen(background, prog_bar_pos);
+		DebugString("Loading screen %s%s%s%s\n", background, source != NULL ? " (" : "", source != NULL ? source : "", source != NULL ? ")" : "");
 		Progress.Initialize(100, players);
 
 		char * prog_msg = NULL;
@@ -623,21 +728,40 @@ bool Read_Scenario(char const * fname)
 		}
 	}
 
-	if (Scen->IsRandom) {
-		read_ok = RandomMapGen.SeedData.Load(name);
+	ScenarioState state = ScenarioState::Ok;
 
-		if (read_ok) {
+	if (Scen->IsRandom) {
+		if (RandomMapGen.SeedData.Load(name)) {
 			RandomMapGen.Generate_Random_Map(false, NULL);
 			Multiplayer_Last_Minute_Fixups();
+		} else {
+			state = ScenarioState::NotRead;
 		}
 		strcpy(Scen->ScenarioName, name);
 	} else {
-		read_ok = Read_Scenario_INI(name);
+		state = Read_Scenario_INI(name);
 	}
 
-	if (!read_ok) {
-		DebugString("Error - Unable to read scenario: %s\n", name);
-		WWMessageBox().Process(TXT_UNABLE_READ_SCENARIO, TXT_OK);
+	if (state != ScenarioState::Ok) {
+		char message[_MAX_PATH + 256];
+		char const * text = NULL;
+
+		if (state == ScenarioState::TerrainDamaged) {
+			// An older language library answers with an empty string, which would show a
+			// message box with nothing in it.
+			char const * damaged = Fetch_String(TXT_SCENARIO_DATA_DAMAGED);
+			if (damaged[0] != '\0') {
+				snprintf(message, sizeof(message), damaged, name);
+				text = message;
+			}
+		}
+
+		if (text == NULL) {
+			text = Fetch_String(TXT_UNABLE_READ_SCENARIO);
+		}
+
+		DebugString("Error - %s\n", text);
+		WWMessageBox().Process(text, TXT_OK);
 
 		BEnd(BENCH_SCENARIO);
 		ScenarioInit--;
@@ -771,7 +895,10 @@ void Fill_In_Data(void)
 
 		if (tp->Attaches_To() & ATTACH_HOUSE) {
 			TagClass * tt = Find_Or_Make(tp);
-			House_From_HousesType(tt->Class->FirstTrigger->House->House)->HouseTags.Add(tt);
+			HouseClass * owner = tt->Class->FirstTrigger->House;
+			if (owner != NULL) {
+				owner->HouseTags.Add(tt);
+			}
 		}
 	}
 
@@ -798,8 +925,8 @@ void Fill_In_Data(void)
 	*/
 	for (index = 0; index < TagTypes.Count(); index++) {
 		TagTypeClass * tp = TagTypes[index];
-		if (tp->Is_Allow_Win()) {
-			Houses[tp->FirstTrigger->House->HeapID]->Blockage++;
+		if (tp->Is_Allow_Win() && tp->FirstTrigger->House != NULL) {
+			tp->FirstTrigger->House->Blockage++;
 		}
 	}
 
@@ -906,6 +1033,7 @@ void Post_Load_Game(void)
  *=============================================================================================*/
 void Clear_Scenario(void)
 {
+	Stop_All_Sound_Effects();
 	Sync_Recorder_Disarm();
 
 	int index;
@@ -915,6 +1043,7 @@ void Clear_Scenario(void)
 	PlayerPtr = NULL;
 
 	Scen->Reset();
+	TutorialText.Clear_Overrides();
 
 	IonStormClass::Ion_Storm_End();
 
@@ -925,6 +1054,7 @@ void Clear_Scenario(void)
 		}
 	}
 	Delete_All_Objects();
+	Reset_Selection_Filters();
 	for (index = 0; index < IsometricTileTypes.Count(); index++) {
 		AbstractTypes.Add(IsometricTileTypes[index]);
 	}
@@ -945,11 +1075,7 @@ void Clear_Scenario(void)
 
 	LightSourceClass::Recalc = false;
 	while (Objects.Count()) {
-		if (Objects[0]->RTTI == RTTI_BULLET) {
-			Objects[0]->Release();
-		} else {
-			delete Objects[0];
-		}
+		delete Objects[0];
 	}
 
 	LightSourceClass::Recalc = true;
@@ -1052,11 +1178,21 @@ void Do_Win(void)
 	if (Session.Type != GAME_NORMAL) {
 		if (!Session.Play) {
 			Session.GamesPlayed++;
-			Multi_Score_Presentation();
+
+			if (Session.SkipScoreScreen) {
+				DebugString("Passing over the score screen.\n");
+			} else {
+				Multi_Score_Presentation();
+			}
+
 			Session.CurGame++;
 			if (Session.CurGame >= MAX_MULTI_GAMES) {
 				Session.CurGame = MAX_MULTI_GAMES - 1;
 			}
+
+			// Nothing keeps the machines in step past the score screen, so ESC ends this movie alone.
+			MovieSkip::LocalScope local;
+			Play_Movie(Scen->WinMovie);
 		}
 
 		GameActive = false;
@@ -1215,12 +1351,21 @@ void Do_Lose(void)
 	if (Session.Type != GAME_NORMAL) {
 		if (!Session.Play) {
 			Session.GamesPlayed++;
-			Multi_Score_Presentation();
+
+			if (Session.SkipScoreScreen) {
+				DebugString("Passing over the score screen.\n");
+			} else {
+				Multi_Score_Presentation();
+			}
+
 			Session.CurGame++;
 
 			if (Session.CurGame >= MAX_MULTI_GAMES) {
 				Session.CurGame = MAX_MULTI_GAMES - 1;
 			}
+
+			MovieSkip::LocalScope local;
+			Play_Movie(Scen->LoseMovie);
 		}
 		GameActive = false;
 		Show_Mouse();
@@ -1344,6 +1489,60 @@ void ScenarioClass::Set_Scenario_Name(char const * name)
 }
 
 
+/// <summary>
+/// Fills the database from the copy of the scenario file the scenario holds.
+/// </summary>
+/// <returns>What the INI load returned: 0 when nothing loaded.</returns>
+static int Load_Held_Scenario_File(CCINIClass & ini, char const * name, bool withdigest)
+{
+	DebugString("Load_Held_Scenario_File - %s read from the held copy (%d bytes)\n", name, Scen->SourceFile.Size());
+
+	BufferStraw straw(Scen->SourceFile.Data(), Scen->SourceFile.Size());
+	return(ini.Load(straw, withdigest, false, name));
+}
+
+
+/// <summary>
+/// Fills the database from the scenario file named: from the copy the scenario holds when
+/// that is the file, and otherwise from disk, which the scenario then holds in its place
+/// where the deployment asked for the file to travel in the save.
+/// </summary>
+/// <returns>What the INI load returned: 0 when nothing loaded.</returns>
+static int Load_Scenario_File(CCINIClass & ini, char const * name, bool withdigest)
+{
+	if (Scen->SourceFile.Matches(name)) {
+		return(Load_Held_Scenario_File(ini, name, withdigest));
+	}
+
+	CCFileClass file(name);
+	if (!file.Is_Available() || !file.Open(FileClass::READ)) {
+		DebugString("Load_Scenario_File - %s is not available\n", name);
+		return(0);
+	}
+
+	std::vector<char> bytes;
+	int size = file.Size();
+	if (size > 0) {
+		bytes.resize(size);
+		int read = file.Read(bytes.data(), size);
+		bytes.resize(read > 0 ? read : 0);
+	}
+	file.Close();
+
+	if (bytes.empty()) {
+		return(0);
+	}
+	DebugString("Load_Scenario_File - %s read from the file (%d bytes)\n", name, (int)bytes.size());
+
+	BufferStraw straw(bytes.data(), (int)bytes.size());
+	int result = ini.Load(straw, withdigest, false, file.File_Name());
+	if (result != 0 && DeploymentConfig.CarryScenarioFile) {
+		Scen->SourceFile.Assign(name, std::move(bytes));
+	}
+	return(result);
+}
+
+
 /***********************************************************************************************
  * Read_Scenario_INI -- Read specified scenario INI file.                                      *
  *                                                                                             *
@@ -1363,7 +1562,7 @@ void ScenarioClass::Set_Scenario_Name(char const * name)
  * HISTORY:                                                                                    *
  *   10/07/1992 JLB : Created.                                                                 *
  *=============================================================================================*/
-bool Read_Scenario_INI(char const * fname, bool)
+ScenarioState Read_Scenario_INI(char const * fname, bool)
 {
 	Frame = 0;
 
@@ -1375,21 +1574,33 @@ bool Read_Scenario_INI(char const * fname, bool)
 	**	Create scenario filename and read the file.
 	*/
 	CCINIClass ini;
-	CCFileClass file(fname);
 
 	DebugString("Read_Scenario_INI - Filename is %s\n", fname);
 
-	int result = ini.Load(file, true);
+	int result = Load_Scenario_File(ini, fname, true);
 
 	if (result == 0) {
 		DebugString("Scenario ini load failed!\n");
-		return(false);
+		return(ScenarioState::NotRead);
 	}
 
 	strcpy(Scen->ScenarioName, fname);
 
-	bool ok = Read_Scenario_INI(ini);
-	return(ok);
+	return(Read_Scenario_INI(ini));
+}
+
+
+/// <summary>
+/// Fetches the side the local player is presented with: that of the country being played.
+/// </summary>
+/// <returns>Returns with the player's country's side, or the first side when it has none.</returns>
+SideType Side_For_Player(void)
+{
+	HousesType house = Scen->PlayerHouse;
+	if (house >= HOUSE_FIRST && house < HouseTypes.Count() && HouseTypes[house]->Side != SIDE_NONE) {
+		return(HouseTypes[house]->Side);
+	}
+	return(SIDE_FIRST);
 }
 
 
@@ -1432,11 +1643,11 @@ char const * Pick_Load_Background_Name(Point2D & pos)
 				}
 			}
 		}
-	} else {
-		player = Session.Players[player]->Player.House;
+	} else if (Session.PlayerHouse >= HOUSE_FIRST && Session.PlayerHouse < HouseTypes.Count()) {
+		player = HouseTypes[Session.PlayerHouse]->Side;
 	}
 
-	// Only two sides have loading art, so any other house is shown the first side's.
+	// Only two sides have loading art, so any other side is shown the first side's.
 	if (player < 0 || player > 1) {
 		player = 0;
 	}
@@ -1499,20 +1710,13 @@ char const * Pick_Load_Background_Name(Point2D & pos)
 
 /// <summary>
 /// Performs the multiplayer adjustments that must wait for the map.
-/// Surplus computer players are removed, each side's starting units and any random crates
-/// are placed, and everyone is allied with the special house. None of this can be done
-/// until every object in the scenario has been read, so it is left until the very end.
+/// Each side's starting units and any random crates are placed, and everyone is allied
+/// with the special house. None of this can be done until every object in the scenario
+/// has been read, so it is left until the very end.
 /// </summary>
 /// <param name="official">Is this one of the maps that shipped with the game?</param>
 void Multiplayer_Last_Minute_Fixups(bool official)
 {
-	/*
-	**	If Ghosts are disabled and we're not editing, remove computer players
-	**	(Must be done after all objects are read in from the INI)
-	*/
-	if ((Session.Options.AIPlayers + Session.Players.Count() < Rule->MaxPlayers) && !Debug_Map) {
-		Remove_AI_Players();
-	}
 	Call_Back();
 
 	/*
@@ -1584,7 +1788,7 @@ void Multiplayer_Last_Minute_Fixups(bool official)
 /// </summary>
 /// <param name="is_mapgen">Is the scenario built by the random map generator?</param>
 /// <returns>bool; Was the scenario read successfully?</returns>
-bool Read_Scenario_INI(CCINIClass const & ini, bool is_mapgen)
+ScenarioState Read_Scenario_INI(CCINIClass const & ini, bool is_mapgen)
 {
 	char buffer[32];
 
@@ -1592,6 +1796,11 @@ bool Read_Scenario_INI(CCINIClass const & ini, bool is_mapgen)
 
 	DebugString("Clearing old scenario\n");
 	Clear_Scenario();
+
+	// A generated map has no file to hold.
+	if (is_mapgen) {
+		Scen->SourceFile.Clear();
+	}
 
 	if (Session.Type == GAME_NORMAL) {
 		Scen->Difficulty = Session.CampaignDifficulty;
@@ -1605,17 +1814,21 @@ bool Read_Scenario_INI(CCINIClass const & ini, bool is_mapgen)
 		Special.IsFogOfWar = Session.Options.FogOfWar;
 	}
 
+	// Outside the branch above because a campaign obeys the launch file too. A scenario
+	// can still overrule it through [SpecialFlags].
+	Scen->Special.IsScrapMetal = Session.Options.ScrapMetal;
+	Special.IsScrapMetal = Session.Options.ScrapMetal;
+
 	char const * const BASIC = "Basic";
 	Scen->InitTime = ini.Get_Int(BASIC, "InitTime", 10000);
-	bool official = ini.Get_Bool(BASIC, "Official", false); /// read here, but never consulted
-	official = official; /// suppresses the unused variable warning
+	bool official = ini.Get_Bool(BASIC, "Official", false);
 
 	if (Session.Type == GAME_NORMAL) {
 		Disable_Addon(ADDON_ANY);
 		Scen->RequiredAddOn = (AddonType)ini.Get_Int(BASIC, "RequiredAddOn", ADDON_BASE_GAME);
 		Set_Required_Addon(Scen->RequiredAddOn);
 		if (!Addon_Installed(Scen->RequiredAddOn)) {
-			return(false);
+			return(ScenarioState::NotRead);
 		}
 		Enable_Addon(Scen->RequiredAddOn);
 	} else {
@@ -1643,27 +1856,38 @@ bool Read_Scenario_INI(CCINIClass const & ini, bool is_mapgen)
 	**
 	*/
 	DebugString("Initializing Theater\n");
-	Scen->Theater = ini.Get_TheaterType("Map", "Theater", THEATER_TEMPERATE);
+	Scen->Theater = ini.Get_TheaterType("Map", "Theater", THEATER_FIRST);
 	Init_Theater(Scen->Theater);
 
 	Session.Update_Progress(30);
 
-	/*
-	**
-	*/
+	// Clearing the scenario emptied the countries, and the rules are read only after the
+	// side's archives are mounted, so the roster is rebuilt before the side is chosen.
+	Prepare_Side_Roster();
+
 	if (Session.Type == GAME_NORMAL) {
 		ini.Get_String(BASIC, "Player", "GDI", buffer, sizeof(buffer));
-		Scen->IsGDI = strcmpi(buffer, "GDI") == 0;
-		Scen->SpeechSide = Scen->IsGDI == true ? SIDE_GDI : SIDE_NOD;
+		HousesType player = HouseTypeClass::From_Name(buffer);
+		Scen->PlayerHouse = player != HOUSE_NONE ? player : HOUSE_FIRST;
 	} else {
-		Scen->IsGDI = Session.PlayerIsGDI;
-		Scen->SpeechSide = Session.PlayerIsGDI == false ? SIDE_NOD : SIDE_GDI;
+		Scen->PlayerHouse = Session.PlayerHouse;
 	}
 
+	SideType playerside = Side_For_Player();
 	DebugString("Calling Prep_For_Side()\n");
-	if (!Prep_For_Side(Scen->IsGDI == true ? SIDE_GDI : SIDE_NOD)) {
-		return(false);
+	if (Prep_For_Side_Or_First(playerside) == SIDE_NONE) {
+		return(ScenarioState::NotRead);
 	}
+	Scen->PlayerSide = playerside;
+
+	// A launch file's loading picture is kept with the scenario for a restart or a resume.
+	if (Session.LoadScreen[0] != '\0') {
+		strncpy(Scen->LoadScreen, Session.LoadScreen, sizeof(Scen->LoadScreen));
+		Scen->LoadScreen[ARRAY_SIZE(Scen->LoadScreen) - 1] = '\0';
+		Scen->LoadScreenX = Session.LoadScreenX;
+		Scen->LoadScreenY = Session.LoadScreenY;
+	}
+	Scen->SpeechSide = playerside;
 
 	/*
 	**
@@ -1684,8 +1908,9 @@ bool Read_Scenario_INI(CCINIClass const & ini, bool is_mapgen)
 	**
 	*/
 	DebugString("Calling Prep_Speech_For_Side()\n");
-	if (!Prep_Speech_For_Side(Scen->SpeechSide)) {
-		return(false);
+	Scen->SpeechSide = Prep_Speech_For_Side_Or_First(Scen->SpeechSide);
+	if (Scen->SpeechSide == SIDE_NONE) {
+		return(ScenarioState::NotRead);
 	}
 
 	/*
@@ -1701,6 +1926,7 @@ bool Read_Scenario_INI(CCINIClass const & ini, bool is_mapgen)
 	DebugString("Calling Rule->Addition() with scenario overrides\n");
 	Rule->Addition(ini);
 	DebugString("Finished Rule->Addition() with scenario overrides\n");
+	TutorialText.Read_Overrides(ini);
 	Session.Update_Progress(45);
 
 	/*
@@ -1729,7 +1955,7 @@ bool Read_Scenario_INI(CCINIClass const & ini, bool is_mapgen)
 	**
 	*/
 	if (Scen->Read_INI(ini) == false) {
-		return(false);
+		return(ScenarioState::NotRead);
 	}
 
 	Session.Update_Progress(58);
@@ -1743,6 +1969,17 @@ bool Read_Scenario_INI(CCINIClass const & ini, bool is_mapgen)
 	Special.Apply_To_Game();
 
 	Call_Back();
+
+	/*
+	**	Read the Waypoint entries.
+	*/
+	Scen->Read_Waypoints(ini);
+
+	// Owners are resolved as objects are read, so start positions are settled ahead of them.
+	if (Session.Type != GAME_NORMAL && !is_mapgen && !Debug_Map) {
+		Assign_Start_Positions(official);
+		Read_Spawn_Houses(ini);
+	}
 
 	/*
 	**	Read in the team-type data. The team types must be created before any
@@ -1791,7 +2028,9 @@ bool Read_Scenario_INI(CCINIClass const & ini, bool is_mapgen)
 	**	Read in the map control values. This includes dimensions
 	**	as well as theater information.
 	*/
-	Map.Read_INI(ini);
+	if (!Map.Read_INI(ini)) {
+		return(ScenarioState::TerrainDamaged);
+	}
 	Call_Back();
 
 	/*
@@ -1894,7 +2133,11 @@ bool Read_Scenario_INI(CCINIClass const & ini, bool is_mapgen)
 		strcat(buffer, ".INI");
 		cfile.Set_Name(buffer);
 
-		if (cfile.Is_Available() == true) {
+		// When this is the scenario file itself, a restart must apply what the launch applied.
+		if (Scen->SourceFile.Matches(buffer)) {
+			Load_Held_Scenario_File(mini, buffer, false);
+			Rule->Addition(mini);
+		} else if (cfile.Is_Available() == true) {
 			mini.Load(cfile, false);
 			Rule->Addition(mini);
 		}
@@ -1954,7 +2197,6 @@ bool Read_Scenario_INI(CCINIClass const & ini, bool is_mapgen)
 
 	/*
 	**	Multi-player last-minute fixups:
-	**	- If computer players are disabled, remove all computer-owned houses
 	**	- If bases are disabled, create the scenario dynamically
 	**	- Remove any flag spot overlays lying around
 	**	- If capture-the-flag is enabled, assign flags to cells.
@@ -2003,7 +2245,7 @@ bool Read_Scenario_INI(CCINIClass const & ini, bool is_mapgen)
 
 	Map.Complete_Radar_Refresh();
 
-	return(true);
+	return(ScenarioState::Ok);
 }
 
 
@@ -2222,6 +2464,14 @@ void Assign_Houses(void)
 		}
 	}
 
+	// A computer player is given one of the countries the lobby offers.
+	DynamicVectorClass<HousesType> playable;
+	for (int country = HOUSE_FIRST; country < HouseTypes.Count(); country++) {
+		if (HouseTypes[country]->IsMultiplay) {
+			playable.Add((HousesType)country);
+		}
+	}
+
 	//------------------------------------------------------------------------
 	// Now assign computer players to the remaining houses.
 	//------------------------------------------------------------------------
@@ -2234,7 +2484,7 @@ void Assign_Houses(void)
 		int seatnum = i - Session.Players.Count();
 		NodeNameType * seat = seatnum < Session.Computers.Count() ? Session.Computers[seatnum] : NULL;
 
-		pref_house = (HousesType)Random_Pick(0, 1);
+		pref_house = playable.Count() > 0 ? playable[Random_Pick(0, playable.Count() - 1)] : HOUSE_FIRST;
 		if (seat != NULL && seat->Player.House != -1) {
 			pref_house = (HousesType)seat->Player.House;
 		}
@@ -2318,36 +2568,6 @@ void Assign_Houses(void)
 }
 
 
-/***********************************************************************************************
- * Remove_AI_Players -- Removes the computer AI houses & their units                           *
- *                                                                                             *
- * INPUT:                                                                                      *
- *      none.                                                                                  *
- *                                                                                             *
- * OUTPUT:                                                                                     *
- *      none.                                                                                  *
- *                                                                                             *
- * WARNINGS:                                                                                   *
- *      none.                                                                                  *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   06/09/1995 BRR : Created.                                                                 *
- *=============================================================================================*/
-static void Remove_AI_Players(void)
-{
-	for (int i = 0; i < Houses.Count(); i++) {
-		int aicount = 0;
-		HouseClass * housep = Houses[i];
-		if (housep->IsHuman == false && !housep->Class->IsMultiplayPassive) {
-			aicount++;
-			if (aicount > Session.Options.AIPlayers) {
-				housep->Clobber_All();
-			}
-		}
-	}
-}
-
-
 /// <summary>
 /// Makes up a shortfall of starting locations with open ground, since a map need not declare
 /// a start position for everybody playing.
@@ -2378,68 +2598,194 @@ static void Append_Open_Start_Positions(DynamicVectorClass<Cell> & waypts, int &
 
 
 /// <summary>
-/// Fetches the starting locations a multiplayer game may use, making up any shortfall with
-/// open ground. When identity is kept, each entry is numbered by its waypoint and undeclared
-/// ones are left as holes.
+/// Allies the house with whoever the section names: a spawn house, or every playing house
+/// of a country. One way, as a campaign house record is.
 /// </summary>
-/// <param name="official">Is this one of the maps that shipped with the game?</param>
-/// <param name="keep_identity">Must an entry's place in the list be its waypoint number?</param>
-/// <param name="wanted">How many houses need a position.</param>
-/// <returns>Returns with the list of cells that players may be started from.</returns>
-static DynamicVectorClass<Cell> Build_Start_Waypoint_List(bool official, bool keep_identity, int wanted)
+static void Read_Spawn_House_Allies(CCINIClass const & ini, char const * hname, HouseClass * housep)
 {
-	DynamicVectorClass<Cell> waypts;
-
-	if (keep_identity) {
-		int usable = 0;
-		for (int waycount = 0; waycount < MAX_PLAYERS; waycount++) {
-			bool declared = Scen->Is_Valid_Waypoint(waycount);
-			waypts.Add(declared ? Scen->Get_Waypoint_Cell(waycount) : CELL_NONE);
-			if (declared) {
-				usable++;
-			}
-		}
-
-		/*
-		 * Spots making up a shortfall are appended past the numbered ones, so no number comes to
-		 * mean a place the map never declared.
-		 */
-		Append_Open_Start_Positions(waypts, usable, wanted);
-
-		return(waypts);
+	char buffer[128];
+	if (ini.Get_String(hname, "Allies", "", buffer, sizeof(buffer)) == 0) {
+		return;
 	}
 
-	int num_waypts = 0;
-	for (int i = 0; i < MAX_PLAYERS; i++) {
-		if (Scen->Is_Valid_Waypoint(i)) {
-			num_waypts++;
+	for (char * name = strtok(buffer, ","); name != nullptr; name = strtok(nullptr, ",")) {
+		name = strtrim(name);
+
+		int spawn_waypoint = Spawn_House_Waypoint(name);
+		if (spawn_waypoint != -1) {
+			HouseClass * ally = House_At(spawn_waypoint);
+			if (ally != nullptr && ally != housep) {
+				housep->Make_Ally(ally);
+			}
+			continue;
+		}
+
+		HousesType country = HouseTypeClass::From_Name(name);
+		if (country == HOUSE_NONE) {
+			DebugString("[%s] Allies names %s, which is neither a country nor a spawn house\n", hname, name);
+			continue;
+		}
+		for (int index = 0; index < Houses.Count(); index++) {
+			HouseClass * ally = Houses[index];
+			if (ally != housep && !ally->IsObserver && ally->Class->House == country) {
+				housep->Make_Ally(ally);
+			}
+		}
+	}
+}
+
+
+/// <summary>
+/// Reads what a scenario wrote for each held start position: the base plan the computer
+/// follows when the scenario asks for it, and the alliances the house starts with.
+/// </summary>
+static void Read_Spawn_Houses(CCINIClass const & ini)
+{
+	for (int spawn_waypoint = 0; spawn_waypoint < SPAWN_HOUSE_COUNT; spawn_waypoint++) {
+		char const * section = Spawn_House_Name(spawn_waypoint);
+		HouseClass * housep = House_At(spawn_waypoint);
+		if (housep == nullptr || !ini.Section_Present(section)) {
+			continue;
+		}
+
+		if (Scen->IsMPAIBaseNodes) {
+			housep->Base.Read_INI(ini, section);
+			housep->Base.House = housep;
+			DebugString("House %s at waypoint %d follows the [%s] base plan (%d nodes)\n", (char const *)housep->IniName, spawn_waypoint, section, housep->Base.Nodes.Count());
+		}
+
+		Read_Spawn_House_Allies(ini, section, housep);
+	}
+}
+
+
+/// <summary>
+/// Settles which numbered start position each playing house holds, from the waypoints the map
+/// declares. A house that named a position keeps it while it is free; the rest draw, the first
+/// at random and each after it the position furthest from those already held. A house left
+/// over when the positions run out holds none until the loaded map can offer open ground.
+/// </summary>
+/// <param name="official">Is this one of the maps that shipped with the game?</param>
+/// <remarks>Calling this again leaves every house that already holds a position alone.</remarks>
+static void Assign_Start_Positions(bool official)
+{
+	static_assert(SPAWN_HOUSE_COUNT == MAX_PLAYERS, "a spawn house names a multiplayer start position");
+
+	/*
+	 * Only a playing house holds a position, whatever a launch file wrote for a spectator's seat.
+	 */
+	int playing = 0;
+	for (int index = 0; index < Houses.Count(); index++) {
+		HouseClass * housep = Houses[index];
+		if (housep->IsObserver || housep->Class->IsMultiplayPassive) {
+			housep->SpawnWaypoint = -1;
 		} else {
-			break;
+			playing++;
 		}
 	}
 
 	/*
-	**	Calculate the number of waypoints (as a minimum) that will be lifted from the
-	**	mission file. Bias this number so that only the first 4 waypoints are used
-	**	if there are 4 or fewer players. Unofficial maps will pick from all the
-	**	available waypoints.
-	*/
-	int look_for = std::max(num_waypts, wanted);
-	if (!official) {
-		look_for = MAX_PLAYERS;
+	 * A seat that named a position by number makes every declared waypoint eligible. Otherwise
+	 * an official map is trusted to have placed waypoint 0 onward for as many as play, and
+	 * nothing past that run is drawn from; any other map offers every waypoint it placed.
+	 */
+	bool choices = false;
+	for (int i = 0; i < Session.Players.Count(); i++) {
+		if (!Session.Players[i]->Player.IsObserver && Session.Players[i]->Player.SpawnChoice >= 0) {
+			choices = true;
+		}
 	}
-
-	for (int waycount = 0; waycount < look_for; waycount++) {
-		if (Scen->Is_Valid_Waypoint(waycount)) {
-			waypts.Add(Scen->Get_Waypoint_Cell(waycount));
-			DebugString("Multiplayer start waypoint found at cell %d,%d\n", Scen->Get_Waypoint_Cell(waycount).X, Scen->Get_Waypoint_Cell(waycount).Y);
+	for (int i = 0; i < Session.Computers.Count(); i++) {
+		if (!Session.Computers[i]->Player.IsObserver && Session.Computers[i]->Player.SpawnChoice >= 0) {
+			choices = true;
 		}
 	}
 
-	int usable = waypts.Count();
-	Append_Open_Start_Positions(waypts, usable, look_for);
+	int look_for = MAX_PLAYERS;
+	if (official && !choices) {
+		int placed = 0;
+		while (placed < MAX_PLAYERS && Scen->Is_Valid_Waypoint(placed)) {
+			placed++;
+		}
+		look_for = std::max(placed, playing);
+	}
 
-	return(waypts);
+	bool open[MAX_PLAYERS];
+	bool held[MAX_PLAYERS];
+	for (int spot = 0; spot < MAX_PLAYERS; spot++) {
+		open[spot] = spot < look_for && Scen->Is_Valid_Waypoint(spot);
+		held[spot] = false;
+	}
+
+	/*
+	 * A house that named a position holds it before anybody draws. When two name the same one,
+	 * the first keeps it and the other draws as though it had named none.
+	 */
+	for (int index = 0; index < Houses.Count(); index++) {
+		HouseClass * housep = Houses[index];
+		int spot = housep->SpawnWaypoint;
+		if (spot < 0) {
+			continue;
+		}
+		if (spot < MAX_PLAYERS && open[spot]) {
+			open[spot] = false;
+			held[spot] = true;
+		} else {
+			housep->SpawnWaypoint = -1;
+		}
+	}
+
+	for (int index = 0; index < Houses.Count(); index++) {
+		HouseClass * housep = Houses[index];
+		if (housep->IsObserver || housep->Class->IsMultiplayPassive || housep->SpawnWaypoint >= 0) {
+			continue;
+		}
+
+		bool anyone = false;
+		for (int spot = 0; spot < MAX_PLAYERS; spot++) {
+			anyone = anyone || held[spot];
+		}
+
+		int best = -1;
+		if (!anyone) {
+			int candidates[MAX_PLAYERS];
+			int count = 0;
+			for (int spot = 0; spot < MAX_PLAYERS; spot++) {
+				if (open[spot]) {
+					candidates[count++] = spot;
+				}
+			}
+			if (count > 0) {
+				best = candidates[Random_Pick(0, count - 1)];
+			}
+		} else {
+			int bestvalue = 0;
+			for (int spot = 0; spot < MAX_PLAYERS; spot++) {
+				if (!open[spot]) {
+					continue;
+				}
+				int score = 0;
+				for (int other = 0; other < MAX_PLAYERS; other++) {
+					if (held[other]) {
+						score += Distance(Scen->Get_Waypoint_Cell(spot), Scen->Get_Waypoint_Cell(other));
+					}
+				}
+				if (best == -1 || score > bestvalue) {
+					bestvalue = score;
+					best = spot;
+				}
+			}
+		}
+
+		if (best == -1) {
+			break;
+		}
+
+		housep->SpawnWaypoint = best;
+		open[best] = false;
+		held[best] = true;
+		DebugString("House %s starts at waypoint %d\n", (char const *)housep->IniName, best);
+	}
 }
 
 
@@ -2473,7 +2819,7 @@ static void Create_Units(bool official)
 	Cell centroid;			// centroid of this house's stuff
 	int unit_count = Session.Options.UnitCount;
 
-	if (Session.Options.Bases) {
+	if (Session.Options.Bases && Rule->BaseUnit.Count() > 0) {
 		unit_count--;
 	}
 
@@ -2485,7 +2831,7 @@ static void Create_Units(bool official)
 	for (int u = 0; u < UnitTypes.Count(); u++) {
 		UnitTypeClass * utype = UnitTypes[u];
 		if (utype->IsAllowedToStartInMultiplayer) {
-			if (utype->Fetch_ID() != Rule->BaseUnit->Fetch_ID()) {
+			if (!Rule->BaseUnit.Is_In_List(utype)) {
 				total_cost += utype->Raw_Cost();
 				total_objs++;
 			}
@@ -2503,66 +2849,31 @@ static void Create_Units(bool official)
 	int average_cost = total_objs > 0 ? total_cost / total_objs : 0;
 	int max_value = unit_count * average_cost;
 
+	Assign_Start_Positions(official);
+
 	/*
-	 * A house only asks for a position by number when a launch file chose one for it, which is
-	 * what decides whether the numbers must keep their identity. An observer holds no position.
+	 * A house the numbered positions could not hold starts on open ground, which needs the loaded
+	 * map and so could not be found any earlier. Such a house holds no numbered position.
 	 */
-	bool choices = false;
-	int wanted = Session.Players.Count() + Session.Options.AIPlayers;
+	DynamicVectorClass<Cell> open_ground;
+	int usable = 0;
+	int wanted = 0;
 	for (int index = 0; index < Houses.Count(); index++) {
 		HouseClass * housep = Houses[index];
-		if (housep == NULL) {
-			continue;
-		}
-		if (housep->IsObserver) {
-			wanted--;
-		} else if (housep->SpawnWaypoint >= 0) {
-			choices = true;
+		if (!housep->IsObserver && !housep->Class->IsMultiplayPassive && housep->SpawnWaypoint < 0) {
+			wanted++;
 		}
 	}
+	Append_Open_Start_Positions(open_ground, usable, wanted);
+	int next_open = 0;
 
-	/*
-	**	Build a list of the valid waypoints. This normally shouldn't be
-	**	necessary because the scenario level designer should have assigned
-	**	valid locations to the first N waypoints, but just in case, this
-	**	loop verifies that.
-	*/
-	DynamicVectorClass<Cell> waypts = Build_Start_Waypoint_List(official, choices, wanted);
-	bool taken[MAX_PLAYERS * 2];
-	for (int index = 0; index < ARRAY_SIZE(taken); index++) {
-		taken[index] = choices && index < waypts.Count() && waypts[index] == CELL_NONE;
-	}
-
-	/*
-	 * A house that named a position holds it before anybody draws, so a house that named none
-	 * cannot take it. When two name the same position, the first keeps it.
-	 */
-	int reserved[MAX_PLAYERS * 2];
-	for (int index = 0; index < ARRAY_SIZE(reserved); index++) {
-		reserved[index] = -1;
-	}
-
-	if (choices) {
-		for (int index = 0; index < Houses.Count(); index++) {
-			HouseClass * housep = Houses[index];
-			if (housep == NULL || housep->Class->IsMultiplayPassive || housep->IsObserver) {
-				continue;
-			}
-
-			int spot = housep->SpawnWaypoint;
-			if (spot >= 0 && spot < waypts.Count() && !taken[spot]) {
-				reserved[spot] = index;
-				taken[spot] = true;
-			}
-		}
-	}
+	DynamicVectorClass<Cell> homes;
 
 	/*
 	**	Loop through all houses.  Computer-controlled houses, with Session.Options.Bases
 	**	ON, are treated as though bases are OFF (since we have no base-building
 	**	AI logic.)
 	*/
-	int numtaken = 0;
 	for (HousesType house = HOUSE_FIRST; house < Houses.Count(); house++) {
 
 		/*
@@ -2582,7 +2893,7 @@ static void Create_Units(bool official)
 			UnitTypeClass * utype = UnitTypes[unit];
 			if (utype->IsAllowedToStartInMultiplayer) {
 				if (utype->Level <= hptr->Control.TechLevel && (utype->Ownable & mask)) {
-					if (utype->Fetch_ID() != Rule->BaseUnit->Fetch_ID()) {
+					if (!Rule->BaseUnit.Is_In_List(utype)) {
 						units.Add(utype);
 					}
 				}
@@ -2599,78 +2910,12 @@ static void Create_Units(bool official)
 		}
 
 
-		/*
-		**	Pick the starting location for this house. The first house just picks
-		**	one of the valid locations at random. The other houses pick the furthest
-		**	wapoint from the existing houses.
-		*/
-		if (choices && hptr->SpawnWaypoint >= 0 && hptr->SpawnWaypoint < waypts.Count() &&
-			reserved[hptr->SpawnWaypoint] == (int)house) {
-			centroid = waypts[hptr->SpawnWaypoint];
-			numtaken++;
-		} else if (numtaken == 0) {
-			int pick;
-			do {
-				pick = Random_Pick(0, waypts.Count() - 1);
-			} while (taken[pick]);
-			centroid = waypts[pick];
-			taken[pick] = true;
-			hptr->SpawnWaypoint = pick;
-			numtaken++;
+		if (hptr->SpawnWaypoint >= 0) {
+			centroid = Scen->Get_Waypoint_Cell(hptr->SpawnWaypoint);
 		} else {
-
-			/*
-			**	Set all waypoints to have a score of zero in preparation for giving
-			**	a distance score to all waypoints.
-			*/
-			int score[26];
-			memset(score, '\0', sizeof(score));
-
-			/*
-			**	Scan through all waypoints and give a score as a value of the sum
-			**	of the distances from this waypoint to all taken waypoints.
-			*/
-			for (int index = 0; index < waypts.Count(); index++) {
-
-				/*
-				**	If this waypoint has not already been taken, then accumulate the
-				**	sum of the distance between this waypoint and all other taken
-				**	waypoints.
-				*/
-				if (!taken[index]) {
-					for (int trypoint = 0; trypoint < waypts.Count(); trypoint++) {
-
-						if (taken[trypoint] && waypts[trypoint] != CELL_NONE) {
-							score[index] += Distance(waypts[index], waypts[trypoint]);
-						}
-					}
-				}
-			}
-
-			/*
-			**	Now find the waypoint with the largest score. This waypoint is the one
-			**	that is furthest from all other taken waypoints.
-			*/
-			int best = 0;
-			int bestvalue = 0;
-			for (int searchindex = 0; searchindex < waypts.Count(); searchindex++) {
-				if (waypts[searchindex] == CELL_NONE) {
-					continue;
-				}
-				if (score[searchindex] > bestvalue || bestvalue == 0) {
-					bestvalue = score[searchindex];
-					best = searchindex;
-				}
-			}
-
-			/*
-			**	Assign this best position to the house.
-			*/
-			centroid = waypts[best];
-			taken[best] = true;
-			hptr->SpawnWaypoint = best;
-			numtaken++;
+			centroid = open_ground[next_open++];
 		}
+		homes.Add(centroid);
 
 		/*
 		**	Assign the center of this house to the waypoint location.
@@ -2689,8 +2934,9 @@ static void Create_Units(bool official)
 			**	- Attach a flag to it for capture-the-flag mode
 			*/
 //			scaleval = 1;
-			TechnoClass * obj = new UnitClass(Rule->BaseUnit, hptr);
-			if (!obj->Unlimbo(Coord(centroid))) {
+			UnitTypeClass const * baseunit = hptr->Get_Preferred(Rule->BaseUnit);
+			TechnoClass * obj = baseunit != NULL ? new UnitClass(baseunit, hptr) : NULL;
+			if (obj != NULL && !obj->Unlimbo(Coord(centroid))) {
 				if (!Scan_Place_Object(obj, centroid)) {
 					delete obj;
 					obj = NULL;
@@ -2701,6 +2947,9 @@ static void Create_Units(bool official)
 				hptr->FlagLocation = NULL;
 				if (Scen->Special.IsCaptureTheFlag) {
 					hptr->Flag_Attach((UnitClass *)obj, true);
+				}
+				if (Session.Options.AutoDeployMCV) {
+					obj->Set_Mission(MISSION_UNLOAD);
 				}
 			}
 		} else {
@@ -2776,19 +3025,11 @@ static void Create_Units(bool official)
 		HouseClass * hptr = Houses[house];
 		if (hptr == NULL || !hptr->IsObserver) continue;
 
-		DynamicVectorClass<Cell> homes;
-		for (int index = 0; index < waypts.Count(); index++) {
-			if (taken[index] && waypts[index] != CELL_NONE) {
-				homes.Add(waypts[index]);
-			}
-		}
-
 		centroid = Cell(Map.MapRect.X + Map.MapRect.Width / 2, Map.MapRect.Y + Map.MapRect.Height / 2);
 		if (homes.Count() > 0) {
 			centroid = homes[Random_Pick(0, homes.Count() - 1)];
 		}
 
-		hptr->SpawnWaypoint = -1;
 		hptr->Center = Coord(centroid);
 	}
 	DebugString("Finished unit generation. Random number is %d\n", Random_Pick(0, 65535));
@@ -3089,18 +3330,17 @@ static Cell const Clip_Move(Cell const & cell, FacingType facing, int dist)
 /// The elapsed mission clock is halted across the write so that the time recorded is the
 /// one the player will be given back when the game is resumed.
 /// </summary>
-void ScenarioClass::Save(IStream * stream) const
+void ScenarioClass::Save(SaveStreamClass & stream) const
 {
 	DebugString("Scenario Save: ElapsedTimer = %d\n", (int)ElapsedTimer);
 	ElapsedTimer.Stop();
 
-	SaveStreamClass savestream(stream, SaveStreamClass::MODE_SAVE);
 
 	/*
 	 * One member list serves both directions, so it cannot be declared const even though
 	 * writing changes nothing.
 	 */
-	const_cast<ScenarioClass *>(this)->Serialize(savestream);
+	const_cast<ScenarioClass *>(this)->Serialize(stream);
 
 	ElapsedTimer.Start();
 }
@@ -3111,13 +3351,12 @@ void ScenarioClass::Save(IStream * stream) const
 /// The elapsed mission clock is halted across the read for the same reason it is halted
 /// across the write, so that it does not advance over the value coming back in.
 /// </summary>
-void ScenarioClass::Load(IStream * stream)
+void ScenarioClass::Load(SaveStreamClass & stream)
 {
 	ElapsedTimer.Stop();
 
-	SaveStreamClass savestream(stream, SaveStreamClass::MODE_LOAD);
-	savestream.Set_Context("ScenarioClass");
-	Serialize(savestream);
+	stream.Set_Context("ScenarioClass");
+	Serialize(stream);
 
 	ElapsedTimer.Start();
 	DebugString("Scenario Load: ElapsedTimer = %d\n", (int)ElapsedTimer);
@@ -3161,6 +3400,10 @@ void ScenarioClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(BriefingText);
 	stream.Serialize(TransitTheme);
 	stream.Serialize(PlayerHouse);
+	stream.Serialize(PlayerSide);
+	stream.Serialize(LoadScreen);
+	stream.Serialize(LoadScreenX);
+	stream.Serialize(LoadScreenY);
 	stream.Serialize(CarryOverPercent);
 	stream.Serialize(CarryOverCap);
 	stream.Serialize(Percent);
@@ -3185,7 +3428,6 @@ void ScenarioClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(IsMoneyTiberium);
 	stream.Serialize(IsTiberiumDeathToVisceroid);
 	stream.Serialize(IsIgnoreGlobalAITriggers);
-	stream.Serialize(IsGDI);
 	stream.Serialize(IsMultiplayerOnly);
 	stream.Serialize(IsRandom);
 	stream.Serialize(IsCrateBeenPickedUp);
@@ -3215,6 +3457,18 @@ void ScenarioClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(SpeechSide);
 	stream.Serialize(Stage);
 	stream.Serialize(IsInputLocked);
+	stream.Serialize(IsMPAIBaseNodes);
+	stream.Serialize(SourceFile);
+}
+
+
+/// <summary>
+/// Does the computer build as it does in a campaign: from the scenario's base plan, at the
+/// plan's cells, with no skirmish power or money interventions?
+/// </summary>
+bool ScenarioClass::Is_Campaign_Base_AI(void) const
+{
+	return(Session.Type == GAME_NORMAL || IsMPAIBaseNodes);
 }
 
 
@@ -3479,8 +3733,8 @@ bool ScenarioClass::Write_Local_INI(CCINIClass & ini) const
 	int length = ARRAY_SIZE(LocalFlags);
 	for (int index = 0; index < length; index++) {
 		if (LocalFlags[index].VariableName[0] != '\0') {
-			wsprintf(index_buffer, "%d", index);
-			wsprintf(buffer, "%s,%d", LocalFlags[index].VariableName, LocalFlags[index].Value ? 1 : 0);
+			snprintf(index_buffer, sizeof(index_buffer), "%d", index);
+			snprintf(buffer, sizeof(buffer), "%s,%d", LocalFlags[index].VariableName, LocalFlags[index].Value ? 1 : 0);
 			ini.Put_String(SECTION, index_buffer, buffer);
 		}
 	}
@@ -3569,6 +3823,7 @@ bool ScenarioClass::Read_INI(CCINIClass const & ini)
 	IsTibGrowth = ini.Get_Bool(BASIC, "TiberiumGrowthEnabled", IsTibGrowth);
 	IsVeinGrowth = ini.Get_Bool(BASIC, "VeinGrowthEnabled", IsVeinGrowth);
 	IsIceGrowth = ini.Get_Bool(BASIC, "IceGrowthEnabled", IsIceGrowth);
+	IsMPAIBaseNodes = ini.Get_Bool(BASIC, "UseMPAIBaseNodes", IsMPAIBaseNodes);
 	IsTiberiumDeathToVisceroid = ini.Get_Bool(BASIC, "TiberiumDeathToVisceroid", IsTiberiumDeathToVisceroid);
 	IsFreeRadar = ini.Get_Bool(BASIC, "FreeRadar", IsFreeRadar);
 	Home = ini.Get_Int(BASIC, "HomeCell", Home);
@@ -3701,6 +3956,7 @@ bool ScenarioClass::Write_INI(CCINIClass & ini, bool mplayer) const
 	ini.Put_Bool(BASIC, "TiberiumGrowthEnabled", IsTibGrowth);
 	ini.Put_Bool(BASIC, "VeinGrowthEnabled", IsVeinGrowth);
 	ini.Put_Bool(BASIC, "IceGrowthEnabled", IsIceGrowth);
+	ini.Put_Bool(BASIC, "UseMPAIBaseNodes", IsMPAIBaseNodes);
 	ini.Put_Bool(BASIC, "TiberiumDeathToVisceroid", IsTiberiumDeathToVisceroid);
 	ini.Put_Bool(BASIC, "FreeRadar", IsFreeRadar);
 
@@ -3783,6 +4039,7 @@ void ScenarioClass::Compute_CRC(CRCEngine & crc) const
 	crc(TransitTheme);
 	crc(CarryOverPercent);
 	crc(IsMultiplayerOnly);
+	crc(IsMPAIBaseNodes);
 	crc(IsInheritTimer);
 	crc(CarryOverCap / 100);
 	crc(BridgeCount);
@@ -3918,21 +4175,31 @@ bool ScenarioClass::Is_Valid_Waypoint(WAYPOINT waypoint) const
 
 /// <summary>
 /// Reads the waypoint list from an INI database.
-/// The cells named are also flagged as waypoints so that the editor can display them.
+/// No cell is touched, so this may run before the map itself has been read.
 /// </summary>
 void ScenarioClass::Read_Waypoints(CCINIClass const & ini)
 {
 	char buf[20];
 
 	for (int i = 0; i < WAYPT_COUNT; i++) {
-		wsprintf(buf, "%d", i);
+		snprintf(buf, sizeof(buf), "%d", i);
 		int val = ini.Get_Int("Waypoints", buf, 0);
 		if (val == 0) {
 			Waypoint[i] = CELL_NONE;
 		} else {
 			Waypoint[i] = Cell(val % 1000, val / 1000);
 		}
+	}
+}
 
+
+/// <summary>
+/// Flags the cell under every placed waypoint so that the editor can display them.
+/// </summary>
+/// <remarks>Call this once the map's cells exist, since initializing them clears the flags.</remarks>
+void ScenarioClass::Flag_Waypoint_Cells(void)
+{
+	for (int i = 0; i < WAYPT_COUNT; i++) {
 		if (Is_Valid_Waypoint(i)) {
 			Get_Waypoint_CellClass(i)->IsWaypoint = 1;
 		}
@@ -3952,7 +4219,7 @@ void ScenarioClass::Write_Waypoints(CCINIClass & ini) const
 	ini.Clear(WAYNAME);
 	for (int i = 0; i < WAYPT_COUNT; i++) {
 		if (Waypoint[i] != CELL_NONE) {
-			wsprintf(entry, "%d", i);
+			snprintf(entry, sizeof(entry), "%d", i);
 			ini.Put_Int(WAYNAME, entry, Waypoint[i].Y * 1000 + Waypoint[i].X);
 		}
 	}

@@ -780,6 +780,13 @@ class BuildingTypeClass : public TechnoTypeClass
 		bool IsBaseDefense;
 
 		/*
+		 * If this building's cameo sorts with the base defenses on the sidebar, then this
+		 * flag will be true. It follows IsBaseDefense unless the rules give it a value of
+		 * its own.
+		 */
+		bool IsSortCameoAsBaseDefense;
+
+		/*
 		 * This is the radius, expressed in cells, of the field a cloak generator projects
 		 * or a sensor array watches. The largest value among all building types decides how
 		 * big the shared cloaking surface must be.
@@ -815,6 +822,27 @@ class BuildingTypeClass : public TechnoTypeClass
 		bool IsThreatRatingNode;
 
 		/*
+		 * This is the sum handed to whoever captures the building off a house that takes no
+		 * part in the contest, paid only on the first such capture if it is a one-time bonus.
+		 */
+		int ProduceCashStartup;
+		bool IsProduceCashStartupOneTime;
+
+		/*
+		 * This is the sum paid to the owner every delay, taken from them when it is negative.
+		 * A delay of zero produces nothing rather than paying on every frame.
+		 */
+		int ProduceCashAmount;
+		int ProduceCashDelay;
+
+		/*
+		 * This is the total the building will ever move, counted without regard to sign and
+		 * unlimited when zero.
+		 */
+		int ProduceCashBudget;
+		bool IsProduceCashResetOnCapture;
+
+		/*
 		 * This is the theater qualified name of the building's shape file, recorded as the
 		 * art is resolved. A type that defers loading its image uses this to find the file
 		 * the first time the shape is really needed.
@@ -827,7 +855,7 @@ class BuildingTypeClass : public TechnoTypeClass
 		BuildingTypeClass(char const * ininame = NULL);
 		virtual ~BuildingTypeClass() override;
 
-		virtual HRESULT STDMETHODCALLTYPE GetClassID(CLSID * retval) override;
+		virtual ClassID Class_ID(void) const override;
 
 		virtual void Serialize(SaveStreamClass & stream) override;
 		virtual void Post_Load(void) override;
@@ -850,6 +878,7 @@ class BuildingTypeClass : public TechnoTypeClass
 		virtual bool Read_INI(CCINIClass const & ini) override;
 		int Flush_For_Placement(Cell const & cell, HouseClass * house) const;
 		virtual int Cost_Of(HouseClass * house = NULL) const override;
+		bool Is_Pad_Aircraft_Dock(void) const;
 		virtual Coord const Coord_Fixup(Coord const & coord) const override;
 		virtual int Max_Pips(void) const override;
 		virtual Point3D Pixel_Dimensions(void) const override;

@@ -13,8 +13,9 @@
 
 #include "_map.h"
 #include "_surface.h"
-#include "dsaudio.h"
+#include "audio/audioengine.h"
 #include "dsurface.h"
+#include "movieskip.h"
 #include "surface.h"
 #include "theme.h"
 #include "vqa.h"
@@ -84,6 +85,7 @@ void Movie_Blit_To_Screen(void)
 			CurrentVQ->InitialRect
 		);
 
+		MovieSkip::Draw_Overlay(*VisibleSurface, area);
 		Video_Present_If_Dirty();
 	}
 }
@@ -116,7 +118,7 @@ VQHandle * Movie_Create(char const * name, Surface * surface, Rect rect1, Rect r
 		}
 		int flags = 0;
 
-		if (!Audio_Available()) {
+		if (!AudioEngine.Is_Available()) {
 			Set_Option(OPTION_NO_AUDIO);
 		}
 
@@ -132,7 +134,7 @@ VQHandle * Movie_Create(char const * name, Surface * surface, Rect rect1, Rect r
 			callback = Movie_Blit_To_Screen;
 		}
 
-		handle->VQA = new VQAClass(name, flags, Movie_Lock_Surface, Movie_Unlock_Surface, callback);
+		handle->VQA = new VQAClass(name, flags, Movie_Lock_Surface, Movie_Unlock_Surface, callback, MovieSkip::Idle);
 		if (handle->VQA == NULL) {
 			delete handle;
 			return(NULL);

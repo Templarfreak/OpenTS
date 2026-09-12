@@ -127,6 +127,7 @@
 #include "swizzle.h"
 #include "tactical.h"
 #include "tag.h"
+#include "ambient.h"
 #include "tagtype.h"
 #include "tracker.h"
 
@@ -188,6 +189,7 @@ ObjectClass::ObjectClass(void) :
 /// </summary>
 ObjectClass::~ObjectClass(void)
 {
+	AmbientSounds.Detach(this);
 	ObjectsToDelete.Delete(this);
 	Objects.Delete(this);
 	ObjectPtrTracker.Delete(this);
@@ -1319,6 +1321,7 @@ bool ObjectClass::Limbo(void)
 		Unselect();
 
 		Detach_All();
+		AmbientSounds.Detach(this);
 
 		if (RTTI != RTTI_BUILDING || ((BuildingClass *)this)->Class->ToTile == NULL) {
 			Mark(MARK_UP);
@@ -1558,7 +1561,7 @@ void ObjectClass::Detach_All(bool all)
  * HISTORY:                                                                                    *
  *   09/24/1994 JLB : Created.                                                                 *
  *=============================================================================================*/
-RadioMessageType ObjectClass::Receive_Message(RadioClass *, RadioMessageType message, int & )
+RadioMessageType ObjectClass::Receive_Message(RadioClass *, RadioMessageType message, intptr_t & )
 {
 	assert(this != NULL);
 

@@ -1,6 +1,6 @@
 ---
 title: Project status
-summary: OpenTS provides playable releases; campaigns, skirmish, saving, and LAN play are functional.
+summary: OpenTS provides playable releases and nightly developer builds; campaigns, skirmish, saving, and LAN play are functional.
 category: getting-started
 source_files:
   - README.md
@@ -31,8 +31,8 @@ original game assets; an existing Tiberian Sun installation provides them.
 ## Toolchain and targets
 
 - CMake with Visual Studio 2022
-- 32-bit Windows
+- 32-bit and 64-bit Windows
 - C++20
 - Debug and Release configurations
 
-Both configurations compile with the documented toolchain.
+Every platform and configuration compiles with the documented toolchain.

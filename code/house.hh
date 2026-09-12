@@ -14,7 +14,7 @@
 #pragma once
 
 
-#define HOUSE_NAME_MAX	20
+#define HOUSE_NAME_MAX	64
 
 /**********************************************************************
 **	The houses that can be played are listed here. Each has their own
@@ -29,5 +29,12 @@ enum HousesType {
 	HOUSE_MUTANT,
 
 	HOUSE_COUNT,
-	HOUSE_FIRST=0
+	HOUSE_FIRST=0,
+
+	// Whoever starts at a numbered position, as Tiberian Sun patches and Yuri's Revenge each
+	// number it; no house type is ever registered under these values.
+	HOUSE_SPAWN_FIRST=50,
+	HOUSE_SPAWN_LAST=57,
+	HOUSE_PLAYER_AT_FIRST=4475,
+	HOUSE_PLAYER_AT_LAST=4482
 };

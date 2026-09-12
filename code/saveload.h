@@ -13,24 +13,53 @@
 
 #pragma once
 
-#include <cstdio>
+#include "persist.h"
 
-struct IStream;
+#include <cstdio>
+#include <memory>
+
+class SaveStreamClass;
 class SaveVersionInfo;
+struct ILocomotion;
 
 /*
 **	SAVELOAD.CPP
 */
-int Load_Misc_Values(IStream * stream);
-int Save_Misc_Values(IStream * stream);
+int Load_Misc_Values(SaveStreamClass & stream);
+int Save_Misc_Values(SaveStreamClass & stream);
+
+// A loaded object is handed back owned; one that belongs to a heap is released there by
+// the caller that puts it in one. docs/SAVE-FORMAT.md records what a record holds.
+bool Save_Object(SaveStreamClass & stream, IPersistent * object);
+bool Save_Object(SaveStreamClass & stream, ILocomotion * locomotion);
+std::unique_ptr<IPersistent> Load_Object(SaveStreamClass & stream,
+	bool (*accepts)(IPersistent const * object) = nullptr);
+
+/// <summary>
+/// Loads the record next in the stream and requires it to be of the class asked for.
+/// </summary>
+/// <returns>The object, owned by the caller, or nothing with the stream failed when the
+/// record holds another class. A record of the wrong class is destroyed before it can take
+/// its place, so the test happens while the object is still only the reader's.</returns>
+template<class T>
+std::unique_ptr<T> Load_Object_As(SaveStreamClass & stream)
+{
+	std::unique_ptr<IPersistent> object = Load_Object(stream, [](IPersistent const * candidate) {
+		return(dynamic_cast<T const *>(candidate) != nullptr);
+	});
+
+	// The record was accepted only if it holds a T, so this cast answers for what was loaded.
+	T * const wanted = dynamic_cast<T *>(object.get());
+	if (wanted != nullptr) {
+		object.release();
+	}
+	return(std::unique_ptr<T>(wanted));
+}
+
 bool Get_Savefile_Info(char const * name, SaveVersionInfo * info);
+bool Save_Game(const char *file_name, char const * descr);
 bool Load_Game(const char *file_name);
 bool Reconcile_Players(void);
-bool Request_Save_Game(char const * file_name, char const * descr);
-void Process_Pending_Save_Game(void);
-void Reset_Multiplayer_Save_State(void);
 void Print_Heap_CRCs(FILE * fp);
-void Disable_Multiplayer_Saving(void);
-bool Is_Multiplayer_Saving_Allowed(void);
 
 extern unsigned int ExpectedGameVersion;

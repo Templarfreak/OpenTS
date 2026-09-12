@@ -42,7 +42,6 @@
  *   TriggerClass::~TriggerClass -- Destructor for trigger objects.                            *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-#define INCLUDE_COM
 #include "always.h"
 
 #include "trigger.h"
@@ -288,12 +287,16 @@ bool TriggerClass::Should_Spring(TEventType event, ObjectClass * object, bool fo
 		return(false);
 	}
 
+	if (Class->House == NULL) {
+		return(false);
+	}
+
 	bool all_sprung = true;
 	if (!forced) {
 		TEventClass * tevent = Class->FirstEvent;
 		int index = 0;
 		while (tevent != NULL) {
-			if (Is_Event_Tripped(index) || tevent->operator()(event, House_From_HousesType((HousesType)Class->House->HeapID), object, Timer, persistent, source)) {
+			if (Is_Event_Tripped(index) || tevent->operator()(event, Class->House, object, Timer, persistent, source)) {
 				if (persistent) {
 					if (tevent->Is_Time_Based() && tevent->Is_To_Flag_As_Tripped()) {
 						Flag_Event_Tripped(index);
@@ -329,10 +332,14 @@ bool TriggerClass::Spring(ObjectClass * object, Cell cell)
 		return(false);
 	}
 
+	if (Class->House == NULL) {
+		return(false);
+	}
+
 	bool done = false;
 	TActionClass * taction = Class->FirstAction;
 	while (taction != NULL) {
-		if (taction->operator()(House_From_HousesType((HousesType)Class->House->HeapID), object, this, cell)) {
+		if (taction->operator()(Class->House, object, this, cell)) {
 			done = true;
 		}
 		taction = taction->Next;
@@ -492,18 +499,9 @@ void TriggerClass::Compute_CRC(CRCEngine & crc) const
 }
 
 
-/// <summary>
-/// Fetches the class identifier of this object.
-/// This routine is part of the persistence support. The save game system uses the
-/// identifier to work out what kind of object to build when the stream is read back in.
-/// </summary>
-/// <param name="retval">Pointer to the identifier to fill in.</param>
-/// <returns>Returns with S_OK, or E_POINTER if no destination was supplied.</returns>
-HRESULT STDMETHODCALLTYPE TriggerClass::GetClassID(CLSID * retval)
+ClassID TriggerClass::Class_ID(void) const
 {
-	if (retval == NULL) return(E_POINTER);
-	*retval = CLSID_TriggerClass;
-	return(S_OK);
+	return(ClassID_TriggerClass);
 }
 
 

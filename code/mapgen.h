@@ -15,8 +15,6 @@
 
 class CellClass;
 class MapPreviewClass;
-struct CellNode;
-template<typename T> class PriorityQueueClass;
 
 #define RANDOM_MAP_FILE_NAME "RandMap.Sed"
 
@@ -343,6 +341,12 @@ class MapSeedClass : public LoadOptionsClass
 		virtual bool Delete_File(const char * file_name) override;
 		virtual bool Read_File(FileEntryClass * entry, WIN32_FIND_DATAA * ff) override;
 
+	protected:
+
+		virtual int Save_Confirmation(void) const override;
+
+	public:
+
 		/*
 		 * Dialog interaction.
 		 */
@@ -531,7 +535,7 @@ class MapGeneratorClass
 		bool Grow_Water_Region(int region_id, float spread_scale, Rect const & bounds, Cell const & origin, bool claim_frontier);
 		bool Place_Waterfall(int region_id, Cell const & cell1, Cell const & cell2, int direction, bool & placed, double & head_x, double & head_y);
 		int Get_Target_Water_Amount(void);
-		void Generate_Swamp(DynamicVectorClass<Cell> &cells, int last, CellNode *nodes, PriorityQueueClass<CellNode> *queue);
+		void Generate_Swamp(DynamicVectorClass<Cell> & cells, int last);
 		void Seed_Ice(DynamicVectorClass<Cell> &cells, IsometricTileType last);
 		void Smooth_Ice(void);
 

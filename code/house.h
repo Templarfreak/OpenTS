@@ -69,6 +69,7 @@ class TriggerClass;
 class FootClass;
 class FactoryClass;
 class HouseTypeClass;
+class SideClass;
 class ObjectClass;
 class TechnoClass;
 class TagClass;
@@ -734,13 +735,11 @@ class HouseClass : public AbstractClass
 		HouseClass(HouseTypeClass const * type = NULL);
 		virtual ~HouseClass(void) override;
 
-		virtual HRESULT STDMETHODCALLTYPE GetClassID(CLSID * retval) override;
-		virtual HRESULT STDMETHODCALLTYPE Load(IStream * stream) override;
+		virtual ClassID Class_ID(void) const override;
+		virtual bool Load(SaveStreamClass & stream) override;
 
 		virtual void Serialize(SaveStreamClass & stream) override;
 
-		virtual ULONG STDMETHODCALLTYPE AddRef(void) override;
-		virtual ULONG STDMETHODCALLTYPE Release(void) override;
 
 		int Available_Money(void);
 		int Available_Storage(void);
@@ -813,7 +812,14 @@ class HouseClass : public AbstractClass
 		void Mark_Scouted(HouseClass const * house);
 
 		void Begin_Construction(void);
-		BuildingTypeClass const * Get_First_Ownable(DynamicVectorClass<BuildingTypeClass const *> const & owned) const;
+		void Begin_Construction(Cell const & center);
+		int Acted_Mask(void) const;
+		SideClass const * Acted_Side(void) const;
+		bool Is_Acted_Tower(BuildingTypeClass const * type) const;
+		template<typename T> T const * Get_First_Acted(DynamicVectorClass<T const *> const & list) const;
+		template<typename T> T const * Get_Preferred(DynamicVectorClass<T const *> const & list) const;
+		template<typename T> bool Owns_Any(CounterClass const & tally, TypeList<T const *> const & list) const;
+		template<typename T> int Count_Owned(CounterClass const & tally, TypeList<T const *> const & list) const;
 		bool AI_Has_Prerequisites(TechnoTypeClass const * type, DynamicVectorClass<BuildingTypeClass const *> & owned, int ownedcount) const;
 		void Make_Base_Nodes(void);
 		static int Base_Cell_Weight_By_Distance(HouseClass const & house, Cell const & cell, int tie_breaker, int context);
@@ -1052,8 +1058,6 @@ class HouseClass : public AbstractClass
 			BuildChoiceClass(UrgencyType urgency=URGENCY_NONE, StructType structure=STRUCT_NONE) : Urgency(urgency), Structure(structure) {};
 			bool operator==(BuildChoiceClass const & ) const {return(false);}
 			bool operator!=(BuildChoiceClass const & ) const {return(true);}
-			HRESULT Save(IStream *) const {return(S_OK);};
-			HRESULT Load(IStream *) {return(S_OK);};
 		};
 
 		static DynamicVectorClass<BuildChoiceClass *> BuildChoice;
@@ -1122,4 +1126,58 @@ class HouseClass : public AbstractClass
 		int PowerSurplus;
 };
 
+
+// The caller's tally decides whether a type still under construction counts.
+template<typename T>
+inline bool HouseClass::Owns_Any(CounterClass const & tally, TypeList<T const *> const & list) const
+{
+	for (int index = 0; index < list.Count(); index++) {
+		if (tally.Value(list[index]->HeapID) > 0) {
+			return(true);
+		}
+	}
+	return(false);
+}
+
+
+template<typename T>
+inline int HouseClass::Count_Owned(CounterClass const & tally, TypeList<T const *> const & list) const
+{
+	int count = 0;
+	for (int index = 0; index < list.Count(); index++) {
+		count += tally.Value(list[index]->HeapID);
+	}
+	return(count);
+}
+
+
+// The first entry the country this house builds for may own, or NULL when it may own none.
+template<typename T>
+inline T const * HouseClass::Get_First_Acted(DynamicVectorClass<T const *> const & list) const
+{
+	int mask = Acted_Mask();
+	for (int index = 0; index < list.Count(); index++) {
+		if (mask & list[index]->Ownable) {
+			return(list[index]);
+		}
+	}
+	return(NULL);
+}
+
+
+// For a role that must be priced or queued: the acted entry, else entry 0, else NULL.
+template<typename T>
+inline T const * HouseClass::Get_Preferred(DynamicVectorClass<T const *> const & list) const
+{
+	T const * acted = Get_First_Acted(list);
+	if (acted != NULL) {
+		return(acted);
+	}
+	return(list.Count() > 0 ? list[0] : NULL);
+}
+
+
 HouseClass * House_From_HousesType(HousesType house);
+HouseClass * House_At(int spawn_waypoint);
+HouseClass * House_From_Name(char const * name);
+bool House_Matches(HouseClass const * house, HousesType selector);

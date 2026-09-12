@@ -61,12 +61,15 @@
 #include "options.h"
 
 #include "_command.h"
+#include "_deploymentconfig.h"
 #include "_map.h"
 #include "_rules.h"
+#include "audio/audioengine.h"
 #include "ccfile.h"
 #include "ccrand.h"
 #include "command.h"
 #include "dbgprint.h"
+#include "deploymentconfig.h"
 #include "dsurface.h"
 #include "globals.h"
 #include "init.h"
@@ -119,9 +122,11 @@ OptionsClass::OptionsClass(void) :
 	IsScoreShuffle(false),
 	IsSidebarOnRight(true),
 	SidebarCameoText(true),
+	SidebarSorting(true),
 	ActionLines(true),
 	ToolTips(true),
-	TextBackgroundColor(0),
+	TextBackgroundColor(12),
+	AutoSaveInterval(10800),
 	ScreenWidth(-1),
 	ScreenHeight(-1),
 	ScrollMethod(0),
@@ -264,6 +269,8 @@ void OptionsClass::Set_Score_Volume(float volume, bool feedback)
 void OptionsClass::Set_Sound_Volume(float volume, bool feedback)
 {
 	SoundVolume = std::min(volume, 1.0f);
+	AudioEngine.Set_Group_Gain(AUDIO_GROUP_SFX, SoundVolume);
+	AudioEngine.Set_Group_Gain(AUDIO_GROUP_MOVIE, SoundVolume);
 	if (feedback) {
 		Sound_Effect(Rule->GenericBeep);
 	}
@@ -351,7 +358,7 @@ static char const * Scale_Mode_Name(int mode)
  *=============================================================================================*/
 void OptionsClass::Load_Settings(void)
 {
-	DebugString("--------- Loading SUN.INI settings ---------------\n");
+	DebugString("--------- Loading %s settings ---------------\n", DeploymentConfig.SettingsFile.c_str());
 
 	/*
 	**	Read in the Options values
@@ -384,6 +391,9 @@ void OptionsClass::Load_Settings(void)
 	SidebarCameoText = ConfigINI.Get_Bool("Options", "SidebarCameoText", SidebarCameoText);
 	DebugString("Sidebar Text is %s\n", SidebarCameoText == true ? "ON" : "OFF");
 
+	SidebarSorting = ConfigINI.Get_Bool("Options", "SidebarSorting", SidebarSorting);
+	DebugString("Sidebar Sorting is %s\n", SidebarSorting == true ? "ON" : "OFF");
+
 	ActionLines = ConfigINI.Get_Bool("Options", "UnitActionLines", ActionLines);
 	DebugString("ActionLines are %s\n", ActionLines == true ? "ON" : "OFF");
 
@@ -392,6 +402,9 @@ void OptionsClass::Load_Settings(void)
 
 	TextBackgroundColor = ConfigINI.Get_Int("Options", "TextBackgroundColor", TextBackgroundColor);
 	DebugString("TextBackgroundColor = %d\n", TextBackgroundColor);
+
+	AutoSaveInterval = ConfigINI.Get_Int("Options", "AutoSaveInterval", AutoSaveInterval);
+	DebugString("AutoSaveInterval = %d\n", AutoSaveInterval);
 
 	ScreenWidth = ConfigINI.Get_Int("Video", "ScreenWidth", ScreenWidth);
 	ScreenHeight = ConfigINI.Get_Int("Video", "ScreenHeight", ScreenHeight);
@@ -445,7 +458,7 @@ void OptionsClass::Load_Settings(void)
  *=============================================================================================*/
 void OptionsClass::Save_Settings (void)
 {
-	CCFileClass file(CONFIG_FILE_NAME);
+	CCFileClass file(DeploymentConfig.SettingsFile.c_str());
 
 	DebugString("Saving game settings\n");
 
@@ -459,9 +472,11 @@ void OptionsClass::Save_Settings (void)
 	ConfigINI.Put_Bool("Options", "AutoScroll", AutoScroll);
 	ConfigINI.Put_Int("Options", "DetailLevel", DetailLevel);
 	ConfigINI.Put_Bool("Options", "SidebarCameoText", SidebarCameoText);
+	ConfigINI.Put_Bool("Options", "SidebarSorting", SidebarSorting);
 	ConfigINI.Put_Bool("Options", "UnitActionLines", ActionLines);
 	ConfigINI.Put_Bool("Options", "ToolTips", ToolTips);
 	ConfigINI.Put_Int("Options", "TextBackgroundColor", TextBackgroundColor);
+	ConfigINI.Put_Int("Options", "AutoSaveInterval", AutoSaveInterval);
 	ConfigINI.Put_Int("Video", "ScreenWidth", ScreenWidth);
 	ConfigINI.Put_Int("Video", "ScreenHeight", ScreenHeight);
 	ConfigINI.Put_Bool("Video", "StretchMovies", StretchMovies);
@@ -592,18 +607,18 @@ int OptionsClass::Normalize_Volume(int volume) const
 /// KEYBOARD.INI; canceling puts the previous assignments back.
 /// </summary>
 /// <returns>Returns with TRUE if the message was consumed by this dialog.</returns>
-BOOL CALLBACK Hotkey_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
+INT_PTR CALLBACK Hotkey_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
 	char buffer[64];
 	int * retval;
 	static int current_selection = -1;
 
-	int result = OwnerDraw::Default_Dialog_Proc(window, message, wparam, lparam);
+	INT_PTR result = OwnerDraw::Default_Dialog_Proc(window, message, wparam, lparam);
 	if (result) {
 		return(result);
 	}
 
-	retval = (int *)GetWindowLong(window, DWL_USER);
+	retval = (int *)GetWindowLongPtr(window, DWLP_USER);
 
 	switch (message) {
 		case WM_COMMAND:
@@ -809,7 +824,7 @@ bool OptionsClass::Hotkey_Dialog(void)
 	handle = OwnerDraw::Begin_Dialog(IDD_OPT_KEYBOARD, Hotkey_Dialog_Proc);
 
 	if (handle != NULL) {
-		SetWindowLong(handle, DWL_USER, (LONG)&res);
+		SetWindowLongPtr(handle, DWLP_USER, (LONG_PTR)&res);
 		OwnerDraw::Display_Dialog(handle);
 
 		while (res < 0) {

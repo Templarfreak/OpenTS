@@ -95,7 +95,6 @@
  *   UnitClass::~UnitClass -- Destructor for unit objects.                                     *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-#define INCLUDE_COM
 #include "always.h"
 
 #include "unit.h"
@@ -121,13 +120,13 @@
 #include "bullettype.h"
 #include "ccrand.h"
 #include "cell.h"
+#include "classids.h"
 #include "combat.h"
 #include "conquer.h"
 #include "draw.h"
 #include "fog.h"
 #include "house.h"
 #include "houstype.h"
-#include "ilocos.h"
 #include "incdec.h"
 #include "infantry.h"
 #include "infatype.h"
@@ -223,7 +222,7 @@ UnitClass::UnitClass(UnitTypeClass const * type, HouseClass * house) :
 	SecondaryFacing.Set(PrimaryFacing.Current());
 
 	if (Class != NULL) {
-		Locomotion = ILocomotionPtr(Class->Locomotor, NULL, CLSCTX_ALL);
+		Locomotion = Create_Locomotor(Class->Locomotor);
 		Locomotion->Link_To_Object(this);
 	}
 
@@ -484,7 +483,7 @@ void UnitClass::AI(void)
 
 	FiringSyncDelay = std::max(-1, FiringSyncDelay - 1);
 
-	if (Class->DeploysInto == Rule->BuildConst[0]) {
+	if (Rule->BuildConst.Is_In_List(Class->DeploysInto)) {
 		if (House->IsBaseBuilding && !House->Is_Human_Player()) {
 			if (Session.Type != GAME_NORMAL && House->ConYards.Count() == 0) {
 				if (CurrentMission != MISSION_HUNT && CurrentMission != MISSION_UNLOAD) {
@@ -839,7 +838,7 @@ void UnitClass::Firing_AI(void)
 			case FIRE_ILLEGAL:
 				if (Combat_Damage(primary) < 0) {
 					ObjectClass * obj = dynamic_cast<ObjectClass*>(TarCom);
-					if (obj == NULL || obj->RTTI != RTTI_UNIT) {
+					if (!Can_Heal(obj)) {
 						Assign_Target(NULL);
 					} else if (obj->HealthRatio >= Rule->ConditionGreen) {
 						Assign_Target(NULL);
@@ -1111,7 +1110,7 @@ void UnitClass::Jellyfish_AI(void)
  * HISTORY:                                                                                    *
  *   05/22/1994 JLB : Created.                                                                 *
  *=============================================================================================*/
-RadioMessageType UnitClass::Receive_Message(RadioClass * from, RadioMessageType message, int & param)
+RadioMessageType UnitClass::Receive_Message(RadioClass * from, RadioMessageType message, intptr_t & param)
 {
 	switch (message) {
 
@@ -1147,7 +1146,8 @@ RadioMessageType UnitClass::Receive_Message(RadioClass * from, RadioMessageType 
 		*/
 		case RADIO_CAN_LOAD:
 			if (Class->Max_Passengers() == 0 || from == NULL || !House->Is_Ally(from)) return(RADIO_STATIC);
-			if (Cargo.How_Many() < Class->Max_Passengers()) {
+			if (from->RTTI == RTTI_UNIT && !Class->IsVehicleTransport) return(RADIO_STATIC);
+			if (Can_Fit_Passenger(from)) {
 				Cell cell = PositionCell;
 				CellClass * cellptr = &Map[cell];
 				if (!cellptr->Is_Tile_With_Water() && !cellptr->Is_Tile_Shore()) {
@@ -1183,7 +1183,7 @@ RadioMessageType UnitClass::Receive_Message(RadioClass * from, RadioMessageType 
 		**	entered the transport.
 		*/
 		case RADIO_IM_IN:
-			if (Cargo.How_Many() == Class->Max_Passengers()) {
+			if (Cargo.Total_Size() >= Class->Max_Passengers()) {
 				APC_Close_Door();
 			}
 			return(RADIO_ATTACH);
@@ -1213,7 +1213,7 @@ RadioMessageType UnitClass::Receive_Message(RadioClass * from, RadioMessageType 
 				/*
 				**	Can't ever load up so tell the passenger to bug off.
 				*/
-				if (Cargo.How_Many() >= Class->Max_Passengers()) {
+				if (!Can_Fit_Passenger(from)) {
 					return(RADIO_NEGATIVE);
 				}
 
@@ -1232,7 +1232,7 @@ RadioMessageType UnitClass::Receive_Message(RadioClass * from, RadioMessageType 
 				}
 			}
 
-			if (Class->Max_Passengers() > 0 && Cargo.How_Many() < Class->Max_Passengers()) {
+			if (Class->Max_Passengers() > 0 && Can_Fit_Passenger(from)) {
 				BASECLASS::Receive_Message(from, message, param);
 
 				if (!Locomotion->Is_Moving() && !IsRotating && !IsTethered) {
@@ -1248,7 +1248,7 @@ RadioMessageType UnitClass::Receive_Message(RadioClass * from, RadioMessageType 
 						**	already at the staging location, then tell it to move onto the transport
 						**	directly.
 						*/
-						param = (int)this;
+						param = (intptr_t)this;
 						if (Transmit_Message(RADIO_MOVE_HERE, param, from) != RADIO_ROGER) {
 							Transmit_Message(RADIO_OVER_OUT, from);
 						}
@@ -1461,10 +1461,10 @@ ResultType UnitClass::Take_Damage(int & damage, int distance, WarheadTypeClass c
 				object->IsOnBridge = IsOnBridge;
 
 				/*
-				**	Only infantry can run from a destroyed vehicle. Even then, it is not a sure
-				**	thing.
+				**	A passenger can run from a destroyed vehicle, if the ground it stood on
+				**	will take it. Even then, it is not a sure thing.
 				*/
-				if (object->Is_Infantry() && !forced && !IsToExplode && object->Can_Enter_Cell(&Map[Get_Coord()]) == MOVE_OK && object->Unlimbo(PositionCoord, DIR_N)) {
+				if (!forced && !IsToExplode && object->Can_Enter_Cell(&Map[Get_Coord()]) == MOVE_OK && object->Unlimbo(PositionCoord, DIR_N)) {
 					object->Scatter(COORD_NONE, true);
 					if (select) object->Select();
 				} else {
@@ -2001,9 +2001,7 @@ bool UnitClass::Try_To_Deploy(void)
 					if (!House->Is_Human_Player() && building->Class->IsConstructionYard && Session.Type != GAME_NORMAL) {
 						Cell center = building->PositionCoord.As_Cell();
 						House->Center = center;
-						House->Begin_Construction();
-						House->Base.Nodes[0].CellID = center;
-						House->Base.PlacementCenter = center;
+						House->Begin_Construction(center);
 						House->IsStarted = true;
 						House->IsAITriggersOn = true;
 						House->IsBaseBuilding = true;
@@ -2108,10 +2106,8 @@ void UnitClass::Per_Cell_Process(PCPType why)
 			Cell center = Center_Coord();
 			Cell whom_center = whom->Center_Coord();
 			if (Center_Coord().As_Cell() == whom->Center_Coord().As_Cell() && whom->RTTI == RTTI_BUILDING) {
-				IPersistPtr persist(Locomotion);
-				CLSID clsid;
-				persist->GetClassID(&clsid);
-				if (clsid == CLSID_HoverLocomotion && static_cast<BuildingClass *>(whom)->Class->IsCanUnitRepair && NavCom == NULL) {
+				ClassID const clsid = Locomotion_Class_ID(Locomotion.get());
+				if (clsid == ClassID_HoverLocomotion && static_cast<BuildingClass *>(whom)->Class->IsCanUnitRepair && NavCom == nullptr) {
 					NavCom = whom;
 				}
 				if (whom == NavCom) {
@@ -2152,9 +2148,18 @@ void UnitClass::Per_Cell_Process(PCPType why)
 		**	Unit entering a transport vehicle will break radio contact
 		**	and attach itself to the transporter.
 		*/
-		if (Mission == MISSION_ENTER && techno && PositionCell == techno->PositionCell && techno == NavCom) {
+		TechnoTypeClass const * ttype = (techno != NULL) ? techno->TClass : NULL;
+
+		// NavCom is not tested here: a walking passenger clears it before it arrives, so
+		// the radio contact is what identifies the transport.
+		if (Mission == MISSION_ENTER && ttype != NULL && ttype->Max_Passengers() > 0 &&
+			PositionCell == techno->PositionCell) {
+
 			BASECLASS::Per_Cell_Process(PCP_END);
-			if (Transmit_Message(RADIO_IM_IN) == RADIO_ATTACH) {
+
+			// RADIO_IM_IN is answered with RADIO_ATTACH even by a full transport, so the
+			// room has to be checked here as well.
+			if (techno->Can_Fit_Passenger(this) && Transmit_Message(RADIO_IM_IN, techno) == RADIO_ATTACH) {
 				Limbo();
 				techno->Cargo.Attach(this);
 				Hidden();
@@ -2275,7 +2280,7 @@ void UnitClass::Per_Cell_Process(PCPType why)
 		}
 
 		bool broke_ice = false;
-		if (Scen->Theater == THEATER_SNOW) {
+		if (TheaterClass::As_Reference(Scen->Theater).IsIceGrowth) {
 			Map.DirtyIceCells.Clear();
 			if (Class->Weight >= Rule->IceBreakingWeight) {
 				broke_ice = Map.Break_Ice(&Map[(Coord const &)PositionCoord], this);
@@ -2737,11 +2742,7 @@ void UnitClass::Unit_Draw_Shape(Point2D xdrawpoint, Rect xcliprect, int brightne
 		return;
 	}
 
-	if (Class->Facings == FACING_COUNT) {
-		shapenum = Facing_Add(PrimaryFacing.Current().Round_To_8(), FACING_45);
-	} else {
-		shapenum = 0;
-	}
+	shapenum = Shape_Facing_Index(PrimaryFacing.Current(), Class->Facings);
 
 	if (Locomotion->Is_Moving()) {
 		shapenum = Class->StartWalkFrame + shapenum * Class->WalkFrames + TotalFramesWalked % Class->WalkFrames;
@@ -2853,8 +2854,14 @@ void UnitClass::Unit_Draw_Shape(Point2D xdrawpoint, Rect xcliprect, int brightne
 			Draw_Voxel(Class->AuxVoxel2, 0, -1, 0, srect, pt, Get_Isometric_View_Matrix() * nmtx, brightness, ShapeFlags_Type(SHAPE_ZGRAD|SHAPE_ALPHA));
 		}
 
-		Dir32 d = SecondaryFacing.Current().As_Dir32();
-		Draw_Object(shapefile, ((d + 4) % 32U) + 8 * Class->WalkFrames, pt, srect, DIR_N, 256, 0, ZGRAD_GROUND, false, brightness, NULL, 0, Point2D(0, 0), ShapeFlags_Type(SHAPE_NOTRANS|SHAPE_ALPHA|SHAPE_ZGRAD));
+		// Eight rather than Facings, because artwork lays the strip after eight walk blocks.
+		int turretframe = Class->StartTurretFrame;
+		if (turretframe == -1) {
+			turretframe = FACING_COUNT * Class->WalkFrames;
+		}
+
+		turretframe += Shape_Facing_Index(SecondaryFacing.Current(), Class->TurretFacings);
+		Draw_Object(shapefile, turretframe, pt, srect, DIR_N, 256, 0, ZGRAD_GROUND, false, brightness, NULL, 0, Point2D(0, 0), ShapeFlags_Type(SHAPE_NOTRANS|SHAPE_ALPHA|SHAPE_ZGRAD));
 
 		/*
 		 * The the voxel barrel above the turret at other angles
@@ -2940,9 +2947,16 @@ void UnitClass::Draw_It(Point2D const & point, Rect const & cliprect) const
 		}
 
 		UnitTypeClass * oldclass = Class;
-		if (Class->IsToHarvest && IsDumping) {
-			if (Rule->UnloadingHarvester != NULL) {
-				((UnitClass *)this)->Class = (UnitTypeClass *)Rule->UnloadingHarvester;
+		if (IsDumping && (Class->IsToHarvest || Class->IsToVeinHarvest)) {
+
+			// The rules default has only ever covered Tiberium harvesters, so a weeder
+			// swaps only where its own type names a class.
+			UnitTypeClass const * unloading = Class->IsToHarvest ? Rule->UnloadingHarvester : NULL;
+			if (Class->UnloadingClass != NULL) {
+				unloading = Class->UnloadingClass;
+			}
+			if (unloading != NULL) {
+				((UnitClass *)this)->Class = (UnitTypeClass *)unloading;
 			}
 		}
 
@@ -3126,13 +3140,18 @@ int UnitClass::Do_MISSION_UNLOAD(void)
 							newcell = Adjacent_Cell(PositionCell, newface);
 
 							if (passenger->Can_Enter_Cell(&Map[newcell], newface, Get_Cell_Height()) == MOVE_OK) {
-								ScenarioInit++;
-								Coord coord = newcell.As_Coord();
-								coord = Map.Closest_Free_Spot(coord);
 								if (Map[newcell].IsUnderBridge == false) {
+									Coord coord = newcell.As_Coord();
+
+									// Sub-cell spots are for infantry. A vehicle left on one
+									// draws wrong and cannot dock a repair bay.
+									if (passenger->RTTI == RTTI_INFANTRY) {
+										coord = Map.Closest_Free_Spot(coord);
+									}
+
+									ScenarioInit++;
 									placed = passenger->Unlimbo(coord, DirType(newface).As_Dir256());
 									ScenarioInit--;
-									//placed = true;
 									break;
 								}
 							}
@@ -3628,7 +3647,7 @@ int UnitClass::Do_MISSION_HARVEST(void)
  *=============================================================================================*/
 int UnitClass::Do_MISSION_HUNT(void)
 {
-	if (Class->DeploysInto != NULL && (Class->DeploysInto == Rule->BuildConst[0] || TarCom != NULL || House->Is_Human_Player())) {
+	if (Class->DeploysInto != NULL && (Rule->BuildConst.Is_In_List(Class->DeploysInto) || TarCom != NULL || House->Is_Human_Player())) {
 		enum {
 			FIND_SPOT,
 			WAITING
@@ -3918,7 +3937,7 @@ MoveType UnitClass::Can_Enter_Cell(CellClass const * cellptr, FacingType dir, in
 			**	Special check to allow entry into the sea transport this vehicle
 			**	is trying to enter.
 			*/
-			if (Mission == MISSION_ENTER && obj == NavCom && IsTethered) {
+			if (Mission == MISSION_ENTER && obj == NavCom && obj->RTTI == RTTI_UNIT) {
 				return(MOVE_OK);
 			}
 
@@ -4144,17 +4163,8 @@ ActionType UnitClass::What_Action(ObjectClass const * object, bool disallow_forc
 		if (Class->DeploysInto != NULL) {
 
 			Cell cell = Center_Coord().As_Cell();
-			if (Class->DeploysInto == Rule->BuildConst[0]) {
+			if (Rule->BuildConst.Is_In_List(Class->DeploysInto) || Rule->BuildWeapons.Is_In_List(Class->DeploysInto)) {
 				cell = Adjacent_Cell(cell, FACING_NW);
-			} else {
-				bool hasfactory = false;
-				for (int index = 0; index < Rule->BuildWeapons.Count(); index++) {
-					if (Class->DeploysInto == Rule->BuildWeapons[index]) {
-						cell = Adjacent_Cell(cell, FACING_NW);
-						break;
-					}
-				}
-
 			}
 
 			/*
@@ -4234,10 +4244,10 @@ ActionType UnitClass::What_Action(ObjectClass const * object, bool disallow_forc
 
 	if (Combat_Damage() < 0 && House->Is_Player_Control()) {
 		if (House->Is_Ally(object)) {
-			if (object->Considered_Vehicle() && object != this && object->Not_Underground()) {
+			if (Can_Heal(object) && object != this && object->Not_Underground()) {
 				if ( object->RTTI != RTTI_AIRCRAFT || Map[object->Center_Coord()].Cell_Building() == NULL) {
 					if (object->HealthRatio < Rule->ConditionGreen) {
-						action = ACTION_GREPAIR;
+						action = object->RTTI == RTTI_INFANTRY ? ACTION_HEAL : ACTION_GREPAIR;
 					}
 				}
 			} else if ( object->RTTI != RTTI_BUILDING ) {
@@ -4246,6 +4256,15 @@ ActionType UnitClass::What_Action(ObjectClass const * object, bool disallow_forc
 		} else {
 			action = ACTION_ATTACK_SUPPORT;
 		}
+	}
+
+	/*
+	**	Check to see if it can enter a transporter.
+	*/
+	if (action != ACTION_NO_ENTER && action != ACTION_ATTACK &&
+		action != ACTION_GREPAIR && action != ACTION_GUARD_AREA) {
+
+		action = Transport_Enter_Action(object, action);
 	}
 
 	if (action == ACTION_ATTACK) {
@@ -4375,7 +4394,7 @@ int UnitClass::Do_MISSION_GUARD(void)
 	}
 
 	if (needs_dock || (Class->IsToHarvest && House->IsTiberiumShort)) {
-		if (Class->DeploysInto == Rule->BuildConst[0] && House->IsBaseBuilding && !House->Is_Human_Player()) {
+		if (Rule->BuildConst.Is_In_List(Class->DeploysInto) && House->IsBaseBuilding && !House->Is_Human_Player()) {
 			Assign_Mission(MISSION_UNLOAD);
 			return(Current_Mission_Control().Normal_Delay() + Random_Pick(0, 2));
 		}
@@ -4473,8 +4492,7 @@ FacingType UnitClass::Desired_Load_Dir(ObjectClass * passenger, Cell & moveto) c
 	FacingType face = FACING_N;
 	FacingType faceto;
 	if (passenger != NULL) {
-		DirType direction = direction.Direction(Center_Coord(), passenger->Center_Coord());
-		faceto = (FacingType)direction.As_Dir256();
+		faceto = (FacingType)Direction(passenger).As_Dir256();
 	} else {
 		faceto = (FacingType)(PrimaryFacing.Current().Right_180()).As_Dir256();
 	}
@@ -4812,7 +4830,7 @@ FireErrorType UnitClass::Can_Fire(AbstractClass * target, int which) const
 
 		if (Combat_Damage() < 0) {
 			TechnoClass const * techno = Dynamic_Cast<TechnoClass const *>((AbstractClass const *)target);
-			if (techno == NULL || !techno->Considered_Vehicle() || techno->HealthRatio >= Rule->ConditionGreen) {
+			if (!Can_Heal(techno) || techno->HealthRatio >= Rule->ConditionGreen) {
 				return(FIRE_ILLEGAL);
 			}
 		}
@@ -5131,7 +5149,13 @@ void UnitClass::Assign_Destination(AbstractClass * target, bool immediate)
 	**	Transport vehicles must tell all passengers that are about to load, that they
 	**	cannot proceed. This is accomplished with a radio message to this effect.
 	*/
-	if (In_Radio_Contact() && Class->Max_Passengers() > 0 && Contact_With_Whom()->Fetch_RTTI() == RTTI_INFANTRY) {
+	TechnoClass * loader = In_Radio_Contact() ? Contact_With_Whom() : NULL;
+
+	// Never hang up on the object being headed for: a transport can be a passenger too,
+	// and cutting contact mid-dock restarts the docking handshake without end.
+	if (Class->Max_Passengers() > 0 && loader != NULL && loader != target &&
+		(loader->RTTI == RTTI_INFANTRY || loader->RTTI == RTTI_UNIT)) {
+
 		Transmit_Message(RADIO_OVER_OUT);
 	}
 
@@ -5224,10 +5248,8 @@ void UnitClass::Assign_Destination(AbstractClass * target, bool immediate)
 	 * re-target the nearest reachable cell when driving rather than burrowing.
 	 */
 	if (target != NULL && Class->IsSubterranean && Locomotion->Is_Moving()) {
-		IPersistPtr persist(Locomotion);
-		CLSID clsid;
-		persist->GetClassID(&clsid);
-		if (clsid == CLSID_DriveLocomotion) {
+		ClassID const clsid = Locomotion_Class_ID(Locomotion.get());
+		if (clsid == ClassID_DriveLocomotion) {
 			NavQueue.Add_Head(target);
 			RouteQueue.Clear();
 			CellClass * tcell = Get_Target_Cell_Ptr();
@@ -5318,10 +5340,8 @@ void UnitClass::Assign_Destination(AbstractClass * target, bool immediate)
 		 * (Mirrors BuildingClass weapons-factory exit, building.cpp:6236-6251.)
 		 */
 		if (target != NULL && !Locomotion->Is_Moving()) {
-			IPersistPtr persist(Locomotion);
-			CLSID clsid;
-			persist->GetClassID(&clsid);
-			if (clsid == CLSID_TunnelLocomotion && Get_Height_AGL() == 0) {
+			ClassID const clsid = Locomotion_Class_ID(Locomotion.get());
+			if (clsid == ClassID_TunnelLocomotion && Get_Height_AGL() == 0) {
 				Coord tc = target->Center_Coord();
 				int gl = Map.Get_Height_GL(tc);
 				if (tc.Z < gl) tc.Z = gl;
@@ -5342,16 +5362,16 @@ void UnitClass::Assign_Destination(AbstractClass * target, bool immediate)
 				}
 
 				if (doswap) {
-					IPiggybackPtr piggy(Locomotion);
+					IPiggyback * piggy = Piggyback_Of(Locomotion.get());
 					if (piggy != NULL && piggy->Is_Piggybacking()) {
-						piggy->End_Piggyback(&Locomotion);
+						Locomotion = piggy->End_Piggyback();
 					}
-					ILocomotionPtr walk(CLSID_DriveLocomotion);
+					std::unique_ptr<ILocomotion> walk = Create_Locomotor(ClassID_DriveLocomotion);
 					walk->Link_To_Object(this);
-					piggy = IPiggybackPtr(walk);
+					piggy = Piggyback_Of(walk.get());
 					if (piggy != NULL) {
 						piggy->Begin_Piggyback(Locomotion);
-						Locomotion = walk;
+						Locomotion = std::move(walk);
 						Locomotion->Force_New_Slope(Map[Get_Coord()].Ramp);
 					}
 				}
@@ -5510,7 +5530,6 @@ AbstractClass * UnitClass::Greatest_Threat(ThreatType threat, Coord const & coor
 void UnitClass::Read_INI(CCINIClass const & ini)
 {
 	UnitClass	* unit;         // Working unit pointer.
-	HousesType	inhouse;        // Unit house.
 	UnitType		classid;    // Unit class.
 	char			buf[128];
 	int len = ini.Entry_Count(INI_NAME);
@@ -5522,12 +5541,8 @@ void UnitClass::Read_INI(CCINIClass const & ini)
 
 		ini.Get_String(INI_NAME, entry, NULL, buf, sizeof(buf));
 
-		inhouse = HouseTypeClass::From_Name(strtok(buf, ","));
-		if (inhouse != HOUSE_NONE) {
-			HouseClass * inhousep = House_From_HousesType(inhouse);
-			if (inhousep == NULL) {
-				continue;
-			}
+		HouseClass * inhousep = House_From_Name(strtok(buf, ","));
+		if (inhousep != NULL) {
 			classid = UnitTypeClass::From_Name(strtok(NULL, ","));
 
 			if (classid != UNIT_NONE) {
@@ -6022,8 +6037,8 @@ bool UnitClass::Ready_To_Commence(void)
 /// again once that identity has arrived.
 /// </summary>
 /// <param name="stream">The stream to read this unit from.</param>
-/// <returns>Returns with S_OK if the unit was read successfully.</returns>
-HRESULT STDMETHODCALLTYPE UnitClass::Load(IStream *stream)
+/// <returns>bool; Was the record read whole?</returns>
+bool UnitClass::Load(SaveStreamClass & stream)
 {
 	TargetTracker.Remove_Index(Fetch_ID());
 	return(BASECLASS::Load(stream));
@@ -6558,6 +6573,9 @@ bool UnitClass::Considered_Vehicle(void) const
 void UnitClass::EMPulse_Blast(void)
 {
 	if (!Is_Immobilized() && Charge >= Class->MaxCharge) {
+		// TODO: look the weapon up once the rules must declare it, so no match grows the list.
+		// WeaponType index = WeaponTypeClass::From_Name("MobileEMPulseWeapon");
+		// WeaponTypeClass const * weapon = index != WEAPON_NONE ? Weapons[index] : NULL;
 		WeaponTypeClass const * weapon = WeaponTypeClass::Find_Or_Make("MobileEMPulseWeapon");
 		if (weapon != NULL && weapon->Bullet != NULL && weapon->WarheadPtr != NULL) {
 			CellClass * cptr = &Map[Center_Coord().As_Cell()];
@@ -6580,8 +6598,9 @@ void UnitClass::EMPulse_Blast(void)
 /// </summary>
 void UnitClass::Explode(void)
 {
-	if (Class->Explosion.Count() > 0) {
-		AnimTypeClass const * anim = Class->Explosion.Pick(Scen->RandomNumber);
+	TypeList<AnimTypeClass const *> const & explosion = Class->Explosion_Set();
+	if (explosion.Count() > 0) {
+		AnimTypeClass const * anim = explosion.Pick(Scen->RandomNumber);
 
 		/*
 		**	SSM launchers will really explode big if they are carrying
@@ -6589,7 +6608,7 @@ void UnitClass::Explode(void)
 		*/
 		if (Class->IsExploding || Has_Ability(ABILITY_EXPLODES)) {
 			if (Class->MaxAmmo == -1 || Ammo > 0) {
-				anim = Class->Explosion[Class->Explosion.Count() - 1];
+				anim = explosion[explosion.Count() - 1];
 			}
 		}
 
@@ -6632,16 +6651,9 @@ bool UnitClass::Is_Immobilized(void) const
 }
 
 
-/// <summary>
-/// Fetches the class identifier used by the save game persistence system.
-/// </summary>
-/// <param name="retval">Pointer to the buffer to fill in with the class identifier.</param>
-/// <returns>Returns with S_OK, or E_POINTER if no buffer was supplied.</returns>
-HRESULT STDMETHODCALLTYPE UnitClass::GetClassID(CLSID * retval)
+ClassID UnitClass::Class_ID(void) const
 {
-	if (retval == NULL) return(E_POINTER);
-	*retval = CLSID_UnitClass;
-	return(S_OK);
+	return(ClassID_UnitClass);
 }
 
 

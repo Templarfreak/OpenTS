@@ -38,7 +38,6 @@
  *   AnimTypeClass::operator delete -- Returns an anim type class object back to the pool.     *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-#define INCLUDE_COM
 #include "always.h"
 
 #include "animtype.h"
@@ -216,7 +215,7 @@ void AnimTypeClass::Init(TheaterType theater)
 			if (!anim->IsDemandLoad) {
 				if (anim->IsTheater) {
 					char fullname[_MAX_FNAME+_MAX_EXT];	// Fully constructed iconset name.
-					_makepath(fullname, NULL, NULL, anim->Name(), Theaters[theater].Suffix);
+					_makepath(fullname, NULL, NULL, anim->Name(), TheaterClass::As_Reference(theater).Suffix);
 					anim->ImageData = MFCD::Retrieve(fullname);
 					if (anim->ImageData == NULL) {
 						_makepath(fullname, NULL, NULL, anim->Name(), ".SHP");
@@ -259,7 +258,7 @@ void AnimTypeClass::Init_Theater(TheaterType theater)
 			}
 		} else {
 			char fullname[_MAX_FNAME+_MAX_EXT];	// Fully constructed iconset name.
-			_makepath(fullname, NULL, NULL, Name(), Theaters[theater].Suffix);
+			_makepath(fullname, NULL, NULL, Name(), TheaterClass::As_Reference(theater).Suffix);
 			ImageData = MFCD::Retrieve(fullname);
 		}
 	}
@@ -495,7 +494,7 @@ void AnimTypeClass::Post_Load(void)
 		Fetch_Normal_Image();
 		if (IsTheater) {
 			char fullname[_MAX_FNAME+_MAX_EXT];	// Fully constructed iconset name.
-			_makepath(fullname, NULL, NULL, Name(), Theaters[Scen->Theater].Suffix);
+			_makepath(fullname, NULL, NULL, Name(), TheaterClass::As_Reference(Scen->Theater).Suffix);
 			ImageData = MFCD::Retrieve(fullname);
 		} else if (IsNewTheater) {
 			Load_Image(Scen->Theater);
@@ -577,18 +576,9 @@ void AnimTypeClass::Serialize(SaveStreamClass & stream)
 }
 
 
-/// <summary>
-/// Fetches the persistent class identifier of this object.
-/// This routine is used by the save game machinery to recognize an animation type when it
-/// comes back off the stream.
-/// </summary>
-/// <param name="retval">Pointer to the place to store the class identifier.</param>
-/// <returns>Returns with S_OK, or E_POINTER if there was nowhere to store the answer.</returns>
-HRESULT STDMETHODCALLTYPE AnimTypeClass::GetClassID(CLSID * retval)
+ClassID AnimTypeClass::Class_ID(void) const
 {
-	if (retval == NULL) return(E_POINTER);
-	*retval = CLSID_AnimTypeClass;
-	return(S_OK);
+	return(ClassID_AnimTypeClass);
 }
 
 
@@ -674,7 +664,7 @@ void const * AnimTypeClass::Get_Image_Data(void) const
 		_makepath(fullname, NULL, NULL, !GraphicName.empty() ? Graphic_Name() : Name(), ".SHP");
 
 		if (IsTheater) {
-			_makepath(fullname, NULL, NULL, Name(), Theaters[Scen->Theater].Suffix);
+			_makepath(fullname, NULL, NULL, Name(), TheaterClass::As_Reference(Scen->Theater).Suffix);
 		} else if (IsNewTheater) {
 			Theater_Naming_Convention(fullname, Scen->Theater);
 		}

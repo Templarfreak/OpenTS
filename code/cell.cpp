@@ -74,7 +74,6 @@
  *   CellClass::Wall_Update -- Updates the imagery for wall objects in cell.                   *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-#define INCLUDE_COM
 #include "always.h"
 
 #include "cell.h"
@@ -395,9 +394,6 @@ int CellClass::Preview_Cell_Color(unsigned char & unknown, bool terrainonly) con
  *=============================================================================================*/
 void CellClass::Cell_Color(RGBClass & lowcolor, RGBClass & highcolor) const
 {
-	static const float _arr1[] = { 1.0f, 0.8f };
-	static const float _arr2[] = { 1.6f, 1.1f };
-
 	/*
 	 * A terrain object (tree, etc.) overrides the cell color with its own radar color.
 	 */
@@ -498,13 +494,15 @@ void CellClass::Cell_Color(RGBClass & lowcolor, RGBClass & highcolor) const
 		RGBClass lowest(record->LowColor.Red, record->LowColor.Green, record->LowColor.Blue);
 		RGBClass highest(record->HighColor.Red, record->HighColor.Green, record->HighColor.Blue);
 
-		lowest = RGBClass().Set(lowest, _arr1[Scen->Theater]);
-		highest = RGBClass().Set(highest, _arr1[Scen->Theater]);
+		TheaterClass const & theater = TheaterClass::As_Reference(Scen->Theater);
+
+		lowest = RGBClass().Set(lowest, theater.LowRadarBrightness);
+		highest = RGBClass().Set(highest, theater.LowRadarBrightness);
 
 		RGBClass lowres;
 		RGBClass hires;
-		lowres.Set(lowest, _arr2[Scen->Theater]);
-		hires.Set(highest, _arr2[Scen->Theater]);
+		lowres.Set(lowest, theater.HighRadarBrightness);
+		hires.Set(highest, theater.HighRadarBrightness);
 
 		lowcolor = RGBClass().Lerp(lowest, lowres, (double)Height / 12.0);
 		highcolor = RGBClass().Lerp(highest, hires, (double)Height / 12.0);
@@ -2047,10 +2045,10 @@ void CellClass::Draw_Shroud_Or_Fog_Shape(Point2D const & drawpoint, Rect const &
 	int alpha_skip = inter_left - inter_right + AlphaBuffer->Get_Buffer_Width();
 
 	unsigned char * shapedata = (unsigned char *)shapes->Get_Data(shapenum);
-	unsigned short * alphaptr = (unsigned short *)AlphaBuffer->Get_Buffer_Offset(Point2D(inter_left, inter_top - TacticalRect.Y));
+	unsigned short * alphaptr = AlphaBuffer->Get_Buffer_Offset(Point2D(inter_left, inter_top - TacticalRect.Y));
 
 	unsigned char * shapeptr = (unsigned char *)&shapedata[src_x + src_y * shaperect.Width];
-	if (&alphaptr[inter_right - inter_left + (inter_bottom - inter_top) * AlphaBuffer->Get_Buffer_Width() + 2] >= (unsigned short *)AlphaBuffer->Get_Buffer_End()) {
+	if (&alphaptr[inter_right - inter_left + (inter_bottom - inter_top) * AlphaBuffer->Get_Buffer_Width() + 2] >= AlphaBuffer->Get_Buffer_End()) {
 		for (int i = inter_top; i < inter_bottom; i++) {
 			for (int j = inter_left; j < inter_right; j++) {
 				unsigned char pixel = *shapeptr++;
@@ -2058,11 +2056,11 @@ void CellClass::Draw_Shroud_Or_Fog_Shape(Point2D const & drawpoint, Rect const &
 					*alphaptr = pixel;
 				}
 				alphaptr++;
-				alphaptr = (unsigned short *)AlphaBuffer->Wrap_Overflow((unsigned)alphaptr);
+				alphaptr = AlphaBuffer->Wrap_Overflow(alphaptr);
 			}
 			shapeptr += shape_skip;
 			alphaptr += alpha_skip;
-			alphaptr = (unsigned short *)AlphaBuffer->Wrap_Overflow((unsigned)alphaptr);
+			alphaptr = AlphaBuffer->Wrap_Overflow(alphaptr);
 		}
 	} else {
 		for (int i = inter_top; i < inter_bottom; i++) {
@@ -2118,10 +2116,10 @@ void CellClass::Draw_Fog_Shape(Point2D const & drawpoint, Rect const & cliprect,
 	int alpha_skip = inter_left - inter_right + AlphaBuffer->Get_Buffer_Width();
 
 	unsigned char * shapedata = (unsigned char *)shapes->Get_Data(shapenum);
-	unsigned short * alphaptr = (unsigned short *)AlphaBuffer->Get_Buffer_Offset(Point2D(inter_left, inter_top - TacticalRect.Y));
+	unsigned short * alphaptr = AlphaBuffer->Get_Buffer_Offset(Point2D(inter_left, inter_top - TacticalRect.Y));
 
 	unsigned char * shapeptr = (unsigned char *)&shapedata[src_x + src_y * shaperect.Width];
-	if (&alphaptr[inter_right - inter_left + (inter_bottom - inter_top) * AlphaBuffer->Get_Buffer_Width() + 2] >= (unsigned short *)AlphaBuffer->Get_Buffer_End()) {
+	if (&alphaptr[inter_right - inter_left + (inter_bottom - inter_top) * AlphaBuffer->Get_Buffer_Width() + 2] >= AlphaBuffer->Get_Buffer_End()) {
 		for (int i = inter_top; i < inter_bottom; i++) {
 			for (int j = inter_left; j < inter_right; j++) {
 				unsigned char pixel = *shapeptr++;
@@ -2134,11 +2132,11 @@ void CellClass::Draw_Fog_Shape(Point2D const & drawpoint, Rect const & cliprect,
 					}
 				}
 				alphaptr++;
-				alphaptr = (unsigned short *)AlphaBuffer->Wrap_Overflow((unsigned)alphaptr);
+				alphaptr = AlphaBuffer->Wrap_Overflow(alphaptr);
 			}
 			shapeptr += shape_skip;
 			alphaptr += alpha_skip;
-			alphaptr = (unsigned short *)AlphaBuffer->Wrap_Overflow((unsigned)alphaptr);
+			alphaptr = AlphaBuffer->Wrap_Overflow(alphaptr);
 		}
 	} else {
 		for (int i = inter_top; i < inter_bottom; i++) {
@@ -3393,7 +3391,8 @@ int CellClass::Tiberium_Adjust(bool pregame)
 			*/
 			int value = tiberium->CreditValue;
 			if (pregame) {
-				Overlay = (OverlayType)Random_Pick((int)tiberium->Overlay, (int)&tiberium->Overlay[tiberium->Variety - 1]);
+				int first = tiberium->Overlay->HeapID;
+				Overlay = (OverlayType)Random_Pick(first, first + tiberium->Variety - 1);
 			}
 
 			/*
@@ -3509,7 +3508,7 @@ bool CellClass::Goodie_Check(FootClass * object)
 			*/
 			if (object->House->CurBuildings == 0 &&
 					object->House->Available_Money() > 1500 &&
-					object->House->UQuantity.Value(Rule->BaseUnit->HeapID) == 0 &&
+					object->House->Count_Owned(object->House->UQuantity, Rule->BaseUnit) == 0 &&
 					Session.Options.Bases) {
 				powerup = CRATE_UNIT;
 				force_mcv = true;
@@ -3694,15 +3693,15 @@ bool CellClass::Goodie_Check(FootClass * object)
 				**	give him another one.
 				*/
 				if (force_mcv) {
-					utp = Rule->BaseUnit;
+					utp = object->House->Get_Preferred(Rule->BaseUnit);
 				}
 
 				/*
 				**	If the player has a base and a refinery, but no harvester, then give him
 				**	a free one.
 				*/
-				if (utp == NULL && (object->House->BQuantity.Value(Rule->BuildRefinery[0]->HeapID) > 0) && (object->House->UQuantity.Value(Rule->HarvesterUnit[0]->HeapID) == 0)) {
-					utp = Rule->HarvesterUnit[0];
+				if (utp == NULL && object->House->Owns_Any(object->House->BQuantity, Rule->BuildRefinery) && object->House->Count_Owned(object->House->UQuantity, Rule->HarvesterUnit) == 0) {
+					utp = object->House->Get_Preferred(Rule->HarvesterUnit);
 				}
 
 				/*
@@ -3715,12 +3714,20 @@ bool CellClass::Goodie_Check(FootClass * object)
 				/*
 				**	If no unit type has been determined, then pick one at random.
 				*/
-				while (utp == NULL) {
+				auto qualifies = [&](UnitTypeClass const * candidate) {
+					return candidate->IsCrateGoodie && (candidate->Ownable & object->Owner_HouseClass()->Acted_Mask()) != 0 && (Session.Options.Bases || !Rule->BaseUnit.Is_In_List(candidate));
+				};
+				bool any_goodie = false;
+				for (int index = UNIT_FIRST; index < UnitTypes.Count() && !any_goodie; index++) {
+					any_goodie = qualifies(UnitTypes[index]);
+				}
+
+				// Redrawing with nothing to draw would never end.
+				while (utp == NULL && any_goodie) {
 					utp = UnitTypes[Random_Pick(UNIT_FIRST, (UnitType)(UnitTypes.Count()-1))];
-					if (utp->IsCrateGoodie && (utp->Ownable & (1 << object->Owner_HouseClass()->Class->HeapID)) && (Session.Options.Bases || Rule->BaseUnit != utp)) {
-						break;
+					if (!qualifies(utp)) {
+						utp = NULL;
 					}
-					utp = NULL;
 				}
 
 				if (utp != NULL) {
@@ -4358,6 +4365,13 @@ void CellClass::Serialize(SaveStreamClass & stream)
 
 	stream.Serialize(CellID);
 
+	// Post_Load installs the cell in the array slot this coordinate names, so a coordinate
+	// that names none is refused here, while the record can still be thrown away whole.
+	if (stream.Is_Loading() && Map.Cell_Slot(CellID) < 0) {
+		stream.Fail();
+		return;
+	}
+
 	/*
 	 * The snapshot list is built only once something standing here has been fogged over,
 	 * so whether the cell has one at all travels ahead of its contents.
@@ -4461,7 +4475,11 @@ void CellClass::Post_Load(void)
 {
 	BASECLASS::Post_Load();
 
-	int id = CellID.X + (CellID.Y << 9);
+	int id = Map.Cell_Slot(CellID);
+	if (id < 0) {
+		return;
+	}
+
 	if (Map.Array[id] != NULL) {
 		delete Map.Array[id];
 		Map.Array[id] = NULL;
@@ -4526,9 +4544,7 @@ void CellClass::Recalc_Passability(void)
 				break;
 
 			case RTTI_TERRAIN:
-				if ((Scen->Theater == THEATER_TEMPERATE && ((TerrainClass *)occupier)->Class->TemperateOccupationBits != 7) ||
-					(Scen->Theater == THEATER_SNOW && ((TerrainClass *)occupier)->Class->SnowOccupationBits != 7)) {
-
+				if (((TerrainClass *)occupier)->Occupation_Bits() != 7) {
 					Passability = PASSABLE_PARTIALLY_BLOCKED;
 					return;
 				}
@@ -5162,18 +5178,9 @@ void CellClass::Detach(AbstractClass const * target)
 }
 
 
-/// <summary>
-/// Fetches the class identifier of this object.
-/// This is the persistence requirement that lets the save system recognize a cell when a
-/// saved game is read back in.
-/// </summary>
-/// <param name="retval">Pointer to the location to store the class identifier in.</param>
-/// <returns>Returns with S_OK, or E_POINTER if no destination was supplied.</returns>
-HRESULT STDMETHODCALLTYPE CellClass::GetClassID(CLSID * retval)
+ClassID CellClass::Class_ID(void) const
 {
-	if (retval == NULL) return(E_POINTER);
-	*retval = CLSID_CellClass;
-	return(S_OK);
+	return(ClassID_CellClass);
 }
 
 

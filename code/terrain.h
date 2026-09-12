@@ -59,8 +59,8 @@ class TerrainClass : public ObjectClass, public StageClass
 		TerrainClass(TerrainTypeClass const * type, Cell const & cell);
 		virtual ~TerrainClass(void) override;
 
-		virtual HRESULT STDMETHODCALLTYPE GetClassID(CLSID * retval) override;
-		virtual HRESULT STDMETHODCALLTYPE Load(IStream * stream) override;
+		virtual ClassID Class_ID(void) const override;
+		virtual bool Load(SaveStreamClass & stream) override;
 
 		virtual void Serialize(SaveStreamClass & stream) override;
 		virtual void Post_Load(void) override;
@@ -104,6 +104,8 @@ class TerrainClass : public ObjectClass, public StageClass
 		virtual ResultType Take_Damage(int & damage, int distance, WarheadTypeClass const * warhead, TechnoClass * source=0, bool forced=false, bool=false) override;
 		virtual void Set_Occupy_Bit(Coord const & coord) override;
 		virtual void Clear_Occupy_Bit(Coord const & coord) override;
+
+		int Occupation_Bits(void) const;
 
 		/*
 		**	AI.

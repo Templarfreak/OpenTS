@@ -40,7 +40,6 @@
  *   ActionChoiceClass::Draw_It -- Display the action choice as part of a list box.            *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-#define INCLUDE_COM
 #include "always.h"
 
 #include "taction.h"
@@ -51,6 +50,7 @@
 #include "_tactica.h"
 #include "_weapon.h"
 #include "anim.h"
+#include "savemgr.h"
 #include "blight.h"
 #include "building.h"
 #include "builtype.h"
@@ -89,6 +89,7 @@
 #include "tracker.h"
 #include "trigger.h"
 #include "trigtype.h"
+#include "tutorial.h"
 #include "vanim.h"
 #include "vector.h"
 #include "velocity.h"
@@ -102,6 +103,7 @@
 #include "need.hh"
 
 #include <cstdio>
+#include <limits>
 
 DynamicVectorClass<TActionClass *> Actions;
 
@@ -216,7 +218,20 @@ static const struct {
 	{"Disable Speech", "Disables EVA speech."},
 	{"Enable Speech", "Enables EVA speech."},
 	{"Set Group ID...", "Sets the group ID of the attached object."},
-	{"Talk Bubble...", "Displays talk bubble over unit"}
+	{"Talk Bubble...", "Displays talk bubble over unit"},
+	{"Give Credits...", "Gives or removes credits from the specified house. A positive amount gives money, a negative amount subtracts it."},
+	{"Enable Short Game", "Turns the short game rule on: a house is defeated once it has no structures and no base unit left."},
+	{"Disable Short Game", "Turns the short game rule off: a house is defeated only once it has nothing left."},
+	{"Create Building At...", "Places a building of the specified type for the specified house at the waypoint. Forced placement ignores the placement rules."},
+	{"Destroy all of...", "Kills everything of the specified house and marks it as defeated."},
+	{"Make Elite", "All objects attached to this trigger are promoted to elite status."},
+	{"Enable Ally Reveal", "Turns ally reveal on, so allied players see the terrain each other reveals."},
+	{"Disable Ally Reveal", "Turns ally reveal off, so allied players no longer see the terrain each other reveals."},
+	{"Create Autosave", "Saves the game once the current frame has finished."},
+	{"Delete Attached Objects", "Removes every object attached to this trigger from the map silently, without destroying it."},
+	{"All Assign Mission...", "Gives every infantry, vehicle and aircraft of the trigger's house the specified mission."},
+	{"Make Ally (One-Way)...", "Cause this trigger's house to ally with the specified house, without the reverse alliance."},
+	{"Make Enemy (One-Way)...", "Cause this trigger's house to declare war on the specified house."}
 };
 #endif
 
@@ -641,6 +656,19 @@ bool TActionClass::operator() (HouseClass * house, ObjectClass * object, Trigger
 		INVOKE(ENABLE_SPEECH);
 		INVOKE(SET_GROUP_ID);
 		INVOKE(TALK_BUBBLE);
+		INVOKE(GIVE_CREDITS);
+		INVOKE(ENABLE_SHORT_GAME);
+		INVOKE(DISABLE_SHORT_GAME);
+		INVOKE(CREATE_BUILDING_AT);
+		INVOKE(HOUSE_DESTROY_ALL);
+		INVOKE(MAKE_ELITE);
+		INVOKE(ENABLE_ALLY_REVEAL);
+		INVOKE(DISABLE_ALLY_REVEAL);
+		INVOKE(CREATE_AUTOSAVE);
+		INVOKE(DELETE_OBJECT);
+		INVOKE(ALL_ASSIGN_MISSION);
+		INVOKE(MAKE_ALLY_ONE_WAY);
+		INVOKE(MAKE_ENEMY_ONE_WAY);
 
 		/*
 		**	Do no action at all.
@@ -835,7 +863,7 @@ bool TActionClass::TAction_WAKEUP_ALL_HARMLESS(HouseClass * house, ObjectClass *
 /// </summary>
 bool TActionClass::TAction_WAKEUP_GROUP(HouseClass * , ObjectClass * , TriggerClass * , Cell const & )
 {
-	for (int index = 0; index < Technos.Count(); index++) {
+	for (int index = 0; index < Feet.Count(); index++) {
 		FootClass * foot = Feet[index];
 		if (foot->Group == Data.Value &&
 				(foot->Mission == MISSION_SLEEP || foot->Mission == MISSION_HARMLESS) &&
@@ -1062,6 +1090,11 @@ bool TActionClass::TAction_CHANGE_HOUSE(HouseClass * , ObjectClass * , TriggerCl
 {
 	bool success = false;
 
+	HouseClass * newowner = House_From_HousesType(Data.House);
+	if (newowner == NULL) {
+		return(false);
+	}
+
 	for (int index = 0; index < Technos.Count(); index++) {
 		TechnoClass * techno = Technos[index];
 		if (techno->IsActive &&
@@ -1070,7 +1103,7 @@ bool TActionClass::TAction_CHANGE_HOUSE(HouseClass * , ObjectClass * , TriggerCl
 				techno->Tag != NULL &&
 				techno->Tag->Is_Trigger_Attached(trig)) {
 
-			techno->Captured(House_From_HousesType(Data.House));
+			techno->Captured(newowner);
 			success = true;
 		}
 	}
@@ -1105,6 +1138,9 @@ bool TActionClass::TAction_ALL_CHANGE_HOUSE(HouseClass * house, ObjectClass * , 
 	bool retval = false;
 
 	HouseClass * hptr = House_From_HousesType(Data.House);
+	if (hptr == NULL) {
+		return(false);
+	}
 
 	for (int index = 0; index < Technos.Count(); index++) {
 		if (Technos[index]->House == house) {
@@ -1127,7 +1163,7 @@ bool TActionClass::TAction_TEXT_TRIGGER(HouseClass * , ObjectClass * , TriggerCl
 	/*
 	**	Display a text message overlayed onto the tactical map.
 	*/
-	Session.Messages.Add_Message(NULL, 0, TutorialText[Data.Value], 0, TextPrintType(TPF_6PT_GRAD|TPF_USE_GRAD_PAL|TPF_FULLSHADOW), Rule->MessageDelay * TICKS_PER_MINUTE);
+	Session.Messages.Add_Message(NULL, 0, TutorialText.Fetch(Data.Value), 0, TextPrintType(TPF_6PT_GRAD|TPF_USE_GRAD_PAL|TPF_FULLSHADOW), Rule->MessageDelay * TICKS_PER_MINUTE);
 	return(true);
 }
 
@@ -1139,8 +1175,8 @@ bool TActionClass::TAction_TEXT_TRIGGER(HouseClass * , ObjectClass * , TriggerCl
 /// </summary>
 bool TActionClass::TAction_MAKE_ALLY(HouseClass * house, ObjectClass * , TriggerClass * trig, Cell const & )
 {
-	if (Data.House != HOUSE_NONE) {
-		HouseClass * house2 = House_From_HousesType(Data.House);
+	HouseClass * house2 = House_From_HousesType(Data.House);
+	if (house2 != NULL) {
 		house->Make_Ally(house2);
 		house2->Make_Ally(house);
 	}
@@ -1155,8 +1191,8 @@ bool TActionClass::TAction_MAKE_ALLY(HouseClass * house, ObjectClass * , Trigger
 /// </summary>
 bool TActionClass::TAction_MAKE_ENEMY(HouseClass * house, ObjectClass * , TriggerClass * trig, Cell const & )
 {
-	if (Data.House != HOUSE_NONE) {
-		HouseClass * house2 = House_From_HousesType(Data.House);
+	HouseClass * house2 = House_From_HousesType(Data.House);
+	if (house2 != NULL) {
 		house->Make_Enemy(house2);
 		house2->Make_Enemy(house);
 	}
@@ -1452,11 +1488,12 @@ bool TActionClass::TAction_PLAY_SOUND_RANDOM(HouseClass * , ObjectClass * , Trig
 /// <summary>
 /// Plays a sound effect at the trigger's waypoint.
 /// The sound is positioned on the map, so the player hears it only while the view is
-/// somewhere near the waypoint.
+/// somewhere near the waypoint. A looping sound stays at the waypoint, follows the
+/// view in and out of range, and travels with a save.
 /// </summary>
 bool TActionClass::TAction_PLAY_SOUND_AT(HouseClass * , ObjectClass * , TriggerClass * , Cell const & )
 {
-	Sound_Effect(Data.Sound, Scen->Get_Waypoint_Coord(EffectLocation));
+	Static_Sound(Data.Sound, Scen->Get_Waypoint_Coord(EffectLocation), STATIC_SOUND_TRIGGER);
 	return(true);
 }
 
@@ -1545,7 +1582,7 @@ bool TActionClass::TAction_DZ(HouseClass * , ObjectClass * , TriggerClass * , Ce
 /// </summary>
 bool TActionClass::TAction_WIN(HouseClass * , ObjectClass * , TriggerClass * , Cell const & )
 {
-	if (Data.House == PlayerPtr->Class->House) {
+	if (House_Matches(PlayerPtr, Data.House)) {
 		PlayerPtr->Flag_To_Win();
 	} else {
 		PlayerPtr->Flag_To_Lose();
@@ -1561,7 +1598,7 @@ bool TActionClass::TAction_WIN(HouseClass * , ObjectClass * , TriggerClass * , C
 /// </summary>
 bool TActionClass::TAction_LOSE(HouseClass * , ObjectClass * , TriggerClass * , Cell const & )
 {
-	if (Data.House != PlayerPtr->Class->House) {
+	if (!House_Matches(PlayerPtr, Data.House)) {
 		PlayerPtr->Flag_To_Win();
 	} else {
 		PlayerPtr->Flag_To_Lose();
@@ -1577,8 +1614,9 @@ bool TActionClass::TAction_LOSE(HouseClass * , ObjectClass * , TriggerClass * , 
 /// </summary>
 bool TActionClass::TAction_BEGIN_PRODUCTION(HouseClass * , ObjectClass * , TriggerClass * trig, Cell const & )
 {
-	if (Data.House != HOUSE_NONE) {
-		House_From_HousesType(Data.House)->Begin_Production();
+	HouseClass * hptr = House_From_HousesType(Data.House);
+	if (hptr != NULL) {
+		hptr->Begin_Production();
 	}
 	return(true);
 }
@@ -1591,8 +1629,9 @@ bool TActionClass::TAction_BEGIN_PRODUCTION(HouseClass * , ObjectClass * , Trigg
 /// </summary>
 bool TActionClass::TAction_FIRE_SALE(HouseClass * , ObjectClass * , TriggerClass * trig, Cell const & )
 {
-	if (Data.House != HOUSE_NONE) {
-		House_From_HousesType(Data.House)->State = STATE_ENDGAME;
+	HouseClass * hptr = House_From_HousesType(Data.House);
+	if (hptr != NULL) {
+		hptr->State = STATE_ENDGAME;
 	}
 	return(true);
 }
@@ -1605,8 +1644,9 @@ bool TActionClass::TAction_FIRE_SALE(HouseClass * , ObjectClass * , TriggerClass
 /// </summary>
 bool TActionClass::TAction_AUTOCREATE(HouseClass * , ObjectClass * , TriggerClass * trig, Cell const & )
 {
-	if (Data.House != HOUSE_NONE) {
-		House_From_HousesType(Data.House)->IsAlerted = true;
+	HouseClass * hptr = House_From_HousesType(Data.House);
+	if (hptr != NULL) {
+		hptr->IsAlerted = true;
 	}
 	return(true);
 }
@@ -1737,7 +1777,11 @@ bool TActionClass::TAction_REINFORCEMENTS_SPECIAL(HouseClass * , ObjectClass * ,
 /// </summary>
 bool TActionClass::TAction_ALL_HUNT(HouseClass * , ObjectClass * , TriggerClass * trig, Cell const & )
 {
-	House_From_HousesType(Data.House)->All_To_Hunt();
+	HouseClass * hptr = House_From_HousesType(Data.House);
+	if (hptr == NULL) {
+		return(false);
+	}
+	hptr->All_To_Hunt();
 	return(true);
 }
 
@@ -1853,15 +1897,20 @@ bool TActionClass::TAction_PLAY_ANIM(HouseClass * , ObjectClass * , TriggerClass
 /// the damage, the combat animation and the lighting flash, and an EM pulse weapon
 /// throws its pulse as well.
 /// </summary>
+/// <returns>bool; Did the position name a weapon to detonate?</returns>
 bool TActionClass::TAction_DO_EXPLOSION(HouseClass * , ObjectClass * , TriggerClass * , Cell const & )
 {
+	WeaponType weapon = Data.Weapon;
+	if ((unsigned)weapon >= (unsigned)Weapons.Count()) {
+		return(false);
+	}
+
 	Cell waypoint = Scen->Get_Waypoint_Cell(EffectLocation);
 	Coord coord = Coord (waypoint);
 	coord.Z = Map.Get_Height_GL(coord);
 	if ( Map[waypoint].IsUnderBridge || Map[waypoint].WasUnderBridge ) {
 		coord.Z += BRIDGE_LEPTON_HEIGHT;
 	}
-	WeaponType weapon = Data.Weapon;
 	int damage = Weapons[weapon]->Attack;
 
 	WeaponTypeClass * ww = Weapons[weapon];
@@ -2271,8 +2320,9 @@ bool TActionClass::TAction_SET_AMBIENT_LIGHT(HouseClass * , ObjectClass * , Trig
 /// </summary>
 bool TActionClass::TAction_BEGIN_AI_TRIGGERS(HouseClass * , ObjectClass * , TriggerClass * trig, Cell const & )
 {
-	if (Data.House != HOUSE_NONE) {
-		House_From_HousesType(Data.House)->IsAITriggersOn = true;
+	HouseClass * hptr = House_From_HousesType(Data.House);
+	if (hptr != NULL) {
+		hptr->IsAITriggersOn = true;
 	}
 	return(true);
 }
@@ -2285,8 +2335,9 @@ bool TActionClass::TAction_BEGIN_AI_TRIGGERS(HouseClass * , ObjectClass * , Trig
 /// </summary>
 bool TActionClass::TAction_STOP_AI_TRIGGERS(HouseClass * , ObjectClass * , TriggerClass * trig, Cell const & )
 {
-	if (Data.House != HOUSE_NONE) {
-		House_From_HousesType(Data.House)->IsAITriggersOn = false;
+	HouseClass * hptr = House_From_HousesType(Data.House);
+	if (hptr != NULL) {
+		hptr->IsAITriggersOn = false;
 	}
 	return(true);
 }
@@ -2435,6 +2486,253 @@ bool TActionClass::TAction_TOGGLE_TRAIN_CARGO(HouseClass * , ObjectClass * , Tri
 	return(true);
 }
 
+
+/// <summary>
+/// Gives credits to the named house, or takes them away when the amount is negative.
+/// </summary>
+/// <returns>bool; Was the amount applied?</returns>
+bool TActionClass::TAction_GIVE_CREDITS(HouseClass * , ObjectClass * , TriggerClass * , Cell const & )
+{
+	HouseClass * hptr = House_From_HousesType(Data.House);
+	if (hptr == NULL) {
+		return(false);
+	}
+
+	int amount = TriggerRect.X;
+	if (amount >= 0) {
+		if (hptr->Credits > std::numeric_limits<int>::max() - amount) return(false);
+		hptr->Refund_Money(amount);
+	} else {
+		if (amount == std::numeric_limits<int>::min()) return(false);
+		hptr->Spend_Money(-amount);
+	}
+	return(true);
+}
+
+
+/// <summary>
+/// Enables the short game defeat rule.
+/// </summary>
+bool TActionClass::TAction_ENABLE_SHORT_GAME(HouseClass * , ObjectClass * , TriggerClass * , Cell const & )
+{
+	Session.Options.ShortGame = true;
+	return(true);
+}
+
+
+/// <summary>
+/// Disables the short game defeat rule.
+/// </summary>
+bool TActionClass::TAction_DISABLE_SHORT_GAME(HouseClass * , ObjectClass * , TriggerClass * , Cell const & )
+{
+	Session.Options.ShortGame = false;
+	return(true);
+}
+
+
+/// <summary>
+/// Places a building of the named type for the named house at the action's waypoint.
+/// A forced placement ignores the placement rules and skips the build-up; otherwise the
+/// building goes up as though just placed and is refused on ground it cannot occupy.
+/// </summary>
+/// <returns>bool; Was the building placed?</returns>
+bool TActionClass::TAction_CREATE_BUILDING_AT(HouseClass * , ObjectClass * , TriggerClass * , Cell const & )
+{
+	if (!Scen->Is_Valid_Waypoint(EffectLocation)) {
+		return(false);
+	}
+
+	HouseClass * hptr = House_From_HousesType(Data.House);
+	int type = TriggerRect.X;
+	if (hptr == NULL || type < 0 || type >= BuildingTypes.Count()) {
+		return(false);
+	}
+
+	BuildingTypeClass const * btype = BuildingTypes[type];
+	Cell cell = Scen->Get_Waypoint_Cell(EffectLocation);
+
+	if (TriggerRect.Y > 0) {
+		ScenarioInit++;
+		BuildingClass * building = new BuildingClass(btype, hptr);
+		bool placed = building != nullptr && building->Unlimbo(Coord(cell));
+		if (!placed) delete building;
+		ScenarioInit--;
+		return(placed);
+	}
+
+	BuildingClass * building = new BuildingClass(btype, hptr);
+	if (building == nullptr) return(false);
+	building->Assign_Mission(MISSION_CONSTRUCTION);
+	if (!building->Unlimbo(Coord(cell))) {
+		delete building;
+		return(false);
+	}
+	if (building->IsActive) {
+		building->Revealed(hptr);
+		building->IsReadyToCommence = true;
+	}
+	return(true);
+}
+
+
+/// <summary>
+/// Destroys everything the named house owns and marks it defeated.
+/// </summary>
+/// <returns>bool; Is the named house in play?</returns>
+bool TActionClass::TAction_HOUSE_DESTROY_ALL(HouseClass * , ObjectClass * , TriggerClass * , Cell const & )
+{
+	HouseClass * hptr = House_From_HousesType(Data.House);
+	if (hptr == NULL) {
+		return(false);
+	}
+
+	hptr->Blowup_All();
+	hptr->MPlayer_Defeated();
+	return(true);
+}
+
+
+/// <summary>
+/// Promotes every object attached to the trigger to elite.
+/// </summary>
+/// <returns>bool; Was anything promoted?</returns>
+bool TActionClass::TAction_MAKE_ELITE(HouseClass * , ObjectClass * , TriggerClass * trig, Cell const & )
+{
+	bool success = false;
+
+	for (int index = 0; index < Technos.Count(); index++) {
+		TechnoClass * techno = Technos[index];
+		if (techno->IsActive &&
+				techno->IsDown &&
+				!techno->IsInLimbo &&
+				techno->Tag != NULL &&
+				techno->Tag->Is_Trigger_Attached(trig)) {
+
+			techno->Veterancy.Set_Elite(true);
+			success = true;
+		}
+	}
+	return(success);
+}
+
+
+/// <summary>
+/// Lets allied houses see the terrain each other reveals.
+/// </summary>
+bool TActionClass::TAction_ENABLE_ALLY_REVEAL(HouseClass * , ObjectClass * , TriggerClass * , Cell const & )
+{
+	Rule->IsAllyReveal = true;
+	return(true);
+}
+
+
+/// <summary>
+/// Stops allied houses seeing the terrain each other reveals.
+/// </summary>
+bool TActionClass::TAction_DISABLE_ALLY_REVEAL(HouseClass * , ObjectClass * , TriggerClass * , Cell const & )
+{
+	Rule->IsAllyReveal = false;
+	return(true);
+}
+
+
+/// <summary>
+/// Requests an autosave after the frame has finished retiring dead objects.
+/// </summary>
+bool TActionClass::TAction_CREATE_AUTOSAVE(HouseClass * , ObjectClass * , TriggerClass * , Cell const & )
+{
+	SaveManager.Autosave.Arm();
+	return(true);
+}
+
+
+/// <summary>
+/// Removes every object attached to the trigger from the map without destroying it.
+/// </summary>
+/// <returns>bool; Was anything removed?</returns>
+bool TActionClass::TAction_DELETE_OBJECT(HouseClass * , ObjectClass * , TriggerClass * trig, Cell const & )
+{
+	bool success = false;
+
+	for (int index = 0; index < Technos.Count(); index++) {
+		TechnoClass * techno = Technos[index];
+		if (techno->IsActive &&
+				techno->IsDown &&
+				!techno->IsInLimbo &&
+				techno->Tag != NULL &&
+				techno->Tag->Is_Trigger_Attached(trig)) {
+
+			techno->Delete_Me();
+			success = true;
+		}
+	}
+	return(success);
+}
+
+
+/// <summary>
+/// Gives every infantry, vehicle and aircraft of the trigger's house the named mission.
+/// </summary>
+/// <returns>bool; Was the mission one the engine knows?</returns>
+bool TActionClass::TAction_ALL_ASSIGN_MISSION(HouseClass * house, ObjectClass * , TriggerClass * , Cell const & )
+{
+	MissionType mission = MissionType(Data.Value);
+	if (house == NULL || mission < MISSION_FIRST || mission >= MISSION_COUNT) {
+		return(false);
+	}
+
+	for (int index = 0; index < Feet.Count(); index++) {
+		FootClass * foot = Feet[index];
+		if (foot->House == house &&
+				foot->Strength > 0 &&
+				foot->IsActive &&
+				foot->IsDown &&
+				!foot->IsInLimbo) {
+
+			foot->Assign_Mission(mission);
+		}
+	}
+	return(true);
+}
+
+
+/// <summary>
+/// Allies the trigger's house with the named house without the reverse alliance, even where
+/// the alliance limits would refuse it.
+/// </summary>
+/// <returns>bool; Is the named house in play?</returns>
+bool TActionClass::TAction_MAKE_ALLY_ONE_WAY(HouseClass * house, ObjectClass * , TriggerClass * , Cell const & )
+{
+	HouseClass * house2 = House_From_HousesType(Data.House);
+	if (house == NULL || house2 == NULL || house2 == house) {
+		return(false);
+	}
+
+	ScenarioInit++;
+	house->Make_Ally(house2);
+	ScenarioInit--;
+	return(true);
+}
+
+
+/// <summary>
+/// Has the trigger's house declare war on the named house. An alliance the named house held
+/// with this one is broken as well, since breaking one is bilateral.
+/// </summary>
+/// <returns>bool; Is the named house in play?</returns>
+bool TActionClass::TAction_MAKE_ENEMY_ONE_WAY(HouseClass * house, ObjectClass * , TriggerClass * , Cell const & )
+{
+	HouseClass * house2 = House_From_HousesType(Data.House);
+	if (house == NULL || house2 == NULL || house2 == house) {
+		return(false);
+	}
+
+	ScenarioInit++;
+	house->Make_Enemy(house2);
+	ScenarioInit--;
+	return(true);
+}
+
 #ifdef _DEBUG
 /***********************************************************************************************
  * Action_From_Name -- retrieves ActionType for given name                                     *
@@ -2521,6 +2819,9 @@ NeedType Action_Needs(TActionType action)
 		case TACTION_ALL_CHANGE_HOUSE:
 		case TACTION_BEGIN_AI_TRIGGERS:
 		case TACTION_STOP_AI_TRIGGERS:
+		case TACTION_HOUSE_DESTROY_ALL:
+		case TACTION_MAKE_ALLY_ONE_WAY:
+		case TACTION_MAKE_ENEMY_ONE_WAY:
 			return(NEED_HOUSE);
 
 		case TACTION_VEIN_GROWTH:
@@ -2643,6 +2944,15 @@ NeedType Action_Needs(TActionType action)
 		case TACTION_SET_AMBIENT_RATE:
 			return(NEED_FLOAT);
 
+		case TACTION_GIVE_CREDITS:
+			return(NEED_HOUSE_AND_CREDITS);
+
+		case TACTION_CREATE_BUILDING_AT:
+			return(NEED_STRUCTURE_PLACEMENT);
+
+		case TACTION_ALL_ASSIGN_MISSION:
+			return(NEED_MISSION);
+
 		default:
 			break;
 	}
@@ -2650,18 +2960,9 @@ NeedType Action_Needs(TActionType action)
 }
 
 
-/// <summary>
-/// Fetches the class identifier of this object.
-/// This routine is used by the persistence machinery to recognize what kind of object it
-/// is about to load back.
-/// </summary>
-/// <param name="retval">Pointer to the identifier to fill in.</param>
-/// <returns>Returns with S_OK, or E_POINTER if no destination was supplied.</returns>
-HRESULT STDMETHODCALLTYPE TActionClass::GetClassID(CLSID * retval)
+ClassID TActionClass::Class_ID(void) const
 {
-	if (retval == NULL) return(E_POINTER);
-	*retval = CLSID_ActionClass;
-	return(S_OK);
+	return(ClassID_ActionClass);
 }
 
 
@@ -2729,6 +3030,8 @@ AttachType Attaches_To(TActionType event)
 		case TACTION_CHANGE_HOUSE:
 		case TACTION_GO_BERZERK:
 		case TACTION_SET_GROUP_ID:
+		case TACTION_MAKE_ELITE:
+		case TACTION_DELETE_OBJECT:
 			attach = AttachType(attach | ATTACH_OBJECT);
 			break;
 
