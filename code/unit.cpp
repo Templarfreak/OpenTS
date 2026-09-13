@@ -160,6 +160,7 @@
 #include "vox.h"
 #include "warhead.h"
 #include "weapon.h"
+#include "dbgprint.h"
 
 #include "bench.hh"
 #include "color.hh"
@@ -2161,6 +2162,7 @@ void UnitClass::Per_Cell_Process(PCPType why)
 			// room has to be checked here as well.
 			if (techno->Can_Fit_Passenger(this) && Transmit_Message(RADIO_IM_IN, techno) == RADIO_ATTACH) {
 				Limbo();
+				DebugString("WHAT???");
 				techno->Cargo.Attach(this);
 				Hidden();
 			}

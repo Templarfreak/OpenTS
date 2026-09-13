@@ -39,6 +39,7 @@
 #include "unittype.h"
 #include "vanimtype.h"
 #include "weapon.h"
+#include "dbgprint.h"
 
 #include "pip.hh"
 #include "voc.hh"
@@ -212,7 +213,20 @@ TechnoTypeClass::TechnoTypeClass(char const * ininame, SpeedType speed) :
 	JumpjetWobblesPerSecond(-1),
 	JumpjetWobbleDeviation(-1),
 	BalloonHoverHeight(-1),
-	JumpjetCloakDetectionRadius(-1)
+	JumpjetCloakDetectionRadius(-1),
+	VehicleCostBonus(0),
+	InfantryCostBonus(0),
+	AircraftCostBonus(0),
+	BuildingCostBonus(0),
+	FactoryPlant(false),
+	ChronoDistanceFactor(32),
+	ChronoRangeMinimum(0),
+	ChronoMinimumDelay(0),
+	TeleportInSound(VOC_NONE),
+	TeleportOutSound(VOC_NONE),
+	TeleportInEffect(NULL),
+	TeleportOutEffect(NULL),
+	TeleportSparks(NULL)
 {
 	IsSentient = true;
 
@@ -334,9 +348,39 @@ int TechnoTypeClass::Time_To_Build(void) const
  *=============================================================================================*/
 int TechnoTypeClass::Cost_Of(HouseClass * house) const
 {
+	float mult = 1;
+
 	if (house != NULL) {
-		return(Raw_Cost() * house->CostBias);
+		if (house->FactoryPlants.Count() > 0) {
+			for (int i = 0; i < house->FactoryPlants.Count(); i++) {
+				TechnoClass* const plant = house->FactoryPlants[i];
+
+				if (plant == NULL) {
+					continue;
+				}
+
+				switch (RTTI) {
+					case RTTI_INFANTRYTYPE:
+						mult = mult + plant->TClass->InfantryCostBonus;
+						break;
+					case RTTI_AIRCRAFTTYPE:
+						mult = mult + plant->TClass->AircraftCostBonus;
+						break;
+					case RTTI_UNITTYPE:
+						mult = mult + plant->TClass->VehicleCostBonus;
+						break;
+					case RTTI_BUILDINGTYPE:
+						mult = mult + plant->TClass->BuildingCostBonus;
+						break;
+					default:
+						break;
+				}
+			}
+		}
+
+		return(Raw_Cost() * house->CostBias * mult);
 	}
+
 	return(Raw_Cost());
 }
 
@@ -700,6 +744,24 @@ bool TechnoTypeClass::Read_INI(CCINIClass const & ini)
 		JumpjetWobblesPerSecond = ini.Get_Float(Name(), "WobblesPerSecond", JumpjetWobblesPerSecond);
 		JumpjetWobbleDeviation = ini.Get_Int(Name(), "WobbleDeviation", JumpjetWobbleDeviation);
 		JumpjetCloakDetectionRadius = ini.Get_Int(Name(), "CloakDetectionRadius", JumpjetCloakDetectionRadius);
+
+		// factory plant
+		VehicleCostBonus = ini.Get_Float(Name(), "VehicleCostBonus", VehicleCostBonus);
+		InfantryCostBonus = ini.Get_Float(Name(), "InfantryCostBonus", InfantryCostBonus);
+		AircraftCostBonus = ini.Get_Float(Name(), "AircraftCostBonus", AircraftCostBonus);
+		BuildingCostBonus = ini.Get_Float(Name(), "BuildingCostBonus", BuildingCostBonus);
+		FactoryPlant = ini.Get_Bool(Name(), "FactoryPlant", FactoryPlant);
+
+		// Chrono teleport controls
+		ChronoDistanceFactor = ini.Get_Int(Name(), "ChronoDistanceFactor", ChronoDistanceFactor);
+		ChronoMinimumDelay = ini.Get_Int(Name(), "ChronoMinimumDelay", ChronoMinimumDelay);
+		ChronoRangeMinimum = ini.Get_Int(Name(), "ChronoRangeMinimum", ChronoRangeMinimum);
+
+		TeleportInSound = ini.Get_VocType(Name(), "TeleportInSound", TeleportInSound);
+		TeleportOutSound = ini.Get_VocType(Name(), "TeleportOutSound", TeleportOutSound);
+		TeleportInEffect = TGet_Class(ini, Name(), "TeleportInEffect", TeleportInEffect);
+		TeleportOutEffect = TGet_Class(ini, Name(), "TeleportOutEffect", TeleportOutEffect);
+		TeleportSparks = TGet_Class(ini, Name(), "TeleportSparks", TeleportSparks);
 
 		IsLeader = false;
 		if (Weapons[0].Weapon != NULL && Weapons[0].Weapon->Attack > 0) {
@@ -1119,6 +1181,23 @@ void TechnoTypeClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(BalloonApproachSpeed);
 	stream.Serialize(BalloonTerminalSpeed);
 	stream.Serialize(JumpjetCloakDetectionRadius);
+
+	// factory plant
+	stream.Serialize(VehicleCostBonus);
+	stream.Serialize(InfantryCostBonus);
+	stream.Serialize(AircraftCostBonus);
+	stream.Serialize(BuildingCostBonus);
+	stream.Serialize(FactoryPlant);
+
+	// Chrono Teleport Controls
+	stream.Serialize(ChronoDistanceFactor);
+	stream.Serialize(ChronoMinimumDelay);
+	stream.Serialize(ChronoRangeMinimum);
+	stream.Serialize(TeleportInEffect);
+	stream.Serialize(TeleportOutEffect);
+	stream.Serialize(TeleportInSound);
+	stream.Serialize(TeleportOutSound);
+	stream.Serialize(TeleportSparks);
 }
 
 
@@ -1232,6 +1311,23 @@ void TechnoTypeClass::Compute_CRC(class CRCEngine & crc) const
 	crc(BalloonApproachSpeed);
 	crc(BalloonTerminalSpeed);
 	crc(JumpjetCloakDetectionRadius);
+
+	// factory plant
+	crc(VehicleCostBonus);
+	crc(InfantryCostBonus);
+	crc(AircraftCostBonus);
+	crc(BuildingCostBonus);
+	crc(FactoryPlant);
+
+	// Chrono Teleport Controls
+	crc(ChronoDistanceFactor);
+	crc(ChronoMinimumDelay);
+	crc(ChronoRangeMinimum);
+	crc(TeleportInSound);
+	crc(TeleportInSound);
+	crc(TeleportInEffect);
+	crc(TeleportOutEffect);
+	crc(TeleportSparks);
 }
 
 

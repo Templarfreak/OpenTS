@@ -291,6 +291,15 @@ class TechnoTypeClass : public ObjectTypeClass
 		int Cost;
 
 		/*
+		** changes the cost of these technotypes by this specified multiplier.
+		*/
+		bool FactoryPlant;
+		float InfantryCostBonus;
+		float VehicleCostBonus;
+		float AircraftCostBonus;
+		float BuildingCostBonus;
+
+		/*
 		** Explicit override of build time in minutes. -1 means use normal build time calculation. Defaults to -1.
 		*/
 		float BuildTime;
@@ -792,6 +801,18 @@ class TechnoTypeClass : public ObjectTypeClass
 		 * cloaked object below it, giving the position away.
 		 */
 		int JumpjetCloakDetectionRadius;
+
+		/*
+		 * Teleport values for RA2-style Chrono Teleports.
+		 */
+		int ChronoDistanceFactor;
+		int ChronoRangeMinimum;
+		int ChronoMinimumDelay;
+		VocType TeleportInSound;
+		VocType TeleportOutSound;
+		AnimTypeClass const * TeleportInEffect;
+		AnimTypeClass const * TeleportOutEffect;
+		AnimTypeClass const * TeleportSparks;
 
 		/*
 		 * These are the amounts to bias this object's draw depth by while it is passing the

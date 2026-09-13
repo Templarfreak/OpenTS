@@ -29,6 +29,7 @@ class TeleportLocomotionClass : public LocomotionClass
 		virtual void Stop_Moving(void) override;
 		virtual bool Process(void) override;
 		virtual LayerType In_Which_Layer(void) override;
+		virtual VisualType Visual_Character(bool) override;
 
 		virtual bool Is_Stationary(void);
 
@@ -39,4 +40,5 @@ class TeleportLocomotionClass : public LocomotionClass
 		 * no separate moving flag, so this doubles as one.
 		 */
 		Coord DestinationCoord;
+		bool teleported;
 };

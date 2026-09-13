@@ -205,6 +205,7 @@
 #include "warhead.h"
 #include "wave.h"
 #include "weapon.h"
+#include "dbgprint.h"
 
 #include "bench.hh"
 #include "tube.hh"
@@ -1724,6 +1725,10 @@ bool TechnoClass::Limbo(void)
 		Radar_Untrack();
 	}
 
+	if (TClass->FactoryPlant) {
+		Owner_HouseClass()->FactoryPlants.Delete(this);
+	}
+
 	if (!IsInLimbo) {
 		House->Tracking_Active_Remove(this, false);
 		int risk = Risk();
@@ -1766,6 +1771,19 @@ bool TechnoClass::Unlimbo(Coord const & coord, Dir256 dir)
 
 		if (!IsActive) {
 			return(true);
+		}
+
+		if (TClass->FactoryPlant) {
+			HousesType house = Owner();
+			for (int lp = HOUSE_FIRST; lp < Houses.Count(); lp ++) {
+				if (house == lp) {
+					HouseClass * house_ptr = Houses[lp];
+					house_ptr->FactoryPlants.Add(this);
+					break;
+				}
+			}
+
+			DebugString("what??????? why add to FactoryPlant????");
 		}
 
 		House->Tracking_Active_Add(this, false);

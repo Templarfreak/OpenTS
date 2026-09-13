@@ -545,6 +545,11 @@ class HouseClass : public AbstractClass
 		AbstractClass * FlagLocation;
 
 		/*
+		** all factory plants owned by this house
+		*/
+		DynamicVectorClass<TechnoClass *> FactoryPlants;
+
+		/*
 		**	This is the flag-home-cell for this house.  This is where we must bring
 		**	another house's flag back to, to defeat that house.
 		*/

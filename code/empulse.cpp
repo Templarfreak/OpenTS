@@ -151,7 +151,11 @@ void EMPulseClass::Create(TechnoClass * source)
 				if (foot->Locomotion->Is_Moving()) {
 					foot->Locomotion->Stop_Moving();
 				}
-				foot->StunDuration = Duration;
+
+				if (foot->StunDuration < Duration) {
+					foot->StunDuration = Duration;
+				}
+
 				AnimClass * sparks = new AnimClass(Rule->EMPulseSparkles, foot->Center_Coord(), Random_Pick(0, 25));
 				if (sparks != NULL) {
 					sparks->Attach_To(foot);
@@ -178,7 +182,11 @@ void EMPulseClass::Create(TechnoClass * source)
 											building->Do_Destruction(NULL, source, true, building->Occupy_List());
 										} else if (!building->Class->IsCoreDefender) {
 											building->Power_Off();
-											building->StunDuration = Duration;
+
+											if (building->StunDuration < Duration) {
+												building->StunDuration = Duration;
+											}
+
 											if (building->Class->IsRadar) {
 												building->House->RecalcRadar = true;
 											}
@@ -218,7 +226,11 @@ void EMPulseClass::Create(TechnoClass * source)
 											if (foot->Locomotion->Is_Moving()) {
 												foot->Locomotion->Stop_Moving();
 											}
-											foot->StunDuration = Duration;
+
+											if (foot->StunDuration < Duration) {
+												foot->StunDuration = Duration;
+											}
+
 											AnimClass * sparks = new AnimClass(Rule->EMPulseSparkles, foot->Center_Coord(), Random_Pick(0, 25));
 											if (sparks != NULL) {
 												sparks->Attach_To(foot);
