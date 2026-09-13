@@ -18,6 +18,17 @@
 #include "foot.h"
 #include "globals.h"
 #include "savestream.h"
+#include "dbgprint.h"
+#include "_map.h"
+#include "cell.h"
+#include "building.h"
+#include "anim.h"
+#include "rules.h"
+#include "ccrand.h"
+
+#include "_rules.h"
+
+#include <algorithm>
 
 
 /// <summary>
@@ -38,7 +49,7 @@ TeleportLocomotionClass::TeleportLocomotionClass(void) :
 /// </summary>
 bool TeleportLocomotionClass::Is_Moving(void)
 {
-	if (DestinationCoord != COORD_NONE) {
+	if (DestinationCoord != COORD_NONE && !teleported) {
 		return(true);
 	}
 	return(false);
@@ -104,15 +115,95 @@ void TeleportLocomotionClass::Stop_Moving(void)
 /// <returns>bool; Is there more movement still to process? A teleport never leaves any.</returns>
 bool TeleportLocomotionClass::Process(void)
 {
-	if (Is_Moving()) {
+	if (Is_Moving() && !LinkedTo->Is_Immobilized()) {
+		Coord spot = COORD_NONE;
+
+		if (LinkedTo->What_Am_I() == RTTI_INFANTRY) {
+			spot = Map[DestinationCoord].Closest_Free_Spot(DestinationCoord, false, Map[DestinationCoord].IsUnderBridge);
+			if (spot == COORD_NONE) {
+				Cell fallback = Map.Nearby_Location((Cell)DestinationCoord, LinkedTo->TClass->Speed);
+				if (fallback != CELL_NONE) {
+					spot = Map[fallback].Closest_Free_Spot(fallback.As_Coord(), false, Map[fallback].IsUnderBridge);
+				}
+			}
+		}
+		else {
+			bool blocked = Map[DestinationCoord].Flag.Occupy.Vehicle
+			|| (Map[DestinationCoord].Flag.Occupy.Monolith
+				&& (!Map[DestinationCoord].Get_Gate() || !Map[DestinationCoord].Get_Gate()->Is_Gate_Open()));
+			if (blocked) {
+				Cell fallback = Map.Nearby_Location((Cell)DestinationCoord, LinkedTo->TClass->Speed);
+				if (fallback != CELL_NONE) {
+					spot = fallback.As_Coord();
+				}
+			} else {
+				spot = DestinationCoord;
+			}
+		}
+		if (spot == COORD_NONE) {
+			return(false);
+		}
+		if (LinkedTo->TClass->ChronoDistanceFactor > 0) {
+			int dist = Point2D(LinkedTo->PositionCoord).Distance_To(Point2D(spot));
+			int stun_duration = dist / LinkedTo->TClass->ChronoDistanceFactor;
+			stun_duration = std::max(LinkedTo->TClass->ChronoMinimumDelay, stun_duration);
+
+			if (LinkedTo->StunDuration < stun_duration) {
+				LinkedTo->StunDuration = stun_duration;
+			}
+
+			DebugString("distance is: %d\n", dist);
+		}
+
+		if (LinkedTo->TClass->TeleportInEffect != NULL) {
+			new AnimClass(LinkedTo->TClass->TeleportInEffect, LinkedTo->PositionCoord);
+		}
+
+		if (LinkedTo->TClass->TeleportOutEffect != NULL) {
+			new AnimClass(LinkedTo->TClass->TeleportInEffect, spot);
+		}
+
+		if (LinkedTo->TClass->TeleportInSound != VOC_NONE) {
+			Sound_Effect(LinkedTo->TClass->TeleportInSound, LinkedTo->PositionCoord);
+		}
+
+		if (LinkedTo->TClass->TeleportOutSound != VOC_NONE) {
+			Sound_Effect(LinkedTo->TClass->TeleportOutSound, spot);
+		}
+
+		if (LinkedTo->TClass->TeleportSparks != NULL) {
+			AnimClass * sparks = new AnimClass(LinkedTo->TClass->TeleportSparks, LinkedTo->Center_Coord(), Random_Pick(0, 25));
+			if (sparks != NULL) {
+				sparks->Attach_To(LinkedTo);
+			}
+		}
+
+		LinkedTo->Clear_Occupy_Bit(LinkedTo->PositionCoord);
 		LinkedTo->Mark(MARK_UP);
-		LinkedTo->PositionCoord = DestinationCoord;
+		LinkedTo->PositionCoord = spot;
+		LinkedTo->Set_Occupy_Bit(spot);
 		LinkedTo->Mark(MARK_DOWN);
 		Stop_Moving();
+		LinkedTo->Assign_Destination(NULL);
 		LinkedTo->Per_Cell_Process(PCP_END);
 		LinkedTo->Look();
+		teleported = true;
+	}
+	else {
+		if (teleported && LinkedTo->StunDuration == 0) {
+			teleported = false;
+		}
 	}
 	return(false);
+}
+
+VisualType TeleportLocomotionClass::Visual_Character(bool raw)
+{
+	if (teleported) {
+		return(VISUAL_INDISTINCT);
+	}
+
+	return(VISUAL_NORMAL);
 }
 
 

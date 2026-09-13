@@ -358,7 +358,8 @@ HouseClass::HouseClass(HouseTypeClass const * type) :
 	EnemyArmorForcePrediction(0.33f),
 	EnemyAirForcePrediction(0.33f),
 	EnemyInfantryForcePrediction(0.34f),
-	PowerSurplus(0)
+	PowerSurplus(0),
+	FactoryPlants()
 {
 	int index;
 
@@ -6532,6 +6533,11 @@ void HouseClass::Compute_CRC(CRCEngine & crc) const
 	crc(WhoLastHurtMe);
 	crc(Enemy);
 	Allies.Compute_CRC(crc);
+	crc(FactoryPlants.Length());
+
+	for (int i = 0; i < FactoryPlants.Length(); i++) {
+		crc(FactoryPlants[i]->TClass->Name());
+	}
 	Base.Compute_CRC(crc);
 }
 
@@ -6730,6 +6736,7 @@ void HouseClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(EnemyInfantryForcePrediction);
 	stream.Serialize(PowerSurplus);
 	stream.Serialize(SpawnWaypoint);
+	stream.Serialize(FactoryPlants);
 }
 
 
