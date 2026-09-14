@@ -138,6 +138,8 @@
 #include "vox.h"
 #include "warhead.h"
 #include "weapon.h"
+#include "dbgprint.h"
+#include "voc.h"
 
 #include "bench.hh"
 
@@ -177,7 +179,16 @@ DoStruct const InfantryClass::MasterDoControls[DO_COUNT] = {
 	{true,	true,	false,	1},	/// DO_TUMBLE
 	{true,	true,	false,	1},	/// DO_FIREFLY
 	{false,	false,	true,	3},	/// DO_STRUGGLE
+	{true, false,  false,   1}, /// DO_DEPLOYED
+	{true, false,  false,   1}, /// DO_FIRE_DEPLOYED
+	{false, false, false,   1}, /// DO_DEPLOY
+	{false, false, false,   1}, /// DO_UNDEPLOY
 };
+
+	/// DO_DEPLOYED,
+	/// DO_FIRE_DEPLOYED,
+	/// DO_DEPLOY,
+	/// DO_UNDEPLOY,
 
 
 #ifdef _DEBUG
@@ -241,7 +252,8 @@ InfantryClass::InfantryClass(InfantryTypeClass const * type, HouseClass * house)
 	IsBerzerk(false),
 	IsZoneCheat(false),
 	WasSelected(false),
-	Fear(FEAR_NONE)
+	Fear(FEAR_NONE),
+	Deployed(false)
 {
 	Create_ID();
 	Infantry.Add(this);
@@ -561,7 +573,14 @@ int InfantryClass::Shape_Number(void) const
 	**	is prone.
 	*/
 	DoType doit = Doing;
-	if (doit == DO_NOTHING) doit = DO_STAND_READY;
+	if (doit == DO_NOTHING) {
+		if (Deployed) {
+			doit = DO_DEPLOYED;
+		}
+		else {
+			 doit = DO_STAND_READY;
+		}
+	}
 
 	/*
 	**	The infantry shape is always modulo the number of animation frames
@@ -1241,7 +1260,10 @@ void InfantryClass::Assign_Target(AbstractClass * target)
 		IsFiring = false;
 		if (IsProne) {
 			Do_Action(DO_PRONE);
-		} else {
+		} else if (Deployed) {
+			Do_Action(DO_DEPLOYED);
+		}
+		else {
 			Do_Action(DO_STAND_READY);
 		}
 	}
@@ -1458,7 +1480,12 @@ void InfantryClass::AI(void)
 	*/
 	if (IsFiring && Fetch_Rate() == 0) {
 		IsFiring = false;
-		Do_Action(DO_STAND_READY);
+		if (Deployed) {
+			Do_Action(DO_DEPLOYED);
+		}
+		else {
+			Do_Action(DO_STAND_READY);
+		}
 	}
 
 	/*
@@ -1977,7 +2004,38 @@ FireErrorType InfantryClass::Can_Fire(AbstractClass * target, int which) const
 /// <returns>bool; Is the infantry immobilized?</returns>
 bool InfantryClass::Is_Immobilized(void) const
 {
-	return(ProneStruggleTimer > 0 || BASECLASS::Is_Immobilized());
+	return(ProneStruggleTimer > 0 || BASECLASS::Is_Immobilized() || Deployed);
+}
+
+int InfantryClass::Do_MISSION_UNLOAD(void)
+{
+	if (Class->Deployer) {
+		Deployed = !Deployed;
+		DebugString("deploy switched. state = %s\n", Deployed ? "true" : "false");
+
+		if (Deployed) {
+			Do_Action(DO_DEPLOY);
+			if (Class->DeploySound.Count() > 0) {
+				int pick = Sim_Random_Pick(0, Class->DeploySound.Count() - 1);
+				if (VocClass_From_VocType((VocType)pick) != NULL) {
+					Sound_Effect((VocType)Class->DeploySound[pick], PositionCoord);
+				}
+			}
+		} else {
+			Do_Action(DO_UNDEPLOY);
+			if (Class->DeploySound.Count() > 0) {
+				int pick = Sim_Random_Pick(0, Class->DeploySound.Count() - 1);
+				if (VocClass_From_VocType((VocType)pick) != NULL) {
+					Sound_Effect((VocType)Class->UndeploySound[pick], PositionCoord);
+				}
+			}
+		}
+
+		Assign_Mission(MISSION_GUARD);
+		Commence();
+	}
+
+	return(1);
 }
 
 
@@ -2349,6 +2407,8 @@ bool InfantryClass::Stop_Driver(void)
 {
 	if (IsProne) {
 		Do_Action(DO_PRONE);
+	} else if (Deployed) {
+		Do_Action(DO_DEPLOYED);
 	} else {
 		Do_Action(DO_STAND_READY);
 	}
@@ -2778,7 +2838,9 @@ ActionType InfantryClass::What_Action(ObjectClass const * object, bool disallow_
 	**	There is no self-select action available for infantry types.
 	*/
 	if (action == ACTION_SELF) {
-		action = ACTION_NONE;
+		if (!Class->Deployer) {
+			action = ACTION_NONE;
+		}
 	}
 
 	/*
@@ -2844,6 +2906,7 @@ ActionType InfantryClass::What_Action(ObjectClass const * object, bool disallow_
 	*/
 	if (House->Is_Player_Control() && action == ACTION_NONE) action = ACTION_NOMOVE;
 
+	DebugString("is action deploy? %s\n", action == ACTION_SELF ? "TRUE" : "FALSE");
 	return(action);
 }
 
@@ -3317,7 +3380,7 @@ void InfantryClass::Fear_AI(void)
 		if (Class->IsDoggie) {
 			if (Fear >= FEAR_PANIC) {
 				if (!Locomotion->Is_Moving() && NavCom == NULL) {
-					if (Map[(Coord const &)PositionCoord].Land_Type() == LAND_TIBERIUM) {
+					if (Map[(Coord const &)PositionCoord].Land_Type() == LAND_TIBERIUM && !Deployed) {
 						Do_Action(DO_LIE_DOWN);
 					} else {
 						Goto_Tiberium(16, false);
@@ -3360,7 +3423,7 @@ void InfantryClass::Fear_AI(void)
 			**	Drop to the ground if anxious. Don't drop to the ground while moving
 			**	and the special elite flag is active.
 			*/
-			if (Fear >= FEAR_ANXIOUS && (!House->Is_Human_Player() || ((NavCom == NULL && !Locomotion->Is_Moving())))) {
+			if (Fear >= FEAR_ANXIOUS && (!House->Is_Human_Player() || ((NavCom == NULL && !Locomotion->Is_Moving()))) && !Deployed) {
 				Do_Action(DO_LIE_DOWN);
 			}
 		}
@@ -3492,12 +3555,12 @@ bool InfantryClass::Theft_AI(void)
 void InfantryClass::Firing_AI(void)
 {
 	if (TarCom != NULL) {
-		int primary = What_Weapon_Should_I_Use(TarCom);
+		int which_weapon = What_Weapon_Should_I_Use(TarCom);
 
 		if (!IsFiring) {
-			switch (Can_Fire(TarCom, primary)) {
+			switch (Can_Fire(TarCom, which_weapon)) {
 				case FIRE_ILLEGAL:
-					if (Combat_Damage(primary) < 0) {
+					if (Combat_Damage(which_weapon) < 0) {
 						ObjectClass * targ = dynamic_cast<ObjectClass *>(TarCom);
 						if (Can_Heal(targ)) {
 							if (targ->HealthRatio >= Rule->ConditionGreen) {
@@ -3520,7 +3583,10 @@ void InfantryClass::Firing_AI(void)
 					if (Is_JumpJet()) {
 						Do_Action(DO_FIREFLY);
 					} else {
-						if (IsProne) {
+						if (Deployed) {
+							Do_Action(DO_FIRE_DEPLOYED);
+						}
+						else if (IsProne) {
 							Do_Action(DO_FIRE_PRONE);
 						} else {
 							Do_Action(DO_FIRE_WEAPON);
@@ -3554,19 +3620,23 @@ void InfantryClass::Firing_AI(void)
 
 		if (IsFiring && Fetch_Stage() == firestage) {
 
-			primary = What_Weapon_Should_I_Use(TarCom);
-			if (Can_Fire(TarCom, primary) == FIRE_OK) {
-				Fire_At(TarCom, primary);
+			which_weapon = What_Weapon_Should_I_Use(TarCom);
+			if (Can_Fire(TarCom, which_weapon) == FIRE_OK) {
+				Fire_At(TarCom, which_weapon);
 			} else {
 				IsFiring = false;
 				if (IsProne) {
 					Do_Action(DO_PRONE);
-				} else {
+				}
+				else if (Deployed) {
+					Do_Action(DO_DEPLOYED);
+				}
+				else {
 					Do_Action(DO_STAND_READY);
 				}
 			}
 
-			const WeaponDataStruct * wdata = Get_Class_Weapon_Data(0);
+			const WeaponDataStruct * wdata = Get_Class_Weapon_Data(which_weapon);
 			if (wdata->Weapon->MaxSpeed < Rule->Incoming) {
 				Map[TarCom->Center_Coord()].Incoming(PositionCoord, true);
 			}
@@ -3574,6 +3644,14 @@ void InfantryClass::Firing_AI(void)
 	} else {
 		IsFiring = false;
 	}
+}
+
+bool InfantryClass::Can_Player_Fire(void) const
+{
+	if (Class->Deployer && Deployed && StunDuration <= 0) {
+		return(House->Is_Player_Control() && PrimaryWeapon != NULL);
+	}
+	return(BASECLASS::Can_Player_Fire());
 }
 
 
@@ -3613,7 +3691,11 @@ void InfantryClass::Doing_AI(void)
 					} else {
 						if (IsProne) {
 							Do_Action(DO_PRONE, true);
-						} else {
+						}
+						else if (Deployed) {
+							Do_Action(DO_DEPLOYED, true);
+						}
+						else {
 							Do_Action(DO_STAND_READY, true);
 						}
 					}
@@ -3642,6 +3724,13 @@ void InfantryClass::Doing_AI(void)
 	}
 }
 
+bool InfantryClass::Can_Deploy_Now(void) const
+{
+	if (Class->Deployer && StunDuration <= 0) {
+		return(true);
+	}
+}
+
 
 /***********************************************************************************************
  * InfantryClass::Movement_AI -- This routine handles all infantry movement logic.             *
@@ -3661,6 +3750,9 @@ void InfantryClass::Doing_AI(void)
  *=============================================================================================*/
 void InfantryClass::Movement_AI(void)
 {
+	if (Is_Immobilized()) {
+		return;
+	}
 	/*
 	**	Special hack check to ensure that infantry will never get stuck in a movement order if
 	**	there is no place to go.
@@ -3708,7 +3800,12 @@ void InfantryClass::Movement_AI(void)
 		}
 	} else {
 		if (Doing == DO_WALK || Doing == DO_FLY || Doing == DO_HOVER) {
-			Do_Action(DO_STAND_READY);
+			if (Deployed) {
+				Do_Action(DO_DEPLOYED);
+			}
+			else {
+				Do_Action(DO_STAND_READY);
+			}
 		}
 		if (Doing == DO_CRAWL) {
 			Do_Action(DO_PRONE);
@@ -3965,6 +4062,7 @@ void InfantryClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(WasSelected);
 	stream.Serialize(ProneStruggleTimer);
 	stream.Serialize(LookTimer);
+	stream.Serialize(Deployed);
 }
 
 
@@ -4078,6 +4176,7 @@ void InfantryClass::Compute_CRC(CRCEngine & crc) const
 	crc(IsProne);
 	crc(IsZoneCheat);
 	crc(WasSelected);
+	crc(Deployed);
 }
 
 
@@ -4291,7 +4390,9 @@ int InfantryClass::Do_MISSION_GUARD(void)
 			DirType dir(DIR_E);
 			Locomotion->Do_Turn(dir);
 		} else {
-			Do_Action(DO_LIE_DOWN);
+			if (!Deployed) {
+				Do_Action(DO_LIE_DOWN);
+			}
 		}
 	}
 

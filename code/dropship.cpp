@@ -1138,8 +1138,8 @@ void Draw_Unit_Info(Surface *surface, ConvertClass *drawer, TechnoTypeClass *tec
 			sprintf(cost, "Cost: N/A");
 		}
 
-		if (techtype->Get_Weapon(0)->Weapon != NULL) {
-			sprintf(armament, "Armament: %s", techtype->Get_Weapon(0)->Weapon->GivenName.c_str());
+		if (techtype->Get_Weapon(0, false)->Weapon != NULL) {
+			sprintf(armament, "Armament: %s", techtype->Get_Weapon(0, false)->Weapon->GivenName.c_str());
 		} else {
 			sprintf(armament, "Armament: NONE");
 		}

@@ -8352,7 +8352,7 @@ WeaponDataStruct const * BuildingClass::Get_Class_Weapon_Data(int which) const
 	if (UpgradeLevel != 0) {
 		for (int i = 0; i < UpgradeLevel; i++) {
 			if (Upgrades[i] != NULL) {
-				WeaponDataStruct const * weapon = Upgrades[i]->Get_Weapon(which);
+				WeaponDataStruct const * weapon = Upgrades[i]->Get_Weapon(which, Veterancy.Is_Elite());
 				if (weapon->Weapon != NULL) {
 					return(weapon);
 				}

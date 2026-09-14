@@ -102,7 +102,11 @@ InfantryTypeClass::InfantryTypeClass(char const * ininame) :
 	DoControls(NULL),
 	FireLaunch(false),
 	ProneLaunch(false),
-	VoiceComment()
+	VoiceComment(),
+	Deployer(false),
+	DeploySound({VOC_NONE}),
+	UndeploySound({VOC_NONE}),
+	DeployedCrushable(false)
 {
 	Create_ID();
 	InfantryTypes.Add(this);
@@ -268,7 +272,11 @@ char const * SequenceName[DO_COUNT] = {
 	"Fly",
 	"Tumble",
 	"FireFly",
-	"Struggle"
+	"Struggle",
+	"Deployed",
+	"DeployedFire",
+	"Deploy",
+	"Undeploy"
 };
 
 
@@ -369,6 +377,14 @@ bool InfantryTypeClass::Read_INI(CCINIClass const & ini)
 		if (IsBomber) IsCapture = true;
 		if (IsEngineer) IsCapture = true;
 		IsWebImmune = ini.Get_Bool(Name(), "IsWebImmune", IsWebImmune);
+		Deployer = ini.Get_Bool(Name(), "Deployer", Deployer);
+		DeployedCrushable = ini.Get_Bool(Name(), "DeployerCrushable", DeployedCrushable);
+
+		const char* name = Name();
+
+		DeploySound = ini.Get_VocType_List(ini, Name(), "DeploySound", DeploySound);
+		UndeploySound = ini.Get_VocType_List(ini, Name(), "UndeploySound", UndeploySound);
+		IsCrushable = ini.Get_Bool(Name(), "Crushable", IsCrushable);
 		IsCrawling = ArtINI.Get_Bool(Graphic_Name(), "Crawls", IsCrawling);
 		FireLaunch = ArtINI.Get_Int(Graphic_Name(), "FireUp", FireLaunch);
 		ProneLaunch = ArtINI.Get_Int(Graphic_Name(), "FireProne", ProneLaunch);
@@ -453,6 +469,18 @@ void InfantryTypeClass::Compute_CRC(CRCEngine & crc) const
 	crc(IsAgent);
 	crc(IsThief);
 	crc(IsVehicleThief);
+	crc(DeployedCrushable);
+	crc(DeploySound.Count());
+
+	for (int i = 0; i < DeploySound.Count(); i++) {
+		crc(DeploySound[i]);
+	}
+
+	crc(UndeploySound.Count());
+
+	for (int i = 0; i < UndeploySound.Count(); i++) {
+		crc(UndeploySound[i]);
+	}
 }
 
 
@@ -509,6 +537,10 @@ void InfantryTypeClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(IsDoggie);
 	stream.Serialize(IsJumpJet);
 	stream.Serialize(IsWebImmune);
+	stream.Serialize(Deployer);
+	stream.Serialize(DeployedCrushable);
+	stream.Serialize(DeploySound);
+	stream.Serialize(UndeploySound);
 }
 
 

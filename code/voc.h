@@ -77,6 +77,7 @@ void Static_Sounds_Stop(Coord const & coord, int mask);
 void Static_Sounds_Serialize(SaveStreamClass & stream);
 
 VocClass * VocClass_From_Name(char const * name);
+VocClass * VocClass_From_VocType(VocType voc);
 char const * Voc_Name(VocType voc);
 
 /***************************************************************************
@@ -115,6 +116,7 @@ class VocClass
 
 		static VocType From_Name(char const * name);
 		friend VocClass *VocClass_From_Name(char const * name);
+		friend VocClass *VocClass_From_VocType(VocType voc);
 		friend char const * Voc_Name(VocType voc);
 
 		// The [Defaults] section, as read by Init_Vocs.

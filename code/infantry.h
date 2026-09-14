@@ -34,6 +34,7 @@
 
 #include "_infantr.h"
 #include "foot.h"
+#include "infatype.h"
 
 #include "do.hh"
 #include "fear.hh"
@@ -120,6 +121,8 @@ class InfantryClass : public FootClass
 		 */
 		CDTimerClass<FrameTimerClass> LookTimer;
 
+		bool Deployed;
+
 		/*---------------------------------------------------------------------
 		**	Constructors, Destructors, and overloaded operators.
 		*/
@@ -177,6 +180,8 @@ class InfantryClass : public FootClass
 		virtual BulletClass * Fire_At(AbstractClass * target, int which) override;
 		virtual ResultType Take_Damage(int & damage, int distance, WarheadTypeClass const * warhead, TechnoClass * source=0, bool forced=false, bool=false) override;
 		virtual FireErrorType Can_Fire(AbstractClass * target, int which) const override;
+		virtual bool Can_Player_Fire(void) const override;
+		virtual bool Can_Deploy_Now(void) const;
 		virtual void Assign_Target(AbstractClass *) override;
 		virtual void Set_Occupy_Bit(Coord const & coord) override;
 		virtual void Clear_Occupy_Bit(Coord const & coord) override;
@@ -201,6 +206,7 @@ class InfantryClass : public FootClass
 		virtual bool Ready_To_Commence(void) override;
 		virtual int Do_MISSION_ATTACK(void) override;
 		virtual int Do_MISSION_GUARD(void) override;
+		virtual int Do_MISSION_UNLOAD(void) override;
 		virtual void Berzerk(void) override;
 		virtual void Start_Fear(void) override;
 		virtual void Stop_Fear(void) override;
