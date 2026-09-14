@@ -2129,7 +2129,7 @@ void BuildingTypeClass::Free_Buildup_Data(void)
 void BuildingTypeClass::Calculate_Base_Defense_Values(void)
 {
 	if (IsBaseDefense) {
-		WeaponTypeClass * weapon = Get_Weapon(0)->Weapon;
+		WeaponTypeClass * weapon = Get_Weapon(0, false)->Weapon;
 
 		if (weapon != NULL) {
 			int damage = weapon->Attack / (weapon->ROF * 0.025);

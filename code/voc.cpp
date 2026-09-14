@@ -574,6 +574,13 @@ VocClass * VocClass_From_Name(char const * name)
 	return(NULL);
 }
 
+VocClass * VocClass_From_VocType(VocType voc)
+{
+	if (voc < 0) return(NULL);
+	if (voc >= Vocs.Count()) return (NULL);
+	return Vocs[voc];
+}
+
 
 /***********************************************************************************************
  * Voc_Name -- Fetches the name for the sound effect.                                          *

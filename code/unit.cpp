@@ -992,7 +992,7 @@ void UnitClass::Visceroid_AI(void)
 void UnitClass::Jellyfish_AI(void)
 {
 	Cell pos = PositionCell;
-	WeaponTypeClass const * weapon = Class->Get_Weapon(0)->Weapon;
+	WeaponTypeClass const * weapon = Class->Get_Weapon(0, Veterancy.Is_Elite())->Weapon;
 	WarheadTypeClass const * warhead = weapon ? weapon->WarheadPtr : NULL;
 	int stage = Fetch_Stage();
 
@@ -4013,7 +4013,7 @@ MoveType UnitClass::Can_Enter_Cell(CellClass const * cellptr, FacingType dir, in
 						switch (rtti) {
 							case RTTI_TERRAIN: {
 
-								WeaponTypeClass const * weapon = Class->Get_Weapon(What_Weapon_Should_I_Use(obj))->Weapon;
+								WeaponTypeClass const * weapon = Class->Get_Weapon(What_Weapon_Should_I_Use(obj), Veterancy.Is_Elite())->Weapon;
 								if (weapon != NULL && weapon->WarheadPtr != NULL &&
 									weapon->WarheadPtr->IsWoodDestroyer && !obj->Class_Of()->IsImmune) {
 

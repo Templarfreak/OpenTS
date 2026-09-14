@@ -2377,6 +2377,17 @@ int FootClass::Do_MISSION_ENTER(void)
  *=============================================================================================*/
 void FootClass::Assign_Destination(AbstractClass * target, bool)
 {
+	if (Is_Immobilized()) {
+		if (RTTI == RTTI_INFANTRY) {
+			InfantryClass const * inf = (InfantryClass const *)this;
+			if (inf->Class->Deployer) {
+				if (inf->Deployed) {
+					return;
+				}
+			}
+		}
+	}
+
 	NavCom = target;
 
 	if (NavCom != NULL) {

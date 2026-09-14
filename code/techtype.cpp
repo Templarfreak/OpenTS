@@ -239,6 +239,11 @@ TechnoTypeClass::TechnoTypeClass(char const * ininame, SpeedType speed) :
 		Weapons[i].BarrelLength = 0;
 		Weapons[i].BarrelThickness = 0;
 		Weapons[i].FireFLH = Point3D(0,0,0);
+
+		EliteWeapons[i].Weapon = NULL;
+		EliteWeapons[i].BarrelLength = 0;
+		EliteWeapons[i].BarrelThickness = 0;
+		EliteWeapons[i].FireFLH = Point3D(0,0,0);
 	}
 
 	AbstractTypePtrTracker.Add(this);
@@ -521,10 +526,10 @@ double TechnoTypeClass::Self_Heal_Cap(void) const
  *=============================================================================================*/
 bool TechnoTypeClass::Is_Two_Shooter(void) const
 {
-	WeaponTypeClass *pri = Get_Weapon(0)->Weapon;
+	WeaponTypeClass *pri = Get_Weapon(0, false)->Weapon;
 
 	if (pri != NULL) {
-		WeaponTypeClass *sec = Get_Weapon(1)->Weapon;
+		WeaponTypeClass *sec = Get_Weapon(1, false)->Weapon;
 
 		if (pri == sec || pri->Burst > 1) {
 				return(true);
@@ -640,7 +645,11 @@ bool TechnoTypeClass::Read_INI(CCINIClass const & ini)
 		DebrisMaximums = ini.Get_IntList(IniName, "DebrisMaximums", DebrisMaximums);
 		Weapons[0].Weapon = TGet_Class(ini, Name(), "Primary", Weapons[0].Weapon);
 		Weapons[1].Weapon = TGet_Class(ini, Name(), "Secondary", Weapons[1].Weapon);
-		Weapons[2].Weapon = TGet_Class(ini, Name(), "Elite", Weapons[2].Weapon);
+		EliteWeapons[0].Weapon = TGet_Class(ini, Name(), "PrimaryElite", EliteWeapons[0].Weapon);
+		if (EliteWeapons[0].Weapon == NULL) {
+			EliteWeapons[0].Weapon = TGet_Class(ini, Name(), "Elite", EliteWeapons[0].Weapon);
+		}
+		EliteWeapons[1].Weapon = TGet_Class(ini, Name(), "SecondaryElite", EliteWeapons[1].Weapon);
 		VoiceMove = ini.Get_VocType_List(ini, IniName, "VoiceMove", VoiceMove);
 		VoiceSelect = ini.Get_VocType_List(ini, IniName, "VoiceSelect", VoiceSelect);
 		VoiceAttack = ini.Get_VocType_List(ini, IniName, "VoiceAttack", VoiceAttack);
@@ -796,9 +805,12 @@ bool TechnoTypeClass::Read_INI(CCINIClass const & ini)
 		Weapons[1].FireFLH = ArtINI.Get_Point(Graphic_Name(), "SecondaryFireFLH", Weapons[1].FireFLH);
 		Weapons[1].BarrelLength = ArtINI.Get_Int(Graphic_Name(), "SBarrelLength", Weapons[1].BarrelLength);
 		Weapons[1].BarrelThickness = ArtINI.Get_Int(Graphic_Name(), "SBarrelThickness", Weapons[1].BarrelThickness);
-		Weapons[2].FireFLH = ArtINI.Get_Point(Graphic_Name(), "PrimaryFireFLH", Weapons[2].FireFLH);
-		Weapons[2].BarrelLength = ArtINI.Get_Int(Graphic_Name(), "PBarrelLength", Weapons[2].BarrelLength);
-		Weapons[2].BarrelThickness = ArtINI.Get_Int(Graphic_Name(), "PBarrelThickness", Weapons[2].BarrelThickness);
+		EliteWeapons[0].FireFLH = ArtINI.Get_Point(Graphic_Name(), "PrimaryFireFLH", EliteWeapons[0].FireFLH);
+		EliteWeapons[0].BarrelLength = ArtINI.Get_Int(Graphic_Name(), "PBarrelLength", EliteWeapons[0].BarrelLength);
+		EliteWeapons[0].BarrelThickness = ArtINI.Get_Int(Graphic_Name(), "PBarrelThickness", EliteWeapons[0].BarrelThickness);
+		EliteWeapons[1].FireFLH = ArtINI.Get_Point(Graphic_Name(), "SecondaryFireFLH", EliteWeapons[1].FireFLH);
+		EliteWeapons[1].BarrelLength = ArtINI.Get_Int(Graphic_Name(), "SBarrelLength", EliteWeapons[1].BarrelLength);
+		EliteWeapons[1].BarrelThickness = ArtINI.Get_Int(Graphic_Name(), "SBarrelThickness", EliteWeapons[1].BarrelThickness);
 
 		TurretNotExportedOnGround = ArtINI.Get_Bool(Graphic_Name(), "TurretNotExportedOnGround", TurretNotExportedOnGround);
 
@@ -1119,6 +1131,7 @@ void TechnoTypeClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(Capacity);
 	stream.Serialize(TurretNotExportedOnGround);
 	stream.Serialize(Weapons);
+	stream.Serialize(EliteWeapons);
 	stream.Serialize(IsTypeImmune);
 	stream.Serialize(IsDetectDisguise);
 	stream.Serialize(IsMoveToShroud);
@@ -1337,11 +1350,12 @@ void TechnoTypeClass::Compute_CRC(class CRCEngine & crc) const
 /// instead, so a veteran object may ask for its elite armament without checking first.
 /// </summary>
 /// <param name="which">The weapon slot desired.</param>
+/// <param name="elite">Wether to grab an elite weapon instead.</param>
 /// <returns>Returns with a pointer to the weapon data for that slot.</returns>
-WeaponDataStruct const * TechnoTypeClass::Get_Weapon(int which) const
+WeaponDataStruct const * TechnoTypeClass::Get_Weapon(int which, bool elite) const
 {
-	if (which == 2 && Weapons[which].Weapon == NULL) {
-		which = 0;
+	if (elite && EliteWeapons[which].Weapon != NULL) {
+		return(&EliteWeapons[which]);
 	}
 	return(&Weapons[which]);
 }

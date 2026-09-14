@@ -166,6 +166,11 @@ class InfantryTypeClass : public TechnoTypeClass
 		 */
 		bool IsWebImmune;
 
+		bool Deployer;
+		bool DeployedCrushable;
+		TypeList<int> DeploySound;
+		TypeList<int> UndeploySound;
+
 		/*
 		**	This is the explicit infantry type class constructor.
 		*/

@@ -444,6 +444,22 @@ int TechnoClass::What_Weapon_Should_I_Use(AbstractClass * target) const
 	bool webby2 = false;
 
 	/*
+	 * Currently Infantry Deployers will be hardcoded to always use Primary unless deployed,
+	 * in which case they always use Secondary
+	 */
+	if (RTTI == RTTI_INFANTRY) {
+		InfantryClass const * this_infantry = dynamic_cast<InfantryClass const *>(this);
+		if (this_infantry->Class->Deployer) {
+			if (this_infantry->Deployed) {
+				return(1);
+			}
+			else {
+				return(0);
+			}
+		}
+	}
+
+	/*
 	**	Fetch the armor of the candidate target object. Presume that if the target
 	**	is not an object, then its armor is equivalent to wood. Who knows why?
 	*/
@@ -3521,10 +3537,14 @@ FireErrorType TechnoClass::Can_Fire(AbstractClass * target, int which) const
 	}
 
 	if (Is_Immobilized()) {
-		if (RTTI != RTTI_UNIT) {
-			goto CANT_FIRE;
+		bool exempt = false;
+		if (RTTI == RTTI_UNIT) {
+			exempt = ((UnitClass*)this)->Class->IsLargeVisceroid || ((UnitClass*)this)->Class->IsSmallVisceroid;
+		} else if (RTTI == RTTI_INFANTRY) {
+			InfantryClass const * inf = (InfantryClass const *)this;
+			exempt = inf->Class->Deployer && inf->Deployed && inf->StunDuration <= 0;
 		}
-		if (!((UnitClass*)this)->Class->IsLargeVisceroid && !((UnitClass*)this)->Class->IsSmallVisceroid) {
+		if (!exempt) {
 			goto CANT_FIRE;
 		}
 	}

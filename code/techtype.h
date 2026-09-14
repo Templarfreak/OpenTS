@@ -457,6 +457,7 @@ class TechnoTypeClass : public ObjectTypeClass
 		**	These are the weapons that this techno object is armed with.
 		*/
 		WeaponDataStruct Weapons[WEAPON_SLOT_COUNT];
+		WeaponDataStruct EliteWeapons[WEAPON_SLOT_COUNT];
 
 		/*
 		 * If this object cannot be harmed by another object of its own type and house, then
@@ -852,7 +853,7 @@ class TechnoTypeClass : public ObjectTypeClass
 		bool In_Range(Coord const & coord, AbstractClass * target, WeaponTypeClass * weapon) const;
 		virtual bool Read_INI(CCINIClass const & ini) override;
 
-		WeaponDataStruct const * Get_Weapon(int which) const;
+		WeaponDataStruct const * Get_Weapon(int which, bool elite) const;
 		void Set_Weapon(WeaponDataStruct const & weapon, int which);
 
 		/*
