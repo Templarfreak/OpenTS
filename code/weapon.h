@@ -277,6 +277,51 @@ class WeaponTypeClass : public AbstractTypeClass
 		 * If this weapon cannot be fired during an ion storm, then this flag will be true.
 		 */
 		bool IsIonSensitive;
+
+		/*
+		 * If this weapon zaps its target with a jagged electric bolt, then this flag will be
+		 * true. This stands in for a laser beam on weapons such as the Tesla Coil; the two
+		 * are mutually independent, so a weapon could in principle use both. The colors,
+		 * lifetime, and shape of the bolt are given by the EBolt fields below.
+		 */
+		bool IsElectricBolt;
+
+		/*
+		 * These are the colors of the electric bolt's three parallel jagged line segments.
+		 */
+		RGBClass ElectricBoltColor1;
+		RGBClass ElectricBoltColor2;
+		RGBClass ElectricBoltColor3;
+
+		/*
+		 * This is how many times the bolt is recursively subdivided when it is plotted --
+		 * more segments make for a longer, more detailed bolt.
+		 */
+		int ElectricBoltSegmentCount;
+
+		/*
+		 * This is the number of game frames that the electric bolt remains drawn for,
+		 * replotting itself each frame, before it expires.
+		 */
+		int ElectricBoltLifetime;
+
+		/*
+		 * This is the number of game frames that the electric bolt remains drawn for,
+		 * replotting itself each frame, before it expires.
+		 */
+		int ElectricBoltMaxLifetime;
+
+		/*
+		 * This is how many independently-jittered bolts are plotted and drawn between the
+		 * firer and its target at once.
+		 */
+		int ElectricBoltIterationCount;
+
+		/*
+		 * This is how far a plotted point of the bolt may stray from the straight line
+		 * between its neighbors. The higher this is, the wilder the bolt looks.
+		 */
+		double ElectricBoltDeviation;
 };
 
 ArmorType Armor_From_Name(char const * name);
