@@ -38,6 +38,7 @@
 #include "display.h"
 #include "draw.h"
 #include "dsurface.h"
+#include "ebolt.h"
 #include "fog.h"
 #include "font.h"
 #include "globals.h"
@@ -1296,6 +1297,7 @@ void Tactical::Render(Surface & surface, bool fullredraw, int drawpass)
 		Draw_Objects(true);
 		SpotLightClass::Draw_All();
 		LaserDrawClass::Draw_All();
+		EBoltClass::Draw_All();
 
 		for (i = 0; i < CurrentObject.Count(); i++) {
 			ObjectClass * object = CurrentObject[i];

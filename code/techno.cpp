@@ -160,6 +160,7 @@
 #include "dialog.h"
 #include "draw.h"
 #include "dsurface.h"
+#include "ebolt.h"
 #include "fog.h"
 #include "globals.h"
 #include "goptions.h"
@@ -3879,6 +3880,42 @@ void TechnoClass::Laser_Zap(AbstractClass * target, int which, WeaponTypeClass c
 
 
 /// <summary>
+/// Fires an electric bolt at the target specified, in place of a projectile.
+/// This is the electric-bolt counterpart to Laser_Zap: it plays much the same role for
+/// weapons such as the Tesla Coil, except that the bolt it creates keeps tracking this
+/// object's fire coordinate for as long as this object and the bolt both live, rather than
+/// staying fixed at the coordinate it was created at.
+/// </summary>
+/// <param name="target">The target to fire the bolt at.</param>
+/// <param name="which">Which weapon is this bolt associated with (0=primary, 1=secondary).</param>
+/// <param name="weapon">The weapon type supplying the bolt's colors, lifetime, and shape.</param>
+void TechnoClass::Electric_Bolt(AbstractClass * target, int which, WeaponTypeClass const * weapon)
+{
+	Coord source = Fire_Coord(which);
+
+	int zadjust = 0;
+	if (source.Y != Render_Coord().Y) {
+		Point2D p1 = TacticalMap->Coord_To_Pixel_Absolute(source);
+		Point2D p2 = TacticalMap->Coord_To_Pixel_Absolute(Render_Coord());
+		zadjust = p1.Y - p2.Y;
+	}
+
+	ObjectClass * optr = target->As_ObjectClass();
+	Coord dest = optr != NULL ? optr->Target_Coord() : target->Center_Coord();
+
+	/*
+	**	This object may have any number of electric bolts alive at once -- each tracks its own
+	**	source and expires independently, so a second (or third...) bolt does not retire any
+	**	that are already out. This is what lets, for example, a shrapnel-style weapon fire
+	**	several bolts that all originate from the same object at once.
+	*/
+	EBoltClass * ebolt = new EBoltClass;
+	ebolt->Create(source, dest, zadjust);
+	ebolt->Set_Properties(this, weapon, which);
+}
+
+
+/// <summary>
 /// Fetches the barrel elevation needed to hit a target.
 /// This routine is used when aiming a weapon that lobs its shot, solving the ballistic arc
 /// to where the target is predicted to be by the time the shot arrives. When no arc will
@@ -4194,6 +4231,13 @@ BulletClass * TechnoClass::Fire_At(AbstractClass * target, int which)
 							discharge->Discharge_Turret();
 						}
 					}
+				}
+
+				/*
+				**	Electric bolt zap, in place of a laser, for weapons such as the Tesla Coil.
+				*/
+				if (weapon->IsElectricBolt) {
+					Electric_Bolt(target, which, weapon);
 				}
 
 				/*

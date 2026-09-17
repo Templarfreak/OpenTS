@@ -48,6 +48,7 @@
 #include "animtype.h"
 #include "bullettype.h"
 #include "combat.h"
+#include "ebolt.h"
 #include "findmake.h"
 #include "globals.h"
 #include "incdec.h"
@@ -107,6 +108,15 @@ WeaponTypeClass::WeaponTypeClass(char const * ininame) :
 	IsBright(false),
 	LaserDuration(10),
 	IsBigLaser(false),
+	IsElectricBolt(false),
+	ElectricBoltColor1(EBOLT_DEFAULT_COLOR_1),
+	ElectricBoltColor2(EBOLT_DEFAULT_COLOR_2),
+	ElectricBoltColor3(EBOLT_DEFAULT_COLOR_3),
+	ElectricBoltSegmentCount(EBOLT_DEFAULT_LINE_SEGMENTS),
+	ElectricBoltLifetime(EBOLT_DEFAULT_LIFETIME),
+	ElectricBoltMaxLifetime(EBOLT_DEFAULT_LIFETIME),
+	ElectricBoltIterationCount(EBOLT_DEFAULT_ITERATIONS),
+	ElectricBoltDeviation(EBOLT_DEFAULT_DEVIATION),
 	IsSonic(false),
 	IsTurboBoosted(false),
 	Sound(),
@@ -204,6 +214,16 @@ bool WeaponTypeClass::Read_INI(CCINIClass const & ini)
 		LaserOuterSpread = ini.Get_RGBClass(IniName, "LaserOuterSpread", LaserOuterSpread);
 		LaserDuration = ini.Get_Int(IniName, "LaserDuration", LaserDuration);
 		IsBigLaser = ini.Get_Bool(IniName, "IsBigLaser", IsBigLaser);
+
+		IsElectricBolt = ini.Get_Bool(IniName, "IsElectricBolt", IsElectricBolt);
+		ElectricBoltColor1 = ini.Get_RGBClass(IniName, "EBoltColor1", ElectricBoltColor1);
+		ElectricBoltColor2 = ini.Get_RGBClass(IniName, "EBoltColor2", ElectricBoltColor2);
+		ElectricBoltColor3 = ini.Get_RGBClass(IniName, "EBoltColor3", ElectricBoltColor3);
+		ElectricBoltSegmentCount = ini.Get_Int(IniName, "EBoltSegmentCount", ElectricBoltSegmentCount);
+		ElectricBoltLifetime = ini.Get_Int(IniName, "EBoltLifetime", ElectricBoltLifetime);
+		ElectricBoltMaxLifetime = ini.Get_Int(IniName, "EBoltLifetime", ElectricBoltMaxLifetime);
+		ElectricBoltIterationCount = ini.Get_Int(IniName, "EBoltIterationCount", ElectricBoltIterationCount);
+		ElectricBoltDeviation = ini.Get_Float(IniName, "EBoltDeviation", ElectricBoltDeviation);
 
 		IsBright = ini.Get_Bool(IniName, "Bright", IsBright);
 		IsIonSensitive = ini.Get_Bool(IniName, "IonSensitive", IsIonSensitive);
@@ -359,6 +379,12 @@ void WeaponTypeClass::Compute_CRC(CRCEngine &crc) const
 	crc(IsElectric);
 	crc(IsBright);
 	crc(UseSparkParticles);
+	crc(IsElectricBolt);
+	crc(ElectricBoltSegmentCount);
+	crc(ElectricBoltLifetime);
+	crc(ElectricBoltMaxLifetime);
+	crc(ElectricBoltIterationCount);
+	crc(ElectricBoltDeviation);
 }
 
 
@@ -400,6 +426,15 @@ void WeaponTypeClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(IsBright);
 	stream.Serialize(LaserDuration);
 	stream.Serialize(IsBigLaser);
+	stream.Serialize(IsElectricBolt);
+	stream.Serialize(ElectricBoltColor1);
+	stream.Serialize(ElectricBoltColor2);
+	stream.Serialize(ElectricBoltColor3);
+	stream.Serialize(ElectricBoltSegmentCount);
+	stream.Serialize(ElectricBoltLifetime);
+	stream.Serialize(ElectricBoltMaxLifetime);
+	stream.Serialize(ElectricBoltIterationCount);
+	stream.Serialize(ElectricBoltDeviation);
 	stream.Serialize(IsSonic);
 	stream.Serialize(IsTurboBoosted);
 	stream.Serialize(IsSupressed);

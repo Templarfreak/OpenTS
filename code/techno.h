@@ -609,6 +609,7 @@ class TechnoClass :	public RadioClass,
 		virtual bool Captured(HouseClass * newowner);
 		void Set_Owner(HouseClass * newowner);
 		virtual void Laser_Zap(AbstractClass * target, int which, WeaponTypeClass const * weapon, Coord const & source_coord);
+		virtual void Electric_Bolt(AbstractClass * target, int which, WeaponTypeClass const * weapon);
 		virtual void Rock(Coord const & coord, float force);
 		virtual WeaponDataStruct const * Get_Class_Weapon_Data(int which=0) const;
 		virtual bool Is_Turret_Equipped(void) const;
