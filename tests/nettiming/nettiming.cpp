@@ -10,6 +10,7 @@
 
 #include "nettiming.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <initializer_list>
 #include <iostream>
@@ -433,6 +434,59 @@ namespace
 		Expect_Equal("clean sample lowers the RTO", recovered.Retransmit_Timeout(), 752u);
 		recovered.Note_Retransmit(1800);
 		Expect_Equal("stale capture doubles the RTO once", recovered.Retransmit_Timeout(), 1504u);
+	}
+
+
+	void Test_Game_Speed_Frame_Rate(void)
+	{
+		using namespace NetTiming;
+
+		unsigned int const expected[] = { 60u, 45u, 30u, 20u, 15u, 12u, 10u };
+		for (int speed = 0; speed < 7; speed++) {
+			Expect_Equal("speed " + std::to_string(speed) + " frame rate", Game_Speed_Frame_Rate(speed), expected[speed]);
+		}
+		Expect_Equal("an unknown speed is held to the fastest rate", Game_Speed_Frame_Rate(7), 60u);
+		Expect_Equal("a negative speed is held to the fastest rate", Game_Speed_Frame_Rate(-1), 60u);
+	}
+
+
+	void Test_Solo_Game_Speed_Frame_Rate(void)
+	{
+		using namespace NetTiming;
+
+		// Zero is no limit at all.
+		unsigned int const expected[] = { 0u, 60u, 45u, 30u, 20u, 15u, 10u };
+		for (int speed = 0; speed < 7; speed++) {
+			Expect_Equal("solo speed " + std::to_string(speed) + " frame rate", Solo_Game_Speed_Frame_Rate(speed), expected[speed]);
+		}
+		Expect_Equal("an unknown solo speed runs unlimited", Solo_Game_Speed_Frame_Rate(7), 0u);
+		Expect_Equal("a negative solo speed runs unlimited", Solo_Game_Speed_Frame_Rate(-1), 0u);
+	}
+
+
+	void Test_Frame_Pacer(void)
+	{
+		using namespace NetTiming;
+
+		for (unsigned int rate : { 60u, 45u, 30u, 20u, 15u, 12u, 10u, 7u }) {
+			FramePacer pacer;
+			Milliseconds total = 0;
+			Milliseconds shortest = 1000;
+			Milliseconds longest = 0;
+			for (unsigned int frame = 0; frame < rate; frame++) {
+				Milliseconds const wait = pacer.Next_Wait(rate);
+				total += wait;
+				shortest = std::min(shortest, wait);
+				longest = std::max(longest, wait);
+			}
+			Expect_Equal(std::to_string(rate) + " frames last a second", total, 1000u);
+			Expect_Equal(std::to_string(rate) + " frames differ by a millisecond at most", longest - shortest <= 1, true);
+		}
+
+		FramePacer pacer;
+		Expect_Equal("no rate means no wait", pacer.Next_Wait(0), 0u);
+		pacer.Next_Wait(60);
+		Expect_Equal("a change of rate starts the average again", pacer.Next_Wait(45), 22u);
 	}
 
 
@@ -1258,6 +1312,9 @@ int main(void)
 	Test_Backoff_Persistence();
 	Test_Provisional_Seed();
 	Test_Note_Retransmit_Guards();
+	Test_Game_Speed_Frame_Rate();
+	Test_Solo_Game_Speed_Frame_Rate();
+	Test_Frame_Pacer();
 	Test_Census();
 	Test_Rungs();
 	Test_Connection_Quality();

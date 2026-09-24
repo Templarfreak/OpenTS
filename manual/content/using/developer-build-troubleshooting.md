@@ -25,9 +25,9 @@ For a Visual Studio installation that CMake cannot discover through the Visual S
 
 Builds write their runnable files to `build/bin/<configuration>/` and copy nothing into `Run/`:
 
-- Debug: `GameD.exe`, `GameD.pdb`, `GameD.map`, and `Language.dll`
-- Release: `Game.exe`, `Game.pdb`, `Game.map`, and `Language.dll`
+- Debug: `GameD.exe`, `GameD.pdb`, `GameD.map`, `Language.dll`, and the `ui/` directory
+- Release: `Game.exe`, `Game.pdb`, `Game.map`, `Language.dll`, and the `ui/` directory
 
 ## The executable cannot initialize game data
 
-Name the game data directory with `-DATADIR=`, and confirm it holds data from a legitimate Tiberian Sun installation. The repository and CMake build directory do not supply proprietary game assets.
+Name the game data directory with [`-DATADIR=<path>`](/using/command-line/data-directory/). The path is a legitimate Tiberian Sun installation or a copy of its data. The repository and CMake build directory do not supply proprietary game assets.

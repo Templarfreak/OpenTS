@@ -117,8 +117,8 @@ class MapClass: public GScreenClass
 		Cell Pick_Random_Location(void) const;
 		bool Place_Random_Crate(void);
 		bool Remove_Crate(Cell const & cell);
-		void Shroud_The_Map(void);
-		void Reveal_The_Map(bool unfog = false);
+		void Shroud_The_Map(HouseClass * house);
+		void Reveal_The_Map(HouseClass * house, bool unfog = false);
 		virtual void Detach(AbstractClass const * , bool all = true);
 
 		/*
@@ -296,7 +296,9 @@ class MapClass: public GScreenClass
 		 * Fog and shroud
 		 */
 		bool Is_Shrouded(Coord const & coord);
+		bool Is_Shrouded(Coord const & coord, HouseClass const * house);
 		bool Is_Fogged(Coord const & coord);
+		bool Is_Fogged(Coord const & coord, HouseClass const * house);
 		void Init_Fog_System(void);
 		void Deinit_Fog_System(void);
 		void Reveal_Nearby_Technos(CellClass * cptr, HouseClass * house, bool onradar);
@@ -310,7 +312,7 @@ class MapClass: public GScreenClass
 		bool Try_Open_Gate(FootClass * foot, Cell const & cell);
 		bool Is_Something_Nearby(Cell const & cell, int radius);
 		int Region_Threat(HouseClass * house, int level, int from_subzone, int to_subzone);
-		bool Is_Area_Available(Rect const & rect, int house);
+		bool Is_Area_Available(Rect const & rect, HouseClass const * house);
 		bool Is_Clear_To_Move(Cell const & cell, int width, int height, SpeedType speed, int zone, MZoneType check, int cell_height, bool checkbridge, bool block_overlays);
 		Cell Closest_Edge_Cell(Cell const & cell, bool inset = false);
 		Cell Clip_To_Map(Cell const & cell);

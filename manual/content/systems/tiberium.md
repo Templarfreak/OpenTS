@@ -1,6 +1,6 @@
 ---
 title: Tiberium
-summary: "Grows, spreads, and harvests the registered Tiberium types across map cells."
+summary: "Tiberium grows and spreads across map cells, and harvesters carry it to refineries for credits."
 category: buildings-economy
 keys:
   - AllowTiberium
@@ -48,153 +48,245 @@ related:
 
 ```ini title="rules.ini"
 [Tiberiums]
-0=MyTiberium ; example Tiberium type, registered in slot 0
+0=MyTiberium ; example type, registered in Tiberium slot 0
 
 [MyTiberium]
 Image=1
 Value=25
-Power=10
-Growth=8
-GrowthPercentage=.02
-Spread=20
-SpreadPercentage=.02
+Power=1
+Color=NeonGreen
+Growth=2200
+GrowthPercentage=.09
+Spread=2200
+SpreadPercentage=.09
 ```
 
-Each entry in `[Tiberiums]` names a rules section that supplies the type's settings. An entry whose own number is below the count of types registered so far re-reads the type already in that Tiberium slot; every other entry creates a new type in the next free slot, so with the conventional `0=` through `3=` list the entry numbers and the slots coincide. A named section that does not exist leaves the type on its built-in values, which include no overlay set at all.
+Each entry in `[Tiberiums]` names the rules section that defines one Tiberium type. Types are registered in the order the entries first name them, and each type's Tiberium slot is its position in that order, counted from 0. The number on an entry is ignored. An entry naming a type already registered, by this file or an earlier one, reuses that type.
 
-The slot selects the storage compartment a harvested load occupies, and it raises the growth stage a cell must reach before it spreads.
+Every rules file, and the scenario's own overrides, reads the section of each registered type, whether or not that file has a `[Tiberiums]` list. A map can therefore change a shipped type by writing its section alone. [Rules registration lists](/formats/rules-registries/) gives the order the files are read in.
 
-:::danger[Four slots exist]
-A house and a harvester each track exactly four Tiberium compartments. A fifth registered type is given slot 4, and every deposit or withdrawal made for it writes past the end of that record.
+If the named section does not exist, the type keeps its built-in values, which include no overlay set.
+
+A type's slot decides which storage compartment its harvested Tiberium goes into, and how ripe its cells must be before they [spread](#spread). [`TiberiumToSpawn`](/keys/tiberiumtospawn/), Tiberium crates and several destruction effects also name a type by its slot.
+
+:::note[At most four types]
+Harvesters, storage buildings and houses each hold four Tiberium compartments, one for each slot from 0 to 3. Once four types are registered, an entry naming a new type is skipped, and the debug log names it.
 :::
 
-[`Image`](/keys/image/#scope-tiberium) selects the overlay set, and through it two runtime limits: the number of growth stages the set carries, and whether the type is allowed onto sloped ground.
+[`Image`](/keys/image/#scope-tiberium) selects the type's overlay set. Every set has twelve growth stages, and the set decides whether the type can grow on sloped ground.
 
-:::caution[The large-Tiberium set has a single stage]
-[`Image=2`](/keys/image/#scope-tiberium) gives the type one growth stage. Growth requires a cell below the last stage, and seeding a bare cell places stage 5, so a type on that set can neither grow nor be created by spreading; it appears only where the map or an editor puts it — or, for the first registered type, where a destroyed `TiberiumHeal=yes` object spews it.
+:::note[The large-Tiberium set]
+In the shipped rules, the twelve overlays of the [`Image=2`](/keys/image/#scope-tiberium) set have no shape of their own and show their [`CellAnim`](/keys/cellanim/) instead, so a cell looks the same at every stage. They also set `Land=Rock`, so harvesters cannot collect them. The set has no slope overlays, so a type using it never spreads onto a slope.
 :::
 
-:::danger[Every registered type needs an overlay set]
-Identifying the Tiberium in a cell walks the registered types in order and reads each type's overlay set. A type left without one — no [`Image`](/keys/image/#scope-tiberium), or no section — ends that walk in a null read as soon as a cell carries an overlay belonging to a later type.
+:::danger[Give every registered type an overlay set]
+Set [`Image`](/keys/image/#scope-tiberium) on every type, and give every entry in `[Tiberiums]` an existing section. If a type has no overlay set, the game crashes whenever it identifies a Tiberium overlay of a later slot, or one that belongs to no type. Loading a map that contains such an overlay is enough.
 :::
 
 ## Cell state
 
-A cell holds one Tiberium overlay and one growth stage from 0 through 11. The cell is worth [`Value`](/keys/value/) multiplied by the stage plus one, so a ripe cell of a twelve-stage set is worth twelve times the setting. A blossom tree — a terrain object that seeds Tiberium into the ground beside it, described under [other sources](#other-sources-of-tiberium) — sits on a cell that reports the type it seeds but is worth nothing, because worth comes from the overlay and that cell carries none.
+A cell holds at most one Tiberium overlay and a growth stage from 0 to 11.
 
-An overlay declared [`Tiberium=yes`](/keys/tiberium/#scope-overlaytype) whose own land type is clear gives its cell the `Tiberium` [land type](/reference/enums/land-type/), and that land type — not the overlay — is what every harvesting test reads.
+An overlay with [`Tiberium=yes`](/keys/tiberium/#scope-overlaytype) gives its cell the `Tiberium` [land type](/reference/enums/land-type/) when the overlay's [`Land`](/keys/land/) is `Clear`. Otherwise the cell takes the overlay's land type. Harvesters look only for the `Tiberium` land type, so they cannot collect an overlay that sets any other.
 
-When a scenario finishes loading, and again whenever a Tiberium overlay is placed onto the map directly, the cell's stage is replaced by a smoothing lookup on the number of its eight neighbors holding the same type, running on a twelve-stage set from stage 0 with no matching neighbor up to stage 11 with all eight. A stage stored in the map file does not survive that pass.
+A blossom tree's cell counts as holding the type the tree seeds, but it has no overlay, so no harvester can collect from it. [Other sources of Tiberium](#other-sources-of-tiberium) covers the tree.
 
-Drawing a cell uses that stage as a frame number in the selected flat or slope overlay. If the selected SHP does not carry that frame, the overlay is omitted from both the tactical view and its redraw rectangle instead of reading beyond the artwork's frame table.
+When a scenario loads, the engine replaces the stage of every Tiberium cell. The new stage depends on how many of the cell's eight neighbors hold the same type, so the stages stored in the map do not survive:
+
+| Neighbors with the same type | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Stage | 0 | 1 | 3 | 4 | 6 | 7 | 8 | 10 | 11 |
+
+A cell shows the frame for its stage from one of its type's overlays. The cell's map position picks that overlay, not the overlay the cell actually holds. Flat cells use the set's flat overlays and sloped cells use its slope overlays. The type's [`Color`](/keys/color/#scope-tiberium) recolors the result.
+
+Slope overlays exist only for the four simple slopes, and the large-Tiberium set has none. A type on that set never spreads onto a slope, and shows nothing on one where a map or an animation's [`TiberiumSpawnType`](/keys/tiberiumspawntype/) places it. A cell is also not drawn when the chosen overlay has no frame for its stage.
 
 ## Growth
 
-The main game logic offers every type a growth pass and then a spread pass each frame. Both are gated by the scenario's [`TiberiumGrowthEnabled`](/keys/tiberiumgrowthenabled/) switch, which the [Tiberium growth](/mapping/actions/taction-tib-growth/) trigger action turns on and off during play.
+Each type runs growth passes and spread passes on separate timers, counted in [frames](/glossary/#frame). Both kinds of pass stop while the scenario's [`TiberiumGrowthEnabled`](/keys/tiberiumgrowthenabled/) switch is off. The [Tiberium growth](/mapping/actions/taction-tib-growth/) trigger action turns the switch on and off during play.
 
-A type takes a growth pass when its timer runs out; the timer is then reloaded with [`Growth`](/keys/growth/) frames whether or not anything grew.
+A growth pass runs every [`Growth`](/keys/growth/) frames. The delay restarts after each pass, whether or not anything grew.
 
-:::note[TiberiumGrows shortens the wait, it does not enable growth]
-[`TiberiumGrows=yes`](/keys/tiberiumgrows/#scope-scenarios) multiplies the reloaded growth delay by `0.3`. Growth with the flag off runs at the full delay; only `TiberiumGrowthEnabled=no` stops it.
+:::note[TiberiumGrows only shortens the delay]
+[`TiberiumGrows=yes`](/keys/tiberiumgrows/#scope-scenarios) cuts the growth delay to 30% of `Growth`. Growth still runs at the full delay with it off; only `TiberiumGrowthEnabled=no` stops growth. The key page explains when the scenario's setting applies.
 :::
 
-Each type keeps a queue of cells that have not finished ripening. A pass first sizes a budget as the queued count multiplied by [`GrowthPercentage`](/keys/growthpercentage/), clamped to between 5 and 50, then draws a random figure from 1 up to that budget and processes that many entries. Every entry taken counts against the budget, including one whose cell has since changed type and is simply dropped.
+Each type keeps a queue of its cells that are still below stage 11. A pass takes a random number of cells from the front of that queue, at least 1. The upper limit is the queue length multiplied by [`GrowthPercentage`](/keys/growthpercentage/), raised to 5 if lower and cut to 50 if higher. A type with `GrowthPercentage` below `0.00001` never grows.
 
-A cell gains one stage when all of the following hold, tested in this order:
+Each cell taken gains one stage if it still holds this type's Tiberium. A cell that has since lost its Tiberium or changed type still uses up one of the pass's cells, and leaves the queue.
 
-1. the scenario's growth switch is on;
-2. the cell still holds Tiberium of a registered type;
-3. its stage is below the last one the overlay set carries;
-4. that type's `GrowthPercentage` is at least `0.00001`.
+After it grows, a cell below stage 11 goes back into the queue, near the back, and is queued to [spread](#spread) if it can. A cell that reaches stage 11 leaves the growth queue.
 
-A cell still short of stage 11 goes back into the queue with a delay of up to 49 frames and is offered to the spread queue at the same time; a cell that has reached stage 11 is dropped from growth entirely.
+The queue is rebuilt from the map when a scenario starts and when a saved game loads. During play, it is also rebuilt once it has taken in about as many entries as the map has cells.
 
-:::caution[A harvested full-grown cell stops growing back]
-Removing stages from a cell standing at stage 11 tries to put it back into the growth queue before the removal, while the cell is still full, so the attempt is refused. The partly harvested cell then sits below the ceiling with no queue entry — placing more Tiberium on it re-queues only its spreading — and it re-enters the growth queue only when the queue is rebuilt.
+A cell the map stores at stage 11 does not grow at scenario start, even if its stage is lowered when the scenario loads. It joins the queue at the next rebuild.
+
+:::caution[A full-grown cell that is cut back stops growing]
+When harvesting, a crater or warhead damage lowers a stage-11 cell without clearing it, the cell does not rejoin the growth queue. Placing more Tiberium on the cell does not queue it either. It grows again only after the next rebuild. A [chain reaction](#damage) is the exception: it queues the cell again.
 :::
 
 ## Spread
 
-Spread passes are scheduled the same way, from the [`Spread`](/keys/spread/#scope-tiberium) delay, and no flag shortens them. The budget is the queued count multiplied by [`SpreadPercentage`](/keys/spreadpercentage/), clamped to between 5 and 25, with a random figure drawn from 1 up to it. Only a cell that finds somewhere to seed counts against that budget. A cell hemmed in on all eight sides is dropped from the queue without spending any of it, as is one that no longer carries Tiberium of its own; a cell with more than one free neighbor is re-queued to run again on the next pass.
+A spread pass runs every [`Spread`](/keys/spread/#scope-tiberium) frames; `TiberiumGrows` does not shorten this delay. Each type keeps a queue of cells that may spread. A pass seeds from cells at the front of that queue until it has spent a random budget, at least 1. The upper limit is the queue length multiplied by [`SpreadPercentage`](/keys/spreadpercentage/), raised to 5 if lower and cut to 25 if higher.
 
-A cell may spread when all of the following hold, tested in this order:
+A cell can spread only when all of the following hold, tested in this order:
 
 1. [`TiberiumSpreads=yes`](/keys/tiberiumspreads/) is in force;
-2. the cell still holds Tiberium of a registered type;
-3. its stage clears that type's ripeness threshold;
+2. the cell still holds Tiberium;
+3. its stage is above the ripeness threshold of the type it holds;
 4. that type's `SpreadPercentage` is at least `0.00001`;
 5. nothing is standing in the cell.
 
-:::caution[The ripeness threshold comes from the type's slot]
-The stage a cell must exceed is half the type's slot number, rounded down: types in slots 0 and 1 spread from stage 1, and types in slots 2 and 3 only from stage 2. Reordering `[Tiberiums]` therefore changes how ripe a field must be before it creeps.
+:::caution[The ripeness threshold comes from the slot]
+A cell must be above half its type's slot number, rounded down. Types in slots 0 and 1 spread from stage 1, and types in slots 2 and 3 only from stage 2. Reordering `[Tiberiums]` therefore changes how ripe a field must be before it spreads.
 :::
 
-The source cell picks a random starting facing, walks all eight neighbors from there, and seeds the first that accepts growth. A newly seeded cell starts at stage 5.
+A spreading cell starts at a random neighbor and checks all eight in turn. It seeds the first neighbor that accepts growth, and the new cell starts at stage 5.
 
-A neighboring cell accepts growth when all of the following hold, tested in this order:
+A neighbor accepts growth when all of the following hold, tested in this order:
 
 1. it lies inside the playable area;
-2. it is not under a bridge and never has been;
-3. it holds no building with strength left, unless that building's type is invisible — the exemption keeps growth from outlining a hidden structure;
-4. it holds no [`SpawnsTiberium=yes`](/keys/spawnstiberium/) terrain object, which is what keeps a blossom tree's own cell bare;
+2. it is not under a bridge and has never been under one;
+3. it holds no building with strength left, unless the building's type is [`Invisible`](/keys/invisible/) or [`InvisibleInGame`](/keys/invisibleingame/), so that growth does not outline a hidden structure;
+4. it holds no [`SpawnsTiberium=yes`](/keys/spawnstiberium/) terrain object, so a blossom tree's cell stays bare;
 5. its land type is [`Buildable=yes`](/keys/buildable/);
-6. it carries no overlay at all, so veins, walls, crates and existing Tiberium all block it;
-7. it is flat, or carries one of the four standard ramps, and a type whose overlay set carries no ramp frames refuses every slope; and
-8. its theater tile set is [`AllowTiberium=yes`](/keys/allowtiberium/).
+6. it has no overlay, so veins, walls, crates and existing Tiberium all block it;
+7. it is flat or on one of the four simple slopes, and it is flat if the type's overlay set has no slope overlays;
+8. its tile set is [`AllowTiberium=yes`](/keys/allowtiberium/).
 
-The four standard ramps of rule 7 are the slopes that fall away toward one of the map's four directions, raising two of the cell's corners; the corner, steep and double ramp shapes lie outside that set. A Tiberium overlay found on one of those other slopes is removed outright the next time the cell's attributes are recalculated.
+The four simple slopes each raise two adjacent corners of the cell. Corner, steep and double slopes never accept Tiberium, and any Tiberium a map places on one is removed as the map loads.
 
-The census that decides whether a cell is worth a pass runs that same list, and it is where a wasted pass comes from. The census puts the question without naming a type, so the second half of rule 7 — the refusal a type whose overlay set carries no ramp frames applies to every slope — is skipped, and a sloped neighbor counts as free. The seeding walk then puts the question again with the type in hand, and that refusal runs. A type barred from slopes therefore spends a pass on a cell whose only free neighbors are sloped, and seeds nothing.
+Only a cell that has a neighbor accepting growth spends budget. A cell with none, or one that fails the spread tests, leaves the queue without spending any.
+
+A cell that had more than one free neighbor goes straight back to the front of the queue, so it usually seeds again in the same pass. A cell that seeds its last free neighbor is not queued to spread again until the queue is rebuilt, even if a neighbor is later cleared. The spread queue is rebuilt at the same times as the growth queue.
+
+A type whose set has no slope overlays can waste its passes. When the engine counts a cell's free neighbors, it counts a sloped neighbor as free for every type, but seeding then refuses the slope for this type. A cell whose only free neighbors are sloped spends budget and seeds nothing. With two or more such neighbors it returns to the front of the queue each time, so it can use up the whole pass.
 
 ## Harvesting
 
-A UnitType with [`Harvester=yes`](/keys/harvester/#scope-unittype) takes the harvest mission on its own. A vehicle with neither that flag nor [`Weeder=yes`](/keys/weeder/#scope-unittype) given the same mission stands still for 30 seconds at a time, and a harvester whose house owns no building named in its [`Dock`](/keys/dock/) list — including a harvester with an empty list — is switched to guard.
+A UnitType with [`Harvester=yes`](/keys/harvester/#scope-unittype) harvests Tiberium on its own. It starts harvesting when it is placed on the map, including when it leaves a factory or a repair bay. When it later goes idle, it resumes harvesting if its house is computer-controlled or it is standing on Tiberium.
 
-:::caution[A vein harvester never lifts Tiberium]
-A vehicle carrying [`Weeder=yes`](/keys/weeder/#scope-unittype) takes the vein branch even when it also carries `Harvester=yes`, while the eligibility test still reads the Tiberium branch. Such a vehicle waits for Tiberium ground, then loads one or two units of Tiberium — the counted quantity a compartment holds, not an object — into the first Tiberium compartment per cycle, and leaves the cell's stages untouched.
+A player-owned harvester that goes idle anywhere else takes a guard mission instead, so a player can park it. An armed harvester behaves the same way, except that it may take area guard instead of guard.
+
+A harvester whose house owns none of the buildings in its [`Dock`](/keys/dock/) list, or whose list is empty, switches to guard.
+
+A vehicle with neither `Harvester=yes` nor [`Weeder=yes`](/keys/weeder/#scope-unittype) that is given the harvest mission stands still.
+
+:::caution[Do not set both Weeder and Harvester]
+A vehicle with both `Weeder=yes` and `Harvester=yes` looks for veins when it sets out, but loads only on Tiberium ground. Each cycle there, it adds one or two units to its slot 0 compartment and leaves the cell's Tiberium untouched.
 :::
 
 ### Finding a patch
 
-A harvester that is not full first heads back to the patch it recorded on its last trip, and otherwise searches out to [`TiberiumFarScan`](/keys/tiberiumfarscan/). The plain search takes the harvester's own cell when that is already Tiberium ground; otherwise it walks outward one ring at a time and takes the richest qualifying cell in the first ring that yields any. A cell is skipped when any of these holds, tested in this order:
+A harvester that is not full first drives back to the patch it recorded on its previous trip, if it has one. Otherwise it searches for Tiberium out to one cell less than [`TiberiumFarScan`](/keys/tiberiumfarscan/).
+
+The search takes the cell the harvester stands in if it is Tiberium ground. Otherwise it checks rings of cells at increasing distance and takes the most valuable cell in the nearest ring that has any. A cell's value is its type's [`Value`](/keys/value/) multiplied by its stage plus one.
+
+A cell is skipped when any of the following holds, tested in this order:
 
 1. it lies outside the playable area;
-2. the match is a campaign, the local player owns the harvester, and the cell is shrouded;
-3. it sits in a different [movement zone](/glossary/#movement-zone) from the harvester's destination;
-4. the harvester could not enter it, or it is not Tiberium ground.
+2. the game is a campaign, the local player owns the harvester, and the cell is shrouded;
+3. it is in a different [movement zone](/glossary/#movement-zone) from the cell the harvester is heading to, or from the cell it stands in when it is not moving;
+4. the harvester cannot enter it, or it is not Tiberium ground.
 
-A computer-controlled harvester in a skirmish or multiplayer game uses a weighted search instead. It scans every ring out to the limit, offers only the first cell of each unbroken run along a side so that the candidates spread across the field, and draws one at random with a weight of at least 1 taken from the cell's worth divided by the ring's span over the number of harvesters the house owns. That census counts the first entry of [`HarvesterUnit`](/keys/harvesterunit/) whatever the searching vehicle's own type is.
+A computer-controlled harvester in a skirmish or multiplayer game searches differently when it sets out with no recorded patch. It checks every ring out to the limit instead of stopping at the first ring that has Tiberium. Along each side of a ring, it considers only the first cell of each unbroken run of Tiberium, which spreads the candidates across the field. It then picks one candidate at random, weighted by value and distance.
 
-With no patch and nowhere to go, the harvester is marked useless, its house is flagged short of Tiberium, and it retries after 7 seconds; the idle branch sends it to the repair bay when the house owns one and to hunt otherwise.
+A candidate's weight is its value divided by a distance factor, and never less than 1. The factor is twice the ring's distance divided by the number of harvesters the house owns, rounded down and at least 1. Richer and nearer cells are therefore favored, and distance matters less the more harvesters the house owns. The count includes every type in [`HarvesterUnit`](/keys/harvesterunit/), whatever the searching vehicle's type.
+
+If the search finds nothing and the harvester has nowhere to drive, it waits 7 seconds and then takes a guard mission. A harvester parked on a refinery first moves off it.
+
+A `Harvester=yes` vehicle that gives up this way marks its house short of Tiberium for the rest of the scenario. A computer-controlled house marked this way stops [building replacement harvesters](/keys/harvester/#scope-global-rules). Its harvesters that go to guard also stay there instead of resuming harvesting.
 
 ### Loading
 
-Harvesting lifts one growth stage per cycle, and a cycle is nine stage ticks of [`HarvesterLoadRate`](/keys/harvesterloadrate/) frames each. The stage is credited to the compartment of the cell's own type, so a harvester crossing a mixed field comes home with a mixed load, and taking the last stage clears the cell to bare ground. A harvester that has filled its [`Storage`](/keys/storage/) records the nearest patch within [`TiberiumNearScan`](/keys/tiberiumnearscan/) as the patch to return to, and heads home.
+A harvester standing on Tiberium ground lifts one growth stage every 9 times [`HarvesterLoadRate`](/keys/harvesterloadrate/) frames and stores it as one unit. The unit goes into the compartment of the cell's type, so a harvester that works a mixed field carries a mixed load.
+
+Each lift lowers the cell by one stage. A cell at stage 0 is cleared to bare ground by the next lift, which gives nothing, so a cell at stage 11 yields 11 units, not 12.
+
+When the cell runs out before the harvester is full, the harvester searches out to one cell less than [`TiberiumNearScan`](/keys/tiberiumnearscan/) for the next one. If it finds none, it heads home with a partial load.
+
+A harvester that fills its [`Storage`](/keys/storage/) runs the same search out to one cell less than `TiberiumNearScan`, records the cell it finds as the patch to return to, and heads home.
 
 ### Unloading
 
-The harvester asks each [`Dock`](/keys/dock/) building type in turn for a bay among its own house's buildings, taking the nearest that answers or the house's primary building of that type whenever it answers; a building answers only while it is [`DockUnload=yes`](/keys/dockunload/) and has nothing else attached. A harvester directed at another house's refinery may enter the bib and dock only when each house declares the other an ally. A one-way alliance grants neither permission, and `Dock` remains a return-target list rather than a compatibility flag. On arrival the harvester turns to face east, the building west of it runs its pre-production animation, and one stored unit is handed to the house every [`HarvesterDumpRate`](/keys/harvesterdumprate/) minutes' worth of frames. An emptied harvester waits for a [`Refinery=yes`](/keys/refinery/) building west of it to finish its production animation before taking the harvest mission again.
+A harvester returning on its own looks for a bay among its house's buildings whose types are in its [`Dock`](/keys/dock/) list and that it can reach. It takes the nearest bay across all the listed types. Within one type, the house's primary building beats every bay of that type built before it, however near. A bay built after the primary still wins if it is nearer than the primary.
+
+A building accepts a harvester only when all of the following hold:
+
+1. it is [`DockUnload=yes`](/keys/dockunload/);
+2. its house and the harvester's house are each allied with the other, which a house always is with itself;
+3. it is not being built or sold, and it has not been switched off;
+4. no other vehicle is docked there or on its way in.
+
+A player can also order a harvester into an allied house's refinery. Rule 2 still applies, so the alliance must run both ways.
+
+A harvester does not always pick a free bay. It compares the nearest free bay with the nearest bay of any kind. If the free bay is farther by more than the distance the harvester could drive while waiting, it drives to the busy one and waits in line.
+
+The wait counts what the vehicle at that building still has to unload, that vehicle's drive in if it has not arrived yet, and every load already waiting in line there. Waiting reserves nothing: the harvester chooses again when it arrives, by which time the bay may be free or the line longer.
+
+A docked harvester turns to face east, and the building west of it plays its pre-production animation. The harvester then hands its house one unit every [`HarvesterDumpRate`](/keys/harvesterdumprate/) minutes of game time, starting with its lowest slot.
+
+Once it is empty, the harvester waits for a [`Refinery=yes`](/keys/refinery/) building west of it to finish its production animation. It then resumes harvesting, unless the player has given it another order.
+
+A player order that sends the harvester elsewhere while it unloads ends the unload early. The harvester still waits for the refinery's animation, then leaves with the units it has not handed over.
 
 ## Credits and storage
 
-Each unit handed over adds five to the house's score. A computer house in a skirmish or multiplayer game then converts the unit straight to credits at its type's [`Value`](/keys/value/), with no reference to storage capacity at all.
+Each unit a harvester unloads adds five points to its house's score.
 
-Every other house stores it. The amount is first clipped to the capacity the house's buildings still have free, and the surplus is discarded rather than credited; what remains is distributed one unit at a time into the house's standing buildings that declare [`Storage`](/keys/storage/), filling each in turn. Spending drains loose credits first and only then draws stored units, one at a time from the lowest occupied compartment and each converted at that compartment's type's `Value`. A store is therefore priced when it is spent rather than when it is filled.
+A computer-controlled house in a skirmish or multiplayer game converts each unit to credits at once, at its type's [`Value`](/keys/value/). Its storage capacity does not matter.
 
-A captured building keeps its contents: they leave the old house's total and join the new one's, along with the building's capacity. A destroyed building scatters them across the surrounding cells one unit at a time, each landing as a stage-1 patch wherever the ground accepts growth. A sold building hands them back to its own house along the route a harvester unload takes, after the sale has already withdrawn that building's own capacity: the house's remaining storage buildings take what they can and the surplus is discarded, so a house whose only storage was the building it sold keeps none of it, while a computer house in a skirmish or multiplayer game banks the whole store as credits. A building declaring [`SiloDamage=yes`](/keys/silodamage/) draws its fill level over itself, and shows nothing while it is empty.
+Every other house stores each unit. Units beyond the house's free storage capacity are lost. The rest fill the house's standing buildings that declare [`Storage`](/keys/storage/), one building at a time.
+
+Stored units become credits only when the house spends. Spending uses loose credits first, then stored units one at a time. Each building gives up its units lowest slot first, before the next building is used. Each unit is priced at its type's `Value` when it is spent, not when it is harvested.
+
+A captured building keeps its contents. They move from the old house's total to the new house's total, along with the building's capacity.
+
+A destroyed building scatters its contents one unit at a time, one to three cells from where it stood. Each unit starts stage 1 Tiberium of its type where the ground accepts growth.
+
+On a cell that already holds that type, a unit adds one stage if the cell is below stage 11, `TiberiumGrowthEnabled` is on and the type's `GrowthPercentage` is at least `0.00001`. Any other unit is lost.
+
+A sold building hands its contents back to its house after the building's capacity has been removed. The house's remaining storage buildings take what fits and the rest is lost, so a house whose only storage was the sold building loses all of it. A computer-controlled house in a skirmish or multiplayer game converts the whole store to credits instead.
+
+A building with [`SiloDamage=yes`](/keys/silodamage/) shows how full it is with an extra animation. The animation does not appear while the building is less than one-eighth full.
 
 ## Damage
 
-Infantry stepping onto a Tiberium cell — including a blossom tree's cell — takes [`Power`](/keys/power/#scope-tiberium) divided by ten, never less than 1, unless the type declares [`TiberiumProof=yes`](/keys/tiberiumproof/) or the object carries the Tiberium-proof veteran ability. A death caused this way spawns a small visceroid for the Neutral house when the scenario declares [`TiberiumDeathToVisceroid=yes`](/keys/tiberiumdeathtovisceroid/).
+Infantry take damage each time they finish moving into a Tiberium cell. The damage is the Tiberium type's [`Power`](/keys/power/#scope-tiberium) divided by ten, rounded down, and at least 1. Armor, veterancy and other damage reductions do not lower it.
 
-An overlay declaring [`ChainReaction=yes`](/keys/chainreaction/) lets damage set off the Tiberium in its cell, once the cell holds at least the second growth stage. A Tiberium overlay detonates under a warhead declaring [`Tiberium=yes`](/keys/tiberium/#scope-warheadtype) — or under a sonic wave, which skips the warhead test. The chance is five times the cell's stage; the blast consumes half the stage and deals that many stages multiplied by `Power`, and each of the eight neighbors above stage 2 has an 80% chance of a delayed detonation of its own. A zero result draws no explosion and deals no damage, but it still consumes the growth and performs those neighboring checks. An animation declaring [`TiberiumChainReaction=yes`](/keys/tiberiumchainreaction/) clears the cell it sits on outright, applies [`TiberiumExplosionDamage`](/keys/tiberiumexplosiondamage/), and one time in three leaves one of the type's [`Debris`](/keys/debris/) animations recolored by its [`Color`](/keys/color/#scope-tiberium).
+Infantry whose type sets [`TiberiumProof=yes`](/keys/tiberiumproof/), or that have the [`TIBERIUM_PROOF`](/systems/veterancy/#abilities) veteran ability, take none. When the scenario sets [`TiberiumDeathToVisceroid=yes`](/keys/tiberiumdeathtovisceroid/), infantry killed this way leave a small visceroid owned by the Neutral house, unless a vehicle stands in the cell.
 
-With [`TiberiumExplosive=yes`](/keys/tiberiumexplosive/#scope-global-rules) a destroyed vehicle carrying Tiberium explodes over one and a half cells. The damage is the sum, across every compartment, of the amount held there multiplied by that compartment's type `Power`. Crater-forming animations strip six stages from the cell they land on, and a laser fence clears twelve from every cell along its span.
+An overlay with [`ChainReaction=yes`](/keys/chainreaction/) lets explosions set off the Tiberium in its cell. For a Tiberium overlay, the explosion's warhead must set [`Tiberium=yes`](/keys/tiberium/#scope-warheadtype). A sonic wave sets the cell off without that warhead test.
+
+A cell detonates only at stage 2 or higher, with a chance of 5% per stage. The detonation removes half the cell's stages, rounded down. It deals that many stages multiplied by `Power` as damage, through the [`C4Warhead`](/keys/c4warhead/).
+
+After a detonation, each neighboring Tiberium cell above stage 2 has an 80% chance of being hit 1 to 8 seconds later by the `INVISO` animation. With the shipped rules, that hit can set off a neighbor whose overlay has `ChainReaction=yes` in turn. A type with `Power=0` shows no explosion and deals no damage, but its detonation still removes the stages and still hits neighbors.
+
+On an overlay with `ChainReaction=yes`, an explosion that passes the warhead test also removes one stage for every ten points of its damage, whether or not the cell detonates. Explosions never thin or set off a cell whose overlay lacks it. In the shipped rules, the overlays of the `Image=1` set do not set it.
+
+An animation with [`TiberiumChainReaction=yes`](/keys/tiberiumchainreaction/) that starts on a Tiberium cell clears the cell and deals [`TiberiumExplosionDamage`](/keys/tiberiumexplosiondamage/) through the `C4Warhead`. One time in three, it also leaves one of the type's [`Debris`](/keys/debris/) animations, recolored with the type's [`Color`](/keys/color/#scope-tiberium).
+
+With [`TiberiumExplosive=yes`](/keys/tiberiumexplosive/#scope-global-rules) in `[CombatDamage]`, a destroyed vehicle carrying Tiberium explodes over a radius of one and a half cells. The damage is the sum, over its compartments, of the amount held multiplied by that type's `Power`. A vehicle with no death explosion from [`Explosion`](/keys/explosion/) never sets it off, and a scenario with [`HarvesterImmune=yes`](/keys/harvesterimmune/) prevents it. [Spilled harvester loads](/systems/destruction-and-debris/#spilled-harvester-loads) covers when it goes off.
+
+Some effects remove stages outright. An animation with [`Crater=yes`](/keys/crater/#scope-animtype) that plays at ground level removes six stages from its cell. If it also sets [`Scorch=yes`](/keys/scorch/), it does so only half the time. Laying a [laser fence](/systems/laser-fences/) clears every cell along the run.
 
 ## Other sources of Tiberium
 
-A blossom tree — a terrain object with [`SpawnsTiberium=yes`](/keys/spawnstiberium/) and an animation — seeds a neighboring cell at the midpoint of that animation, skipping the source-cell test entirely and using the type named by its [`TiberiumToSpawn`](/keys/tiberiumtospawn/). A Tiberium crate picks a registered type at random, swapping slot 1 for slot 0, and lays a stage-1 patch at the crate plus another ten to twenty scattered around it. A VoxelAnimType declaring [`IsTiberium=yes`](/keys/istiberium/#scope-voxelanimtype) seeds Tiberium at stage 0 where it lands — the ring of eight cells around a meteor's impact, or the single cell beneath any other — always with the type that owns the second Tiberium overlay set. A destroyed object whose type declares [`TiberiumHeal=yes`](/keys/tiberiumheal/) leaves the type in slot 0 at stage 0 through 2 on its own cell and the four beside it.
+A blossom tree is a terrain object with [`SpawnsTiberium=yes`](/keys/spawnstiberium/) and [`IsAnimated=yes`](/keys/isanimated/). While it is idle, it starts its animation on each frame with the chance set by [`AnimationProbability`](/keys/animationprobability/), and plays it at [`AnimationRate`](/keys/animationrate/).
+
+When the animation reaches the halfway frame of the tree's shape file, the animation stops and the tree seeds one neighboring cell. The seed uses the type in slot [`TiberiumToSpawn`](/keys/tiberiumtospawn/), starts at stage 5, and must pass the neighbor tests under [Spread](#spread). The tree seeds even while `TiberiumSpreads=no` or `TiberiumGrowthEnabled=no`.
+
+A Tiberium [crate](/systems/crates/) places stage 1 Tiberium of a randomly chosen registered type. When the choice is slot 1, it uses slot 0 instead.
+
+A VoxelAnimType with [`IsTiberium=yes`](/keys/istiberium/#scope-voxelanimtype) seeds stage 0 Tiberium where it comes down, unless it lands in water or on a bridge. With [`IsMeteor=yes`](/keys/ismeteor/#scope-voxelanimtype) it seeds the eight cells around the impact instead of the impact cell. The type is always the first registered type with `Image=3`, or slot 0 if no type uses that set.
+
+A destroyed object whose type sets [`TiberiumHeal=yes`](/keys/tiberiumheal/) seeds slot 0 Tiberium in the cells to its north-west, north, east, south and west, but not in the cell it stood on. [The step every kind shares](/systems/destruction-and-debris/#the-step-every-kind-shares) covers it. A destroyed harvester can spill its load as slot 0 Tiberium, as [Spilled harvester loads](/systems/destruction-and-debris/#spilled-harvester-loads) describes.
 
 ## Settings the engine parses but never reads
 
-[`TiberiumGrows` in `[MultiplayerDefaults]`](/keys/tiberiumgrows/#scope-global-rules) and [`TiberiumExplosive` in `[SpecialFlags]`](/keys/tiberiumexplosive/#scope-scenarios) are stored and never consulted; the spellings that work are the scenario `[SpecialFlags]` entry and the `[CombatDamage]` entry respectively. [`TiberiumStrength`](/keys/tiberiumstrength/) in `[CombatDamage]` and [`TiberiumTransmogrify`](/keys/tiberiumtransmogrify/) in `[General]` are stored and never consulted at all.
+The following settings have no effect:
+
+- [`TiberiumGrows` in `[MultiplayerDefaults]`](/keys/tiberiumgrows/#scope-global-rules). The scenario's `[SpecialFlags]` entry is the one that works.
+- [`TiberiumExplosive` in `[SpecialFlags]`](/keys/tiberiumexplosive/#scope-scenarios). Use the `[CombatDamage]` entry.
+- [`TiberiumStrength`](/keys/tiberiumstrength/) in `[CombatDamage]`.
+- [`TiberiumTransmogrify`](/keys/tiberiumtransmogrify/) in `[General]`.

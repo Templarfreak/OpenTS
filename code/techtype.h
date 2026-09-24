@@ -18,6 +18,8 @@
 #include "objtype.h"
 #include "typelist.h"
 
+#include <optional>
+
 #include "category.hh"
 #include "mission.hh"
 #include "mph.hh"
@@ -193,6 +195,11 @@ class TechnoTypeClass : public ObjectTypeClass
 		 * tiberium load, passengers, or charge. If PIPSCALE_NONE, then no pips are drawn.
 		 */
 		PipScaleType PipScale;
+
+		/*
+		 * The number of pips in this type's row, if set. Unset, each pip scale has its own length.
+		 */
+		std::optional<int> MaxPips;
 
 		/*
 		 * These are the building types this object docks with for service, listed in order of
@@ -506,6 +513,12 @@ class TechnoTypeClass : public ObjectTypeClass
 		 * type lacks the flag.
 		 */
 		bool IsImmuneToVeins;
+
+		/*
+		 * Whether an EM pulse leaves this type alone, if set. Unset, a structure or vehicle
+		 * follows IsCoreDefender and anything else is not immune.
+		 */
+		std::optional<bool> IsImmuneToEMP;
 
 		/*
 		 * If this object mends itself while it stands on tiberium, then this flag will be
@@ -835,6 +848,7 @@ class TechnoTypeClass : public ObjectTypeClass
 
 		virtual void Compute_CRC(CRCEngine & crc) const override;
 		bool Is_Two_Shooter(void) const;
+		virtual bool Is_Immune_To_EMP(void) const;
 		virtual bool Legal_Placement(Cell const & pos, HouseClass * house) const;
 		virtual int Raw_Cost(void) const;
 		int Max_Passengers(void) const {return(MaxPassengers);}

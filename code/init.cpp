@@ -87,6 +87,7 @@
 #include "airctype.h"
 #include "alphashp.h"
 #include "anim.h"
+#include "audio/audioengine.h"
 #include "autosave.h"
 #include "bench.h"
 #include "blight.h"
@@ -105,7 +106,6 @@
 #include "dbgprint.h"
 #include "deploymentconfig.h"
 #include "dialog.h"
-#include "audio/audioengine.h"
 #include "dsurface.h"
 #include "ebolt.h"
 #include "egos.h"
@@ -134,8 +134,8 @@
 #include "loaddlg.h"
 #include "logic.h"
 #include "mainopt.h"
-#include "mixfile.h"
 #include "misc.h"
+#include "mixfile.h"
 #include "mono.h"
 #include "movie.h"
 #include "mplayer.h"
@@ -150,7 +150,7 @@
 #include "ovrlight.h"
 #include "ownrdraw.h"
 #include "partsys.h"
-#include "pcx.h"
+#include "png.h"
 #include "queue.h"
 #include "ramfile.h"
 #include "revent.h"
@@ -163,10 +163,10 @@
 #include "scheme.h"
 #include "script.h"
 #include "session.h"
-#include "spawner.h"
 #include "side.h"
 #include "skirmish.h"
 #include "smudtype.h"
+#include "spawner.h"
 #include "stimer.h"
 #include "tactical.h"
 #include "tag.h"
@@ -179,6 +179,10 @@
 #include "trigger.h"
 #include "tube.h"
 #include "tutorial.h"
+#include "ui/screens/campaign/uicampaign.h"
+#include "ui/screens/menu/uimenu.h"
+#include "ui/screens/version/uiversion.h"
+#include "ui/uienginehost.h"
 #include "uicontrol.h"
 #include "unit.h"
 #include "unittype.h"
@@ -188,6 +192,7 @@
 #include "vqoption.h"
 #include "wave.h"
 #include "waypoint.h"
+#include "winfix.h"
 #include "winstub.h"
 #include "wsproto.h"
 #include "wspudp.h"
@@ -200,15 +205,11 @@
 #include <conio.h>
 #include <ctime>
 #include <dos.h>
+#include <string>
 #include <unordered_set>
 #include <vector>
 
 extern VoxelDataStruct DropPodVoxel;
-
-struct ChooseCampaignStruct {
-	CampaignType ChosenCampaign;
-	bool ChoiceMade;
-};
 
 /**********************************************************************
 **	Optional parameter control for special options.
@@ -256,7 +257,6 @@ void Draw_Version_Text(Surface * surface);
 void Version_Dialog(void);
 
 INT_PTR CALLBACK Rules_Choice_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
-INT_PTR CALLBACK Main_Menu_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
 
 void Init_Random(void);
 
@@ -564,6 +564,9 @@ int Init_Game(int , char * [])
 	DebugString("Init Commands\n");
 	Init_Commands();
 
+	// The briefing and the credits draw with the owner-draw art, colors and blend masks.
+	OwnerDraw::Prepare_Resources();
+
 	DebugString("Game Init Completed.\n");
 
 	return(0);
@@ -725,7 +728,7 @@ void Prepare_Side_Roster(void)
 /// </summary>
 /// <param name="campaign">The campaign to be tested.</param>
 /// <returns>bool; Is the campaign available for the player to select?</returns>
-static bool Campaign_Available(CampaignClass * campaign)
+bool Campaign_Available(CampaignClass * campaign)
 {
 	if (Addon_Enabled(ADDON_ANY) == true) {
 		if (campaign->RequiredAddon == ADDON_BASE_GAME) {
@@ -746,113 +749,6 @@ static bool Campaign_Available(CampaignClass * campaign)
 
 
 /// <summary>
-/// Handles the messages for the campaign choice dialog.
-/// This routine lists the campaigns that the player is entitled to play, drives the
-/// difficulty slider, and leaves the choice where Choose_Campaign will collect it.
-/// </summary>
-static INT_PTR CALLBACK Campaign_Choice_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
-{
-	HWND item;
-	struct ChooseCampaignStruct * state;
-
-	INT_PTR rc;
-	rc = OwnerDraw::Default_Dialog_Proc(window, message, wparam, lparam);
-
-	if (rc) {
-		return(rc);
-	}
-
-	switch (message) {
-
-		case WM_INITDIALOG:
-			item = GetDlgItem(window, IDC_LIST);
-
-			if (item != NULL) {
-				DebugString("Initializing Choose_Campaign() Dialog.\n");
-				for (int index = 0; index < Campaigns.Count(); index++) {
-					CampaignClass * campaign = Campaigns[index];
-
-					if (!Campaign_Available(campaign)) {
-						DebugString("\tSkipping Campaign [%d] - %s\n", index, campaign->Description);
-						continue;
-					}
-
-					DebugString("\tAdding Campaign [%d] - %s\n", index, campaign->Description);
-					int pos = ListBox_AddString(item, campaign->Description);
-					ListBox_SetItemData(item, pos, index);
-				}
-
-				ListBox_SetCurSel(item, 0);
-			}
-
-			item = GetDlgItem(window, IDC_DIFFICULTY_SLIDER);
-
-			if (item != NULL) {
-				SendMessage(item, OD_TRACKNUMBERS, 0, 0);
-				Slider_SetRange(item, 0,2);
-				Slider_SetPos(item, Options.Difficulty);
-			}
-			break;
-
-		case WM_COMMAND:
-			switch (LOWORD(wparam)) {
-				case IDOK:
-					if (HIWORD(wparam) == BN_CLICKED) {
-						state = (ChooseCampaignStruct *)GetWindowLongPtr(window, DWLP_USER);
-
-						if (state != NULL) {
-							item = GetDlgItem(window, IDC_LIST);
-
-							if (item != NULL) {
-								int pos = ListBox_GetCurSel(item);
-								state->ChosenCampaign = (CampaignType)ListBox_GetItemData(item, pos);
-								state->ChoiceMade = true;
-							}
-						}
-
-						item = GetDlgItem(window, IDC_DIFFICULTY_SLIDER);
-
-						if (item != NULL) {
-							Options.Difficulty = Slider_GetPos(item);
-						}
-					}
-					break;
-
-				case IDCANCEL:
-					if (HIWORD(wparam) == BN_CLICKED) {
-						state = (ChooseCampaignStruct *)GetWindowLongPtr(window, DWLP_USER);
-
-						if (state != NULL) {
-							state->ChosenCampaign = CAMPAIGN_NONE;
-							state->ChoiceMade = true;
-						}
-					}
-
-					break;
-			}
-			break;
-
-		case WM_HSCROLL: {
-			int diff = HIWORD(wparam);
-			int stringID = 0;
-
-			if ((HWND)lparam == GetDlgItem(window, IDC_DIFFICULTY_SLIDER)) {
-				stringID = GameDifficultyNames[diff];
-				item = GetDlgItem(window, IDC_DIFFICULTY_LABEL);
-				Static_SetText(item, Fetch_String(stringID));
-			}
-			break;
-		}
-
-		default:
-			break;
-	}
-
-	return(FALSE);
-}
-
-
-/// <summary>
 /// Asks the player which campaign to play.
 /// This routine reads the campaign list first if that has not already happened, and then
 /// runs the campaign dialog until the player either commits or backs out.
@@ -860,12 +756,6 @@ static INT_PTR CALLBACK Campaign_Choice_Dialog_Proc(HWND window, UINT message, W
 /// <returns>Returns with the campaign chosen, or CAMPAIGN_NONE if the player backed out.</returns>
 static CampaignType Choose_Campaign(void)
 {
-	HWND dialog;
-	struct ChooseCampaignStruct state;
-
-	state.ChoiceMade = false;
-	state.ChosenCampaign = CAMPAIGN_NONE;
-
 	if (Campaigns.Count() == 0) {
 		Init_Campaigns();
 
@@ -874,33 +764,17 @@ static CampaignType Choose_Campaign(void)
 		}
 	}
 
-	dialog = OwnerDraw::Begin_Dialog(IDD_CAMPAIGN, Campaign_Choice_Dialog_Proc);
-
-	if (dialog != NULL) {
-		SetWindowLongPtr(dialog, DWLP_USER, (LONG_PTR) &state);
-
-		OwnerDraw::Move_Dialog(dialog, -1, (HiddenSurface->Get_Height() - 400) / 2 + 147);
-		OwnerDraw::Display_Dialog(dialog);
-
-		while (state.ChoiceMade == false) {
-			if (OwnerDraw::Dialog_Message_Handler() == true) {
-				break;
-			}
-			Title_Screen_Restore();
-		}
-
-		OwnerDraw::End_Dialog(dialog);
-	}
-
-	return(state.ChosenCampaign);
+	std::optional<UICampaignEntry> picked = UI_Campaign_Dialog();
+	return(picked.has_value() ? (CampaignType)picked->Campaign : CAMPAIGN_NONE);
 }
 
 
 /// <summary>
 /// Loads the rules and the art control files.
 /// This routine gathers every rules file it can find and, should there be more than one,
-/// asks the player which of them to play with. It then loads the art, expansion, AI and
-/// language override files, and seeds the multiplayer defaults from the rules just read.
+/// asks the player which of them to play with. It then loads the art, expansion, multiplayer,
+/// AI and language override files, and seeds the multiplayer defaults from the rules just
+/// read. The addon is chosen later, so the multiplayer expansion file cannot seed them.
 /// </summary>
 /// <returns>bool; Were the rules loaded successfully?</returns>
 static bool Init_Rules(void)
@@ -961,6 +835,25 @@ static bool Init_Rules(void)
 		}
 	}
 
+	// Unlike the expansion rules above, an unreadable multiplayer file is not fatal; the game
+	// starts without that layer.
+	CCFileClass rules_mp_file(DeploymentConfig.MultiplayerRulesFile.c_str());
+
+	if (rules_mp_file.Is_Available() == true) {
+		if (!MPRuleINI.Load(rules_mp_file, false)) {
+			DebugString("Failed to load %s!\n", DeploymentConfig.MultiplayerRulesFile.c_str());
+		}
+	}
+
+	if (Addon_Installed(ADDON_FIRESTORM)) {
+		CCFileClass rules_mp_fs_file(DeploymentConfig.MultiplayerRulesExpansionFile.c_str());
+		if (rules_mp_fs_file.Is_Available() == true) {
+			if (!FSMPRuleINI.Load(rules_mp_fs_file, false)) {
+				DebugString("Failed to load %s!\n", DeploymentConfig.MultiplayerRulesExpansionFile.c_str());
+			}
+		}
+	}
+
 	if (Rules.Count() == 1) {
 		RuleINI = Rules[0];
 	} else {
@@ -980,6 +873,7 @@ static bool Init_Rules(void)
 	Rule->Do_Movies(art_ini);
 	Rule->Audio_Visual_Rules(*RuleINI);
 	Rule->MPlayer(*RuleINI);
+	Rule->MPlayer(MPRuleINI);
 
 	Session.Options.UnitCount = Rule->MPUnitCount;
 	BuildLevel = Rule->MPBuildLevel;
@@ -1770,6 +1664,11 @@ bool Parse_Command_Line(int argc, char * argv[])
 			continue;
 		}
 
+		if (stricmp(string, "-MULTIINSTANCE") == 0) {
+			Debug_MultipleInstances = true;
+			continue;
+		}
+
 		/*
 		 * Arms a deliberate fault; the mode decides where it is raised later.
 		 */
@@ -1791,7 +1690,7 @@ bool Parse_Command_Line(int argc, char * argv[])
 		**	Specify the random number seed (for debugging)
 		*/
 		if (strstr(string, "-SEED")) {
-			CustomSeed = (unsigned short)(atoi(string + strlen("SEED")));
+			CustomSeed = (unsigned short)(atoi(string + strlen("-SEED")));
 			continue;
 		}
 #endif
@@ -2348,7 +2247,7 @@ static void Init_Patch_Mixfiles(void)
 
 
 /// <summary>
-/// Reads a palette out of the mounted archives and expands it to the game's colour range.
+/// Reads a palette out of the mounted archives and expands it to the game's color range.
 /// </summary>
 /// <param name="palette">The palette to fill, left unchanged if the file is not there.</param>
 /// <param name="name">The palette file to read.</param>
@@ -2521,10 +2420,6 @@ static bool Init_Secondary_Mixfiles(void)
 
 	DebugStringNoPrefix(" SCORES.MIX");
 
-	if (ScoresMix == NULL) {
-		return(false);
-	}
-
 	if (CCFileClass("SCORES01.MIX").Is_Available()) {
 		Scores01Mix = new MFCD("SCORES01.MIX", &FastKey);
 	}
@@ -2550,10 +2445,6 @@ static bool Init_Secondary_Mixfiles(void)
 
 			MoviesMixLocal.Add(mix);
 		}
-	}
-
-	if (MoviesMix == NULL) {
-		return(false);
 	}
 
 	return(true);
@@ -2969,104 +2860,42 @@ bool Cheat_Key_Process(char chr)
 
 
 /// <summary>
-/// Handles the messages for the version information dialog.
-/// This routine fills the list box with the game's title, its version numbers, the build
-/// stamp, and a description of the processor it finds itself running upon. It is the
-/// first thing to ask for when a player reports a problem.
-/// </summary>
-INT_PTR CALLBACK Version_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
-{
-	HWND handle;
-	int *res;
-	char buffer[256];
-
-	INT_PTR rc = OwnerDraw::Default_Dialog_Proc(window, message, wparam, lparam);
-
-	if (rc) {
-		return(rc);
-	}
-
-	res = (int *)GetWindowLongPtr(window, DWLP_USER);
-
-	switch (message) {
-		case WM_INITDIALOG:
-			handle = GetDlgItem(window, IDC_VERSION_INFO);
-
-			if (Addon_Installed(ADDON_FIRESTORM) == true) {
-				strcpy(buffer, Fetch_String(TXT_SHORT_TITLE));
-				strcat(buffer, ": ");
-				strcat(buffer, Get_Addon_Title(ADDON_FIRESTORM));
-				ListBox_AddString(handle, buffer);
-			} else {
-				ListBox_AddString(handle, Fetch_String(TXT_SHORT_TITLE));
-			}
-
-			sprintf(buffer, "Version %s", Version_Name());
-			ListBox_AddString(handle, buffer);
-
-			sprintf(buffer, "Internal Version %s", VerNum.Version_Name());
-			ListBox_AddString(handle, buffer);
-
-#ifdef _DEBUG
-			sprintf(buffer, "Debug Build: %s - %s", OPENTS_BUILD_DESCRIPTION, OPENTS_COMMIT_DATE);
-#else
-			sprintf(buffer, "Release Build: %s - %s", OPENTS_BUILD_DESCRIPTION, OPENTS_COMMIT_DATE);
-#endif
-			ListBox_AddString(handle, buffer);
-
-			// The braces keep the 'case' label from jumping over these initializations.
-			{
-				int cpu_type = 5;
-				char vendor[32];
-				vendor[0] = '\0';
-				Get_CPU_Type(cpu_type, vendor, sizeof(vendor) - 1);
-
-				sprintf(buffer, "CPU vendor: %s", vendor);
-			ListBox_AddString(handle, buffer);
-			}
-
-			Get_Language_Version(buffer);
-			ListBox_AddString(handle, buffer);
-			break;
-
-		case WM_COMMAND:
-			switch (LOWORD(wparam)) {
-				case IDCANCEL:
-				case IDOK:
-					*res = LOWORD(wparam);
-					break;
-			}
-			break;
-	}
-
-	return(FALSE);
-}
-
-
-/// <summary>
-/// Displays the version information dialog.
-/// This routine does not return until the player dismisses the dialog, and keeps the
-/// title screen alive behind it while it waits.
+/// Shows the version information and returns once the player closes it.
 /// </summary>
 void Version_Dialog(void)
 {
-	HWND dialog;
-	int res = 0;
+	UI_Version_Dialog();
+}
 
-	dialog = OwnerDraw::Begin_Dialog(IDD_VERSION, Version_Dialog_Proc);
 
-	if (dialog != NULL) {
-		SetWindowLongPtr(dialog, DWLP_USER, (LONG_PTR)&res);
-		OwnerDraw::Display_Dialog(dialog);
+static int MainMenuKeyResult = SEL_NONE;
 
-		while (res == 0) {
-			if (OwnerDraw::Dialog_Message_Handler() == true) {
-				break;
-			}
-			Title_Screen_Restore();
-		}
-		OwnerDraw::End_Dialog(dialog);
+
+static bool Main_Menu_Keys(void)
+{
+	if (!Keyboard->Check()) {
+		return(false);
 	}
+
+	KeyNumType input = Keyboard->Get();
+	switch ((unsigned int)input) {
+		case (KN_V | KN_CTRL_BIT):
+			Version_Dialog();
+			break;
+
+		case VK_C | KN_CTRL_BIT | KN_ALT_BIT:
+			MainMenuKeyResult = SEL_VIEW_CREDITS;
+			return(true);
+
+		default:
+			if ((input & KN_RLSE_BIT) == 0 && Cheat_Key_Process((char)input) == true) {
+				Sound_Effect(Rule->OptionsChanged);
+				Title_Screen_Restore(true);
+			}
+			break;
+	}
+
+	return(false);
 }
 
 
@@ -3087,138 +2916,38 @@ void Version_Dialog(void)
  *=========================================================================*/
 int Main_Menu(unsigned int timeout)
 {
-	HWND dialog;
 	int retval = SEL_NONE;
 
 	timeout = 0;
 
-	dialog = OwnerDraw::Begin_Dialog(IDD_MAIN_MENU, Main_Menu_Dialog_Proc);
-	assert(dialog != NULL);
+	MainMenuKeyResult = SEL_NONE;
 
-	if (dialog != NULL) {
-		SetWindowLongPtr(dialog, DWLP_USER, (LONG_PTR)&retval);
-		char *menu = Get_New_Menu()->Background;
-		Load_Title_Screen(menu, HiddenSurface, &CCPalette);
-		Draw_Version_Text(HiddenSurface);
-		Update_Visible_Surface();
-		OwnerDraw::Move_Dialog(dialog, -1, (HiddenSurface->Get_Height() - 400) / 2 + 147);
-		OwnerDraw::Display_Dialog(dialog);
-		SetFocus(MainWindow);
+	UIMenuState menu;
+	menu.Kind = UI_MENU_MAIN;
+	menu.Items.push_back(UIMenuItemType{"New Campaign", SEL_CAMPAIGN_GAME, true});
+	menu.Items.push_back(UIMenuItemType{"Load Mission", SEL_LOAD_GAME, LoadOptionsClass().Files_Present()});
+	menu.Items.push_back(UIMenuItemType{"Multiplayer Game", SEL_MULTIPLAYER_GAME, true});
+	menu.Items.push_back(UIMenuItemType{"Intro / Sneak Peek", SEL_INTRO, true});
+	menu.Items.push_back(UIMenuItemType{"Options", SEL_OPTIONS, true});
+	menu.Items.push_back(UIMenuItemType{"Exit Game", SEL_EXIT, true});
+	UI_Menu_Place(menu);
 
-		do {
-			if (OwnerDraw::Dialog_Message_Handler() == true) {
-				retval = SEL_EXIT;
-			}
+	char * background = Get_New_Menu()->Background;
+	Load_Title_Screen(background, HiddenSurface, &CCPalette);
+	Draw_Version_Text(HiddenSurface);
+	Update_Visible_Surface();
 
-			Title_Screen_Restore();
-
-			if (Keyboard->Check()) {
-				KeyNumType input = Keyboard->Get();
-
-				switch ((unsigned int)input) {
-					case (KN_V | KN_CTRL_BIT):
-						ShowWindow(dialog, SW_HIDE);
-						UpdateWindow(MainWindow);
-						Version_Dialog();
-						ShowWindow(dialog, SW_SHOW);
-						UpdateWindow(dialog);
-						SetFocus(MainWindow);
-						break;
-
-					case VK_C | KN_CTRL_BIT | KN_ALT_BIT:
-						retval = SEL_VIEW_CREDITS;
-						break;
-
-					default:
-						if ((input & KN_RLSE_BIT) == 0) {
-							if (Cheat_Key_Process((char)input) == true) {
-								Sound_Effect(Rule->OptionsChanged);
-								Title_Screen_Restore(true);
-							}
-						}
-						break;
-				}
-			}
-		}
-		while (retval == SEL_NONE);
-
-		OwnerDraw::End_Dialog(dialog);
-
-		/*
-		 * Seed cryptographic random number generator.
-		 */
-		SYSTEMTIME t;
-		GetSystemTime(&t);
-		CryptRandom.Seed_Byte(t.wMilliseconds);
-	} else {
-		retval = SEL_EXIT;
+	retval = UI_Menu_Dialog(menu, SEL_NONE, Main_Menu_Keys);
+	if (retval == SEL_NONE) {
+		retval = (MainMenuKeyResult != SEL_NONE) ? MainMenuKeyResult : SEL_EXIT;
 	}
+
+	SYSTEMTIME stamp;
+	GetSystemTime(&stamp);
+	CryptRandom.Seed_Byte(stamp.wMilliseconds);
 
 	SetFocus(MainWindow);
 	return(retval);
-}
-
-
-/// <summary>
-/// Handles the messages for the main menu dialog.
-/// This routine records the button the player pressed into the result that Main_Menu is
-/// waiting upon, and greys out the load button when there is nothing to load.
-/// </summary>
-INT_PTR CALLBACK Main_Menu_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
-{
-	int * res;
-
-	INT_PTR rc = OwnerDraw::Default_Dialog_Proc(window, message, wparam, lparam);
-	if (rc) {
-		return(rc);
-	}
-
-	res = (int *) GetWindowLongPtr(window, DWLP_USER);
-
-	switch (message) {
-		case WM_INITDIALOG: {
-			HWND control = GetDlgItem(window, IDC_LOAD_MISSION);
-			if (control) {
-				if (LoadOptionsClass().Files_Present() == true) {
-					EnableWindow(control, TRUE);
-					return(FALSE);
-				}
-				EnableWindow(control, FALSE);
-			}
-		}
-		break;
-
-		case WM_COMMAND: {
-			switch (LOWORD(wparam)) {
-				case IDC_OPTIONS:
-					*res = SEL_OPTIONS;
-					break;
-
-				case IDC_EXIT_GAME:
-					*res = SEL_EXIT;
-					break;
-
-				case IDC_INTRO:
-					*res = SEL_INTRO;
-					break;
-
-				case IDC_NEWCAMPAIGN:
-					*res = SEL_CAMPAIGN_GAME;
-					break;
-
-				case IDC_MULTIPLAYER_GAME:
-					*res = SEL_MULTIPLAYER_GAME;
-					break;
-
-				case IDC_LOAD_MISSION:
-					*res = SEL_LOAD_GAME;
-					break;
-			}
-		}
-		break;
-	}
-
-	return(false);
 }
 
 
@@ -3285,7 +3014,17 @@ void Draw_Version_Text(Surface * surface)
 }
 
 
-static char _cmd_buffer[128];
+// A team command builds its names from its number. Each instance keeps its own copies,
+// because one shared buffer cannot answer two of these accessors at once.
+static char const * Team_Command_String(std::string & cache, char const * format, int team)
+{
+	if (cache.empty()) {
+		char buffer[128];
+		snprintf(buffer, sizeof(buffer), format, team);
+		cache = buffer;
+	}
+	return(cache.c_str());
+}
 
 
 static void Select_Team_Members(int team)
@@ -3324,19 +3063,16 @@ class CreateTeamCommandClass : public CommandClass
 		CreateTeamCommandClass(int team) : Team(team) {}
 
 		virtual char const * Get_Unique_Name(void) const {
-			sprintf(_cmd_buffer, "TeamCreate_%d", Team);
-			return(_cmd_buffer);
+			return(Team_Command_String(UniqueName, "TeamCreate_%d", Team));
 		}
 		virtual char const * Get_Display_Name(void) const {
-			sprintf(_cmd_buffer, Fetch_String(TXT_CREATE_TEAM), Team);
-			return(_cmd_buffer);
+			return(Team_Command_String(DisplayName, Fetch_String(TXT_CREATE_TEAM), Team));
 		}
 		virtual char const * Get_Category(void) const {
 			return(Fetch_String((TXT_TEAM)));
 		}
 		virtual char const * Get_Description(void) const {
-			sprintf(_cmd_buffer, Fetch_String(TXT_CREATE_TEAM_DESC), Team);
-			return(_cmd_buffer);
+			return(Team_Command_String(Description, Fetch_String(TXT_CREATE_TEAM_DESC), Team));
 		}
 
 		virtual void Execute(void) const {
@@ -3345,6 +3081,10 @@ class CreateTeamCommandClass : public CommandClass
 
 	private:
 		int Team;
+
+		mutable std::string UniqueName;
+		mutable std::string DisplayName;
+		mutable std::string Description;
 };
 
 
@@ -3354,19 +3094,16 @@ class SelectTeamCommandClass : public CommandClass
 		SelectTeamCommandClass(int team) : Team(team) {}
 
 		virtual char const * Get_Unique_Name(void) const {
-			sprintf(_cmd_buffer, "TeamSelect_%d", Team);
-			return(_cmd_buffer);
+			return(Team_Command_String(UniqueName, "TeamSelect_%d", Team));
 		}
 		virtual char const * Get_Display_Name(void) const {
-			sprintf(_cmd_buffer, Fetch_String(TXT_SELECT_TEAM), Team);
-			return(_cmd_buffer);
+			return(Team_Command_String(DisplayName, Fetch_String(TXT_SELECT_TEAM), Team));
 		}
 		virtual char const * Get_Category(void) const {
 			return(Fetch_String((TXT_TEAM)));
 		}
 		virtual char const * Get_Description(void) const {
-			sprintf(_cmd_buffer, Fetch_String(TXT_SELECT_TEAM_DESC), Team);
-			return(_cmd_buffer);
+			return(Team_Command_String(Description, Fetch_String(TXT_SELECT_TEAM_DESC), Team));
 		}
 
 		virtual void Execute(void) const {
@@ -3400,6 +3137,10 @@ class SelectTeamCommandClass : public CommandClass
 	private:
 		int Team;
 
+		mutable std::string UniqueName;
+		mutable std::string DisplayName;
+		mutable std::string Description;
+
 		inline static int LastTeam = -1;
 		inline static int LastTick = -1;
 };
@@ -3411,19 +3152,16 @@ class AddTeamCommandClass : public CommandClass
 		AddTeamCommandClass(int team) : Team(team) {}
 
 		virtual char const * Get_Unique_Name(void) const {
-			sprintf(_cmd_buffer, "TeamAddSelect_%d", Team);
-			return(_cmd_buffer);
+			return(Team_Command_String(UniqueName, "TeamAddSelect_%d", Team));
 		}
 		virtual char const * Get_Display_Name(void) const {
-			sprintf(_cmd_buffer, Fetch_String(TXT_ADD_SELECT_TEAM), Team);
-			return(_cmd_buffer);
+			return(Team_Command_String(DisplayName, Fetch_String(TXT_ADD_SELECT_TEAM), Team));
 		}
 		virtual char const * Get_Category(void) const {
 			return(Fetch_String((TXT_TEAM)));
 		}
 		virtual char const * Get_Description(void) const {
-			sprintf(_cmd_buffer, Fetch_String(TXT_ADD_SELECT_TEAM_DESC), Team);
-			return(_cmd_buffer);
+			return(Team_Command_String(Description, Fetch_String(TXT_ADD_SELECT_TEAM_DESC), Team));
 		}
 
 		virtual void Execute(void) const {
@@ -3437,6 +3175,10 @@ class AddTeamCommandClass : public CommandClass
 
 	private:
 		int Team;
+
+		mutable std::string UniqueName;
+		mutable std::string DisplayName;
+		mutable std::string Description;
 };
 
 
@@ -3446,19 +3188,16 @@ class AddToTeamCommandClass : public CommandClass
 		AddToTeamCommandClass(int team) : Team(team) {}
 
 		virtual char const * Get_Unique_Name(void) const {
-			sprintf(_cmd_buffer, "TeamAddTo_%d", Team);
-			return(_cmd_buffer);
+			return(Team_Command_String(UniqueName, "TeamAddTo_%d", Team));
 		}
 		virtual char const * Get_Display_Name(void) const {
-			sprintf(_cmd_buffer, Fetch_String(TXT_ADD_TO_TEAM), Team);
-			return(_cmd_buffer);
+			return(Team_Command_String(DisplayName, Fetch_String(TXT_ADD_TO_TEAM), Team));
 		}
 		virtual char const * Get_Category(void) const {
 			return(Fetch_String((TXT_TEAM)));
 		}
 		virtual char const * Get_Description(void) const {
-			sprintf(_cmd_buffer, Fetch_String(TXT_ADD_TO_TEAM_DESC), Team);
-			return(_cmd_buffer);
+			return(Team_Command_String(Description, Fetch_String(TXT_ADD_TO_TEAM_DESC), Team));
 		}
 
 		virtual void Execute(void) const {
@@ -3474,6 +3213,10 @@ class AddToTeamCommandClass : public CommandClass
 
 	private:
 		int Team;
+
+		mutable std::string UniqueName;
+		mutable std::string DisplayName;
+		mutable std::string Description;
 };
 
 
@@ -3483,19 +3226,16 @@ class CenterTeamCommandClass : public CommandClass
 		CenterTeamCommandClass(int team) : Team(team) {}
 
 		virtual char const * Get_Unique_Name(void) const {
-			sprintf(_cmd_buffer, "TeamCenter_%d", Team);
-			return(_cmd_buffer);
+			return(Team_Command_String(UniqueName, "TeamCenter_%d", Team));
 		}
 		virtual char const * Get_Display_Name(void) const {
-			sprintf(_cmd_buffer, Fetch_String(TXT_CENTER_TEAM), Team);
-			return(_cmd_buffer);
+			return(Team_Command_String(DisplayName, Fetch_String(TXT_CENTER_TEAM), Team));
 		}
 		virtual char const * Get_Category(void) const {
 			return(Fetch_String((TXT_TEAM)));
 		}
 		virtual char const * Get_Description(void) const {
-			sprintf(_cmd_buffer, Fetch_String(TXT_CENTER_TEAM_DESC), Team);
-			return(_cmd_buffer);
+			return(Team_Command_String(Description, Fetch_String(TXT_CENTER_TEAM_DESC), Team));
 		}
 
 		virtual void Execute(void) const {
@@ -3517,6 +3257,10 @@ class CenterTeamCommandClass : public CommandClass
 
 	private:
 		int Team;
+
+		mutable std::string UniqueName;
+		mutable std::string DisplayName;
+		mutable std::string Description;
 };
 
 
@@ -4847,31 +4591,29 @@ class ScreenCaptureCommandClass : public CommandClass
 		}
 		virtual void Execute(void) const {
 			{
-				/*
-				 * The whole frame is captured whatever size the window happens to be,
-				 * limited only by the surface it is copied into.
-				 */
-				Rect dest_rect = VisibleSurface->Get_Rect();
-				dest_rect.Width = std::min(dest_rect.Width, HiddenSurface->Get_Width());
-				dest_rect.Height = std::min(dest_rect.Height, HiddenSurface->Get_Height());
+				// The presented frame, at render resolution whatever the window size.
+				DSurface const * surface = (DSurface const *)VisibleSurface;
+				unsigned short const * pixels = (unsigned short const *)surface->Get_Buffer();
+				if (pixels == NULL) {
+					return;
+				}
 
-				Hide_Mouse();
-
-				HiddenSurface->Blit_From(Rect(0, 0, HiddenSurface->Get_Width(), HiddenSurface->Get_Height()),
-					*VisibleSurface, dest_rect);
-
-				Show_Mouse();
-
+				// Only the Screenshots folder is searched for a free number.
 				char fname[128];
+				std::string path;
 				int index = -1;
 
 				do {
 					index++;
-					sprintf(fname, "SCRN%04d.pcx", index);
-				} while (CCFileClass(fname).Is_Available());
+					sprintf(fname, "SCRN%04d.png", index);
+					path = Screenshot_Name(fname);
+				} while (RawFileClass(path.c_str()).Is_Available());
 
-				CCFileClass file(fname);
-				Write_PCX_File(file, *HiddenSurface, &GamePalette);
+				RawFileClass file(path.c_str());
+				if (!Write_PNG_File(file, surface->Get_Width(), surface->Get_Height(), surface->Stride(), pixels)) {
+					DebugString("Failed to write screen capture %s!\n", path.c_str());
+					file.Delete();
+				}
 			}
 		}
 };
@@ -6379,24 +6121,33 @@ bool Prep_For_Side(SideType side)
 
 	if (Session.Type == GAME_NORMAL) {
 
-		if (Addon_Enabled(ADDON_ANY) == false) {
-			sprintf(name, "SIDECD%02d.MIX", id);
-		} else {
+		if (Addon_Enabled(ADDON_ANY) == true) {
 			sprintf(name, "E%02dSCD%02d.MIX", Get_Required_Addon(), id);
+
+			DebugString("     Initializing %s\n", name);
+			if (CCFileClass(name).Is_Available()) {
+				SideCDMix = new MFCD(name, &FastKey);
+			}
 		}
 
-		DebugString("     Initializing %s\n", name);
-		if (CCFileClass(name).Is_Available()) {
-			SideCDMix = new MFCD(name, &FastKey);
+		// An installation may keep the expansion's copies in the base archive instead.
+		if (SideCDMix == NULL) {
+			sprintf(name, "SIDECD%02d.MIX", id);
+
+			DebugString("     Initializing %s\n", name);
+			if (CCFileClass(name).Is_Available()) {
+				SideCDMix = new MFCD(name, &FastKey);
+			}
 		}
+
 		if (SideCDMix == NULL) {
 			DebugString("     FAILED!\n");
 			return(false);
 		}
 	}
 
-	// A side archive may carry its own copy of the file.
 	UIControls.Read_INI_File(DeploymentConfig.UIFile.c_str(), true);
+	UI_On_Archives_Change();
 
 	Map.Init_For_House();
 

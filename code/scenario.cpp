@@ -74,13 +74,13 @@
 #include "_tactica.h"
 #include "_timer.h"
 #include "_tooltip.h"
+#include "_ui.h"
 #include "_wsproto.h"
 #include "addon.h"
 #include "aircraft.h"
 #include "aitrig.h"
 #include "anim.h"
 #include "astar.h"
-#include "savemgr.h"
 #include "bench.h"
 #include "building.h"
 #include "builtype.h"
@@ -127,7 +127,6 @@
 #include "newmenu.h"
 #include "overlay.h"
 #include "overtype.h"
-#include "ownrdraw.h"
 #include "partsys.h"
 #include "pcx.h"
 #include "preview.h"
@@ -137,6 +136,7 @@
 #include "restate.h"
 #include "revent.h"
 #include "rules.h"
+#include "savemgr.h"
 #include "savestream.h"
 #include "scheme.h"
 #include "score.h"
@@ -156,7 +156,6 @@
 #include "teamtype.h"
 #include "terrain.h"
 #include "theme.h"
-#include "voc.h"
 #include "tiberium.h"
 #include "tracker.h"
 #include "trigger.h"
@@ -164,9 +163,11 @@
 #include "trim.h"
 #include "tube.h"
 #include "tutorial.h"
+#include "ui/uishell.h"
 #include "unit.h"
 #include "unittype.h"
 #include "vein.h"
+#include "voc.h"
 #include "vox.h"
 #include "wave.h"
 #include "waypoint.h"
@@ -190,6 +191,7 @@ static Cell const Clip_Scatter(Cell const & cell, int maxdist);
 static Cell const Clip_Move(Cell const & cell, FacingType facing, int dist);
 static void Multiplayer_Last_Minute_Fixups(bool official = true);
 static char const * Pick_Load_Background_Name(Point2D & text_pos);
+static int Load_Scenario_File(CCINIClass & ini, char const * name, bool withdigest);
 
 
 /***********************************************************************************************
@@ -396,11 +398,6 @@ bool Start_Scenario(char const * name, bool briefing, CampaignType campaign)
 	bool transit_playing = false;
 
 	if (briefing && Session.Type == GAME_NORMAL && !has_briefing_movie) {
-
-		// No dialog has been put up in a game a client launched, so the artwork it draws with
-		// is not built yet.
-		OwnerDraw::Prepare_Resources(MainWindow);
-
 		if (Scen->TransitTheme != THEME_NONE) {
 			Theme.Play_Song(Scen->TransitTheme);
 			transit_playing = true;
@@ -684,13 +681,20 @@ bool Read_Scenario(char const * fname)
 
 	char * ext = name + strlen(name) - 4;
 
-	if (stricmp((ext), ".SED") == 0) {
-		Scen->IsRandom = true;
-		DebugString("Scen->IsRandom = true\n");
-	} else {
-		Scen->IsRandom = false;
-		DebugString("Scen->IsRandom = false\n");
+	// Any file but a seed file is read once, both to see whether it asks to be generated and to play.
+	CCINIClass requested;
+	bool const is_seed_file = (stricmp(ext, ".SED") == 0);
+	bool file_read = false;
+	bool random_map = false;
+	if (!is_seed_file) {
+		file_read = Load_Scenario_File(requested, name, true) != 0;
+		if (file_read) {
+			random_map = requested.Get_Bool("Basic", "RandomMap", false);
+		}
 	}
+
+	Scen->IsRandom = is_seed_file || random_map;
+	DebugString("Scen->IsRandom = %s\n", Scen->IsRandom ? "true" : "false");
 
 	if (!Debug_Map) {
 
@@ -731,15 +735,35 @@ bool Read_Scenario(char const * fname)
 	ScenarioState state = ScenarioState::Ok;
 
 	if (Scen->IsRandom) {
-		if (RandomMapGen.SeedData.Load(name)) {
-			RandomMapGen.Generate_Random_Map(false, NULL);
-			Multiplayer_Last_Minute_Fixups();
+		bool loaded = true;
+		if (random_map) {
+			RandomMapGen.SeedData.Read_INI(requested);
+		} else {
+			loaded = RandomMapGen.SeedData.Load(name);
+		}
+
+		if (loaded) {
+			RandomMapGen.SeedData.Fixup_Settings();
+
+			// Such a file makes a new map each match, from the seed every machine was given.
+			if (random_map) {
+				RandomMapGen.SeedData.Seed = Seed;
+			}
+
+			state = RandomMapGen.Generate_Random_Map(false, random_map ? &requested : NULL);
+			if (state == ScenarioState::Ok) {
+				Multiplayer_Last_Minute_Fixups();
+			}
 		} else {
 			state = ScenarioState::NotRead;
 		}
 		strcpy(Scen->ScenarioName, name);
+	} else if (file_read) {
+		strcpy(Scen->ScenarioName, name);
+		state = Read_Scenario_INI(requested);
 	} else {
-		state = Read_Scenario_INI(name);
+		DebugString("Scenario ini load failed!\n");
+		state = ScenarioState::NotRead;
 	}
 
 	if (state != ScenarioState::Ok) {
@@ -1543,53 +1567,6 @@ static int Load_Scenario_File(CCINIClass & ini, char const * name, bool withdige
 }
 
 
-/***********************************************************************************************
- * Read_Scenario_INI -- Read specified scenario INI file.                                      *
- *                                                                                             *
- *    Read in the scenario INI file. This routine only sets the game                           *
- *    globals with that data that is explicitly defined in the INI file.                       *
- *    The remaining necessary interpolated data is generated elsewhere.                        *
- *                                                                                             *
- * INPUT:                                                                                      *
- *          root      root filename for scenario file to read                                  *
- *                                                                                             *
- *          fresh      true = should the current scenario be cleared?                          *
- *                                                                                             *
- * OUTPUT:  bool; Was the scenario read successful?                                            *
- *                                                                                             *
- * WARNINGS:   none                                                                            *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   10/07/1992 JLB : Created.                                                                 *
- *=============================================================================================*/
-ScenarioState Read_Scenario_INI(char const * fname, bool)
-{
-	Frame = 0;
-
-	if (TournamentTime > 0) {
-		TournamentTimer = TournamentTime * TICKS_PER_MINUTE;
-	}
-
-	/*
-	**	Create scenario filename and read the file.
-	*/
-	CCINIClass ini;
-
-	DebugString("Read_Scenario_INI - Filename is %s\n", fname);
-
-	int result = Load_Scenario_File(ini, fname, true);
-
-	if (result == 0) {
-		DebugString("Scenario ini load failed!\n");
-		return(ScenarioState::NotRead);
-	}
-
-	strcpy(Scen->ScenarioName, fname);
-
-	return(Read_Scenario_INI(ini));
-}
-
-
 /// <summary>
 /// Fetches the side the local player is presented with: that of the country being played.
 /// </summary>
@@ -2058,6 +2035,7 @@ ScenarioState Read_Scenario_INI(CCINIClass const & ini, bool is_mapgen)
 	Map.Reset_Iterator();
 	CellClass * cptr = Map.Iterate();
 	while (cptr) {
+		cptr->Remove_Steep_Slope_Tiberium();
 		cptr->Recalc_Attributes();
 		cptr = Map.Iterate();
 	}
@@ -2235,6 +2213,12 @@ ScenarioState Read_Scenario_INI(CCINIClass const & ini, bool is_mapgen)
 
 	if (Scen->Special.IsFogOfWar) {
 		Map.Init_Fog_System();
+	}
+
+	for (int index = 0; index < Houses.Count(); index++) {
+		if (Houses[index]->IsObserver) {
+			Map.Reveal_The_Map(Houses[index], true);
+		}
 	}
 
 	if (Session.Type != GAME_NORMAL && PlayerPtr->IsObserver) {

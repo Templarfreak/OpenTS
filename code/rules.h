@@ -128,6 +128,7 @@ class RulesClass
 		bool Do_WarheadTypes(CCINIClass const & ini);
 		bool Do_ParticleTypes(CCINIClass const & ini);
 		bool Do_ParticleSystemTypes(CCINIClass const & ini);
+		bool Do_Tiberiums(CCINIClass const & ini);
 
 		bool AI(CCINIClass const & ini);
 		bool Powerups(CCINIClass const & ini);
@@ -532,10 +533,15 @@ class RulesClass
 		double MinLowPowerProductionSpeed;
 
 		/*
-		 * This weights the build time discount a house earns for owning more than one
-		 * factory of the appropriate kind. If zero, then extra factories grant none.
+		 * Each factory of the appropriate kind past the first multiplies the build time by
+		 * this. Zero or below grants no discount.
 		 */
 		double MultipleFactory;
+
+		/*
+		 * This caps how many factories count toward that discount. Zero leaves it uncapped.
+		 */
+		int MultipleFactoryCap;
 
 		/*
 		 * This controls how widely a meteor impact deforms the terrain (0 - 4). Zero
@@ -1477,6 +1483,18 @@ class RulesClass
 		int SoloCrateMoney;
 
 		/*
+		 * A money crate that pays its [Powerups] value adds up to this many credits to it at random.
+		 */
+		int CrateMoneyBonus;
+
+		/*
+		 * These let an armor or firepower crate upgrade an object that a crate of the same
+		 * kind already upgraded.
+		 */
+		bool IsArmorCrateStacking;
+		bool IsFirepowerCrateStacking;
+
+		/*
 		 * This is the strength given to a terrain object that declares none of its own
 		 * -- trees, mostly.
 		 */
@@ -2096,6 +2114,12 @@ class RulesClass
 		 * per faction needs once an MCV comes out of a captured factory.
 		 */
 		bool IsMultiMCV;
+
+		/*
+		 * If true, the sidebar also rechecks prerequisites and tech level, cancelling production
+		 * of anything that fails.
+		 */
+		bool IsRecheckPrerequisites;
 
 		/*
 		 * If the fog is to be blended evenly into the terrain beneath it, then this flag

@@ -114,6 +114,7 @@
 #include "_surface.h"
 #include "_tactica.h"
 #include "aircraft.h"
+#include "airctype.h"
 #include "anim.h"
 #include "animtype.h"
 #include "blight.h"
@@ -259,8 +260,9 @@ BuildingClass::BuildingClass(BuildingTypeClass const * type, HouseClass * house)
 	IsFogged(false),
 	HasBuildupData(false),
 	IsPoweredOn(true),
-	CloakGeneratorState(0),
+	CloakGeneratorState(CLOAK_SETTLED),
 	CurrentCloakRadius(0),
+	IsSensing(false),
 	TranslucencyLevel(0),
 	Brightness(NORMAL_LIGHT),
 	UpgradeLevel(0),
@@ -1157,7 +1159,7 @@ void BuildingClass::Draw_Overlays(Point2D const & point, Rect const & cliprect) 
 		}
 	}
 
-	if (IsSelected && (House->Shares_View_With(PlayerPtr) || SpiedBy & (1<<(PlayerPtr->Class->House)))) {
+	if (IsSelected && (House->Shares_View_With(PlayerPtr) || SpiedBy[PlayerPtr])) {
 		Draw_Text_Overlay(point + Point2D(-10, 10), point, cliprect);
 	}
 
@@ -1165,7 +1167,7 @@ void BuildingClass::Draw_Overlays(Point2D const & point, Rect const & cliprect) 
 	**	If this is a factory that we're spying on, or the player has the whole map, show what
 	**	it's producing
 	*/
-	if ((SpiedBy & (1<<(PlayerPtr->Class->House)) || Session.ObiWan) && IsSelected) {
+	if ((SpiedBy[PlayerPtr] || Session.ObiWan) && IsSelected) {
 
 		/*
 		**	Fetch the factory that is associate with this building. For computer controlled buildings, the
@@ -1522,9 +1524,7 @@ bool BuildingClass::Mark(MarkType mark)
 										}
 										IsometricTileClass *iptr = (IsometricTileClass *)Class->ToTile->Create_One_Of(House);
 										iptr->Unlimbo(Coord(newcell));
-										if (House == PlayerPtr) {
-											Map.Sight_From(newcell, 1, PlayerPtr);
-										}
+										Map.Sight_From(newcell, 1, House);
 										any_created = true;
 									}
 								}
@@ -1997,9 +1997,15 @@ bool BuildingClass::Unlimbo(Coord const & coord, Dir256 dir)
 		House->IsRecalcNeeded = true;
 		LastStrength = 0;
 
-		if ((!IsDiscoveredByPlayer && Map[coord].IsVisible) || Session.Type != GAME_NORMAL) {
-			Revealed(PlayerPtr);
-		} else if (Class->LightIntensity != 0) {
+		bool revealed = false;
+		for (int index = 0; index < Houses.Count(); index++) {
+			HouseClass * house = Houses[index];
+			if (house->Is_Player_View() && ((!DiscoveredBy[house] && Map[coord].IsVisible[house]) || Session.Type != GAME_NORMAL)) {
+				Revealed(house);
+				revealed = true;
+			}
+		}
+		if (!revealed && Class->LightIntensity != 0) {
 			if (LightSource == NULL) {
 				LightSource = new LightSourceClass(Center_Coord(), Class->LightVisibility, Class->LightIntensity, Class->LightRedTint, Class->LightGreenTint, Class->LightBlueTint);
 			}
@@ -2097,8 +2103,8 @@ void BuildingClass::Do_Destruction(TechnoClass *last_contact, TechnoClass *sourc
 	**	Destruction of a radar facility or advanced communications
 	**	center will cause the spiedby field to change...
 	*/
-	if (SpiedBy) {
-		SpiedBy = 0;
+	if (SpiedBy.Any()) {
+		SpiedBy.Clear();
 		if (Class->IsRadar) {
 			Update_Radar_Spied();
 		}
@@ -2714,6 +2720,26 @@ void BuildingClass::Assign_Rally_Point(Cell const & cell)
 }
 
 
+/// <summary>
+/// Fetches the rally point for an object leaving this structure, or NULL for none. A player's
+/// object that cannot be ordered into the shroud ignores a rally point the player has not uncovered.
+/// </summary>
+AbstractClass * BuildingClass::Rally_Point_For(TechnoClass const * techno) const
+{
+	if (ArchiveTarget == NULL) {
+		return(NULL);
+	}
+
+	TechnoTypeClass const * type = techno->TClass;
+	bool may_enter_shroud = type->IsMoveToShroud && (!type->IsSubterranean || Rule->IsShroudedSubteranneanMovesAllowed);
+	HouseClass const * view = techno->House->Player_View();
+	if (!may_enter_shroud && view != NULL && Map.Is_Shrouded(ArchiveTarget->Center_Coord(), view)) {
+		return(NULL);
+	}
+	return(ArchiveTarget);
+}
+
+
 /***********************************************************************************************
  * BuildingClass::Assign_Target -- Assigns a target to the building.                           *
  *                                                                                             *
@@ -2818,8 +2844,9 @@ int BuildingClass::Exit_Object(TechnoClass * base)
 						Transmit_Message(RADIO_HELLO, air);
 						Transmit_Message(RADIO_TETHER);
 
-						if (ArchiveTarget != NULL) {
-							air->Assign_Destination(ArchiveTarget);
+						AbstractClass * rally = Rally_Point_For(air);
+						if (rally != NULL) {
+							air->Assign_Destination(rally);
 							air->Assign_Mission(MISSION_MOVE);
 						}
 						ScenarioInit--;
@@ -2852,8 +2879,9 @@ int BuildingClass::Exit_Object(TechnoClass * base)
 
 				ScenarioInit++;
 				if (base->Unlimbo(Coord(spawncell, 0), DIR_N)) {
-					if (ArchiveTarget != NULL) {
-						base->Assign_Destination(ArchiveTarget);
+					AbstractClass * rally = Rally_Point_For(base);
+					if (rally != NULL) {
+						base->Assign_Destination(rally);
 						base->Assign_Mission(MISSION_MOVE);
 					} else {
 						cell = base->Nearby_Location(this);
@@ -2901,7 +2929,7 @@ int BuildingClass::Exit_Object(TechnoClass * base)
 
 				if (Class->IsWeaponsFactory) {
 
-					base->ArchiveTarget = ArchiveTarget;
+					base->ArchiveTarget = Rally_Point_For(base);
 
 					if (Mission == MISSION_UNLOAD) {
 						for (int index = 0; index < Buildings.Count(); index++) {
@@ -2971,6 +2999,8 @@ int BuildingClass::Exit_Object(TechnoClass * base)
 					ScenarioInit++;
 					if (base->Unlimbo(exitcoord, dir)) {
 
+						Begin_Anim(BANIM_PRODUCTION, false);
+
 						base->Assign_Mission(MISSION_MOVE);
 						base->Assign_Destination(&Map[exitcell]);
 
@@ -2996,7 +3026,7 @@ int BuildingClass::Exit_Object(TechnoClass * base)
 
 				} else {
 
-					base->ArchiveTarget = ArchiveTarget;
+					base->ArchiveTarget = Rally_Point_For(base);
 					Coord exitcoord;
 
 					Cell exitcell = Find_Exit_Cell(base);
@@ -3038,6 +3068,11 @@ int BuildingClass::Exit_Object(TechnoClass * base)
 
 					ScenarioInit++;
 					if (base->Unlimbo(exitcoord, dir)) {
+
+						// A hospital or armory also exits its infantry here without having produced them.
+						if (Class->ToBuild == RTTI_INFANTRYTYPE) {
+							Begin_Anim(BANIM_PRODUCTION, false);
+						}
 
 						if (((FootClass *)base)->NavCom != NULL) {
 							base->ArchiveTarget = ((FootClass *)base)->NavCom;
@@ -3266,7 +3301,16 @@ int BuildingClass::Exit_Object(TechnoClass * base)
  *=============================================================================================*/
 void BuildingClass::Update_Buildables(void)
 {
-	if (House == PlayerPtr && !IsInLimbo && IsDiscoveredByPlayer && IsOn) {
+	if (House == PlayerPtr && !IsInLimbo && DiscoveredBy[PlayerPtr] && IsOn) {
+
+		// This must match the test the sidebar sweep removes cameos by, or the two would add and
+		// remove a cameo in turn. Can_Build's -1 means a type at its build limit, which stays.
+		// Asking this factory first usually saves scanning every building.
+		auto should_be_on_sidebar = [this](ObjectTypeClass const * type) {
+			return(PlayerPtr->Can_Build(type, false, true) != 0
+				&& (type->Can_Be_Built_At(this, false, false, PlayerPtr) || type->Who_Can_Build_Me(true, false, false, PlayerPtr) != NULL));
+		};
+
 		switch (Class->ToBuild) {
 			StructType i;
 			UnitType u;
@@ -3275,7 +3319,7 @@ void BuildingClass::Update_Buildables(void)
 
 			case RTTI_BUILDINGTYPE:
 				for (i = STRUCT_FIRST; i < BuildingTypes.Count(); i++) {
-					if (PlayerPtr->Can_Build((const ObjectTypeClass *)BuildingTypes[i], false, true)) {
+					if (should_be_on_sidebar(BuildingTypes[i])) {
 						Map.Add(RTTI_BUILDINGTYPE, i);
 					}
 				}
@@ -3283,7 +3327,7 @@ void BuildingClass::Update_Buildables(void)
 
 			case RTTI_UNITTYPE:
 				for (u = UNIT_FIRST; u < UnitTypes.Count(); u++) {
-					if (PlayerPtr->Can_Build((const ObjectTypeClass *)UnitTypes[u], false, true)) {
+					if (should_be_on_sidebar(UnitTypes[u])) {
 						Map.Add(RTTI_UNITTYPE, u);
 					}
 				}
@@ -3291,7 +3335,7 @@ void BuildingClass::Update_Buildables(void)
 
 			case RTTI_INFANTRYTYPE:
 				for (f = INFANTRY_FIRST; f < InfantryTypes.Count(); f++) {
-					if (PlayerPtr->Can_Build((const ObjectTypeClass *)InfantryTypes[f], false, true)) {
+					if (should_be_on_sidebar(InfantryTypes[f])) {
 						Map.Add(RTTI_INFANTRYTYPE, f);
 					}
 				}
@@ -3299,7 +3343,7 @@ void BuildingClass::Update_Buildables(void)
 
 			case RTTI_AIRCRAFTTYPE:
 				for (a = AIRCRAFT_FIRST; a < AircraftTypes.Count(); a++) {
-					if (PlayerPtr->Can_Build((const ObjectTypeClass *)AircraftTypes[a], false, true)) {
+					if (should_be_on_sidebar(AircraftTypes[a])) {
 						Map.Add(RTTI_AIRCRAFTTYPE, a);
 					}
 				}
@@ -3537,6 +3581,115 @@ AbstractClass * BuildingClass::Greatest_Threat(ThreatType threat, Coord const & 
 }
 
 
+/// <summary>
+/// Stands a new aircraft on this structure's cell, guarding and not in radio contact. Nothing
+/// is refunded on failure.
+/// </summary>
+/// <returns>The aircraft, or null if it could not be created or placed.</returns>
+AircraftClass * BuildingClass::Place_Free_Aircraft(AircraftTypeClass const * type)
+{
+	ScenarioInit++;
+
+	AircraftClass * air = new AircraftClass(type, House);
+	if (air != NULL) {
+		air->HeightAGL = 0;
+		if (air->Unlimbo(Center_Coord(), air->Pose_Dir())) {
+			air->Assign_Mission(MISSION_GUARD);
+		} else {
+			delete air;
+			air = NULL;
+		}
+	}
+
+	ScenarioInit--;
+	return(air);
+}
+
+
+/// <summary>
+/// Gives the house this structure's FreeUnit, refunding it if it cannot be placed. The caller
+/// decides whether the house has earned it.
+/// </summary>
+void BuildingClass::Place_Free_Unit(void)
+{
+	TechnoTypeClass const * type = Class->FreeUnit;
+
+	if (type->Fetch_RTTI() == RTTI_AIRCRAFTTYPE) {
+		AircraftClass * air = Place_Free_Aircraft(static_cast<AircraftTypeClass const *>(type));
+		if (air == NULL) {
+			House->Refund_Money(type->Raw_Cost());
+			return;
+		}
+
+		// Only a pad holds the aircraft; another structure keeps its radio for what it docks.
+		if (Class->IsHelipad || Class->IsHoverPad) {
+			air->Transmit_Message(RADIO_HELLO, this);
+			Transmit_Message(RADIO_TETHER);
+		}
+		return;
+	}
+
+	Cell cell = Adjacent_Cell(Center_Coord().As_Cell(), DIR_S);
+
+	bool placed = false;
+	bool harvests = false;
+	FootClass * object = NULL;
+	if (type->Fetch_RTTI() == RTTI_INFANTRYTYPE) {
+		object = new InfantryClass(static_cast<InfantryTypeClass const *>(type), House);
+	} else {
+		UnitTypeClass const * unittype = static_cast<UnitTypeClass const *>(type);
+		harvests = unittype->IsToHarvest || unittype->IsToVeinHarvest;
+		object = new UnitClass(unittype, House);
+	}
+
+	if (object != NULL) {
+
+		/*
+		**	Try to place down the object. If it could not be placed, then try
+		**	to place it in a nearby location.
+		*/
+		if (!object->Unlimbo(cell, DIR_W)) {
+			cell = Map.Nearby_Location(PositionCoord.As_Cell(), type->Speed, Map.Get_Cell_Zone(PositionCoord.As_Cell(), type->MZone), type->MZone, false, Point2D(1,1), true, true, false, false);
+
+			if (cell == CELL_NONE || !object->Unlimbo(cell, DIR_SW)) {
+				Cell newcell = Map.Nearby_Location(PositionCoord.As_Cell(), type->Speed, Map.Get_Cell_Zone(PositionCoord.As_Cell(), type->MZone), type->MZone, false, Point2D(1,1), false, true, false, false);
+
+				/*
+				**	If the object could still not be placed, then refund the money
+				**	to the owner and then bail.
+				*/
+				if (newcell == CELL_NONE || !object->Unlimbo(newcell, DIR_SW)) {
+					House->Refund_Money(type->Raw_Cost());
+					delete object;
+				} else {
+					placed = true;
+				}
+			} else {
+				placed = true;
+			}
+		} else {
+			placed = true;
+		}
+
+		if (placed) {
+			if (harvests) {
+				object->Assign_Mission(MISSION_HARVEST);
+			} else {
+				object->Enter_Idle_Mode(true);
+			}
+			object->Commence();
+		}
+	} else {
+
+		/*
+		**	If the object could not be created in the first place, then give
+		**	the full refund price to the owning player.
+		*/
+		House->Refund_Money(type->Cost_Of(House));
+	}
+}
+
+
 /***********************************************************************************************
  * BuildingClass::Grand_Opening -- Handles construction completed special operations.          *
  *                                                                                             *
@@ -3621,68 +3774,17 @@ void BuildingClass::Grand_Opening(bool captured)
 		**	reinforcement list at this time.
 		*/
 		if (Class->FreeUnit != NULL && !ScenarioInit && !captured && !Debug_Map && (!House->Is_Human_Player() || PurchasePrice == 0 || PurchasePrice > Class->Raw_Cost())) {
-			Cell cell = Adjacent_Cell(Center_Coord().As_Cell(), DIR_S);
-
-			bool placed = false;
-			UnitClass * unit = new UnitClass(Class->FreeUnit, House);
-			if (unit != NULL) {
-
-				/*
-				**	Try to place down the harvesters. If it could not be placed, then try
-				**	to place it in a nearby location.
-				*/
-				if (!unit->Unlimbo(cell, DIR_W)) {
-					cell = Map.Nearby_Location(PositionCoord.As_Cell(), SPEED_WHEEL, Map.Get_Cell_Zone(PositionCoord.As_Cell(), unit->Class->MZone), unit->Class->MZone, false, Point2D(1,1), true, true, false, false);
-
-					if (cell == CELL_NONE || !unit->Unlimbo(cell, DIR_SW)) {
-						Cell newcell = Map.Nearby_Location(PositionCoord.As_Cell(), SPEED_WHEEL, Map.Get_Cell_Zone(PositionCoord.As_Cell(), unit->Class->MZone), unit->Class->MZone, false, Point2D(1,1), false, true, false, false);
-
-						/*
-						**	If the harvester could still not be placed, then refund the money
-						**	to the owner and then bail.
-						*/
-						if (newcell == CELL_NONE || !unit->Unlimbo(newcell, DIR_SW)) {
-							House->Refund_Money(unit->Class->Raw_Cost());
-							delete unit;
-						} else {
-							placed = true;
-						}
-					} else {
-						placed = true;
-					}
-				} else {
-					placed = true;
-				}
-
-				if (placed) {
-					unit->Assign_Mission(MISSION_HARVEST);
-					unit->Commence();
-				}
-			} else {
-
-				/*
-				**	If the harvester could not be created in the first place, then give
-				**	the full refund price to the owning player.
-				*/
-				House->Refund_Money(Class->FreeUnit->Cost_Of(House));
-			}
+			Place_Free_Unit();
 		}
 
-		/*
-		**	Helicopter pads get a free attack helicopter.
-		*/
-		if (!Rule->IsSeparate && Class->IsHoverPad && !captured && Rule->PadAircraft.Count() > 0) {
-			ScenarioInit++;
-			AircraftClass * air = new AircraftClass(Rule->PadAircraft[0], House);
-			if (air) {
-				air->HeightAGL = 0;
-				if (air->Unlimbo(Center_Coord(), air->Pose_Dir())) {
-					air->Assign_Mission(MISSION_GUARD);
-					air->Transmit_Message(RADIO_HELLO, this);
-					Transmit_Message(RADIO_TETHER);
-				}
+		// A structure priced without the pad aircraft gets none, even when its own could not be placed.
+		bool const gives_aircraft = Class->FreeUnit != NULL && Class->FreeUnit->Fetch_RTTI() == RTTI_AIRCRAFTTYPE;
+		if (!Rule->IsSeparate && Class->IsHoverPad && !captured && Rule->PadAircraft.Count() > 0 && !gives_aircraft) {
+			AircraftClass * air = Place_Free_Aircraft(Rule->PadAircraft[0]);
+			if (air != NULL) {
+				air->Transmit_Message(RADIO_HELLO, this);
+				Transmit_Message(RADIO_TETHER);
 			}
-			ScenarioInit--;
 		}
 	}
 }
@@ -3895,9 +3997,9 @@ ActionType BuildingClass::What_Action(ObjectClass const * object, bool disallow_
 	if (action == ACTION_MOVE || action == ACTION_NOMOVE) {
 		if (!Can_Player_Move()) {
 			action = ACTION_SELECT;
-		} else if (Class->ToBuild == RTTI_INFANTRYTYPE || Class->ToBuild == RTTI_UNITTYPE || Class->ToBuild == RTTI_AIRCRAFTTYPE) {
+		} else if (Is_Move_Override()) {
 			bool altdown = (Keyboard->Down(Options.KeyForceMove1) || Keyboard->Down(Options.KeyForceMove2));
-			if (!altdown) {
+			if (altdown != Options.AltToRally) {
 				action = ACTION_SELECT;
 			} else {
 				Cell cell = object->Center_Coord().As_Cell();
@@ -4246,8 +4348,8 @@ bool BuildingClass::Captured(HouseClass * newowner)
 		**	Make sure the capturer isn't spying on his own building, and if
 		**	it was a radar facility, update the target house's RadarSpied field.
 		*/
-		if (SpiedBy & (1<<(newowner->Class->House)) ) {
-			SpiedBy -= (1<<(newowner->Class->House));
+		if (SpiedBy[newowner]) {
+			SpiedBy.Clear(newowner);
 			if (Class->IsRadar) {
 				Update_Radar_Spied();
 			}
@@ -4331,11 +4433,17 @@ bool BuildingClass::Captured(HouseClass * newowner)
 			CurrentCloakRadius = 1;
 			Cloaking_AI(true);
 		}
+		if (Class->IsSensorArray) {
+			Disable_Sensor_Array();
+		}
 
 		BASECLASS::Captured(newowner);
 
 		if (Class->IsCloakGenerator && Is_Powered_On()) {
 			Enable_Cloak_Generator();
+		}
+		if (Class->IsSensorArray) {
+			Enable_Sensor_Array();
 		}
 
 		oldowner->ToCapture = this;
@@ -4372,19 +4480,16 @@ bool BuildingClass::Captured(HouseClass * newowner)
 		}
 
 		/*
-		**	Perform a look operation when captured if it was the player
-		**	that performed the capture.
+		**	Perform a look operation when captured.
 		*/
-		if (House->Is_Player_Control()) {
-			Look(false);
-		}
+		Look(false);
 
 		/*
 		**	If it was spied upon by the player who just captured it, clear the
 		**	spiedby flag for that house.
 		*/
-		if (SpiedBy & (1 << (newowner->Class->House))) {
-			SpiedBy &= ~(1 << (newowner->Class->House));
+		if (SpiedBy[newowner]) {
+			SpiedBy.Clear(newowner);
 		}
 
 		Update_Anim_Appearance();
@@ -6875,7 +6980,7 @@ Cell BuildingClass::Check_Point(CheckPointType cp) const
  *=============================================================================================*/
 void BuildingClass::Update_Radar_Spied(void)
 {
-	House->RadarSpied = 0;
+	House->RadarSpied.Clear();
 	for (int index = 0; index < Buildings.Count(); index++) {
 		BuildingClass * obj = Buildings[index];
 		if (obj && !obj->IsInLimbo && obj->House == House) {
@@ -8912,6 +9017,8 @@ void BuildingClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(IsPoweredOn);
 	stream.Serialize(CloakGeneratorState);
 	stream.Serialize(CurrentCloakRadius);
+	stream.Serialize(CloakFieldCells);
+	stream.Serialize(IsSensing);
 	stream.Serialize(TranslucencyLevel);
 	stream.Serialize(Brightness);
 	stream.Serialize(UpgradeLevel);
@@ -9016,7 +9123,7 @@ VisualType BuildingClass::Visual_Character(bool raw, HouseClass const * house) c
 		if (TranslucencyLevel > 10) {
 			if (raw) {
 				if (house != NULL) {
-					if (Map[PositionCoord.As_Cell()].Is_Sensed(house->HeapID)) {
+					if (Map[PositionCoord.As_Cell()].Is_Sensed(house)) {
 						return(VISUAL_SHADOWY);
 					}
 				}
@@ -9107,7 +9214,7 @@ void Adjust_House_Power(HouseClass * house)
 void BuildingClass::Enable_Cloak_Generator(void)
 {
 	if (Class->IsCloakGenerator) {
-		CloakGeneratorState = 1;
+		CloakGeneratorState = CLOAK_GROWING;
 		if (CurrentCloakRadius == Class->CloakRadiusInCells) {
 			CurrentCloakRadius = 0;
 		}
@@ -9124,7 +9231,7 @@ void BuildingClass::Enable_Cloak_Generator(void)
 void BuildingClass::Disable_Cloak_Generator(void)
 {
 	if (Class->IsCloakGenerator) {
-		CloakGeneratorState = -1;
+		CloakGeneratorState = CLOAK_COLLAPSING;
 		if (CurrentCloakRadius == 0) {
 			CurrentCloakRadius = Class->CloakRadiusInCells;
 		}
@@ -9149,6 +9256,21 @@ void Cloak_Cell_Occupiers(CellClass * cellptr)
 		}
 		occupier = occupier->Next;
 	}
+}
+
+
+/// <summary>
+/// Marks a cell of the cloaking grid as covered by this generator's field, or not, and counts
+/// the change on the cell. A cell already in that state is left alone.
+/// </summary>
+/// <returns>bool; Did the house's cloak on the cell switch on or off?</returns>
+bool BuildingClass::Cover_Cloak_Cell(int index, CellClass * cellptr, bool cover)
+{
+	if ((CloakFieldCells[index] != 0) == cover) {
+		return(false);
+	}
+	CloakFieldCells[index] = cover ? 1 : 0;
+	return(cover ? cellptr->Add_Cloak(House) : cellptr->Remove_Cloak(House));
 }
 
 
@@ -9216,10 +9338,11 @@ void BuildingClass::Cloaking_AI(bool fast)
 		BSurface * cloaking_surface = CloakingSurface;
 		int width = cloaking_surface->Get_Width();
 		int width_half = width / 2;
+		CloakFieldCells.resize(width * width);
 
 		if (CloakGeneratorState > 0) {
 			if (CurrentCloakRadius == Class->CloakRadiusInCells) {
-				CloakGeneratorState = 0;
+				CloakGeneratorState = CLOAK_SETTLED;
 				for (int i = 0; i < Buildings.Count(); i++) {
 					BuildingClass * building = Buildings[i];
 					if (building->IsActive && building->Class->IsSensorArray && building->Is_Powered_On()) {
@@ -9238,13 +9361,13 @@ void BuildingClass::Cloaking_AI(bool fast)
 						if (*data++ != 0) {
 							Cell current = origin + Cell(x, y);
 							CellClass * cellptr = &Map[current];
-							if (!cellptr->Is_Cloaked(houseid)) {
-								cellptr->Cloaked_By(houseid);
+							if (Cover_Cloak_Cell(y * width + x, cellptr, true)) {
 								Cloak_Cell_Occupiers(cellptr);
 								BuildingClass * building = cellptr->Cell_Building();
 								if (building != NULL && building->House->HeapID == houseid) {
 									if (building->Center_Coord().As_Cell() == current) {
 										CurrentCloakRadius--;
+										cloaking_surface->Unlock();
 										return;
 									}
 								}
@@ -9252,10 +9375,11 @@ void BuildingClass::Cloaking_AI(bool fast)
 						}
 					}
 				}
+				cloaking_surface->Unlock();
 			}
 		}
 		else if (CurrentCloakRadius == 0) {
-			CloakGeneratorState = 0;
+			CloakGeneratorState = CLOAK_SETTLED;
 		}
 		else {
 			CurrentCloakRadius--;
@@ -9272,13 +9396,13 @@ void BuildingClass::Cloaking_AI(bool fast)
 					if (*data++ == 0) {
 						Cell current = origin + Cell(x, y);
 						CellClass * cellptr = &Map[current];
-						if (cellptr->Is_Cloaked(houseid)) {
-							cellptr->Uncloaked_By(houseid);
+						if (Cover_Cloak_Cell(y * width + x, cellptr, false)) {
 							Cloak_Cell_Occupiers(cellptr);
 							BuildingClass * building = cellptr->Cell_Building();
 							if (building != NULL && building->House->HeapID == houseid) {
 								if (building->Center_Coord().As_Cell() == current && !fast) {
 									CurrentCloakRadius++;
+									cloaking_surface->Unlock();
 									return;
 								}
 							}
@@ -9286,24 +9410,7 @@ void BuildingClass::Cloaking_AI(bool fast)
 					}
 				}
 			}
-
-			if (CurrentCloakRadius == 0) {
-				for (int i = 0; i < Buildings.Count(); i++) {
-					BuildingClass * building = Buildings[i];
-					if (building->IsActive && building != this && building->Class->IsCloakGenerator && building->Is_Powered_On()) {
-						if (building->CloakGeneratorState == 0) {
-							Cell diff = center - building->Center_Coord().As_Cell();
-							int maxdist = (Class->CloakRadiusInCells + 2);
-							if (diff.X*diff.X + diff.Y*diff.Y < 4 * (maxdist * maxdist)) {
-								building->Enable_Cloak_Generator();
-								if (building->CurrentCloakRadius != 0) {
-									building->CurrentCloakRadius--;
-								}
-							}
-						}
-					}
-				}
-			}
+			cloaking_surface->Unlock();
 		}
 	}
 }
@@ -9340,23 +9447,24 @@ bool BuildingClass::Is_Powered_On(void) const
 
 /// <summary>
 /// Switches this sensor array off.
-/// The sensed flag is lifted from every cell within the array's radius, so that cloaked
-/// objects standing there are hidden again. The house's other sensor arrays are then
-/// re-enabled, since their coverage may well have overlapped the area just given up.
+/// The array's coverage is lifted from every cell within its radius, so that cloaked objects
+/// standing there are hidden again unless another array of the house still covers them.
 /// </summary>
 void BuildingClass::Disable_Sensor_Array(void)
 {
+	if (!IsSensing) {
+		return;
+	}
+
 	int radius = Class->CloakRadiusInCells;
 	int dist = radius * radius;
-	HousesType houseid = House->HeapID;
 	Cell origin = Center_Coord().As_Cell();
 	for (int y = -radius; y < radius; y++) {
 		for (int x = -radius; x < radius; x++) {
 			Cell newcell = Cell(origin.X + x, origin.Y + y);
 			if (x * x + y * y < dist) {
 				CellClass * cellptr = &Map[newcell];
-				if (cellptr->Is_Sensed(houseid)) {
-					cellptr->Unsensed_By(houseid);
+				if (cellptr->Remove_Sensor(House)) {
 					Cloak_Cell_Occupiers(cellptr);
 					BuildingClass * building = cellptr->Cell_Building();
 					if (building != NULL && building->House != PlayerPtr) {
@@ -9368,13 +9476,7 @@ void BuildingClass::Disable_Sensor_Array(void)
 			}
 		}
 	}
-
-	for (int i = 0; i < Buildings.Count(); i++) {
-		BuildingClass * building = Buildings[i];
-		if (building->IsActive && building != +this && building->Class->IsSensorArray && building->Is_Powered_On()) {
-			building->Enable_Sensor_Array();
-		}
-	}
+	IsSensing = false;
 }
 
 
@@ -9387,16 +9489,19 @@ void BuildingClass::Disable_Sensor_Array(void)
 void BuildingClass::Enable_Sensor_Array(void)
 {
 	if (Is_Powered_On()) {
+		bool add = !IsSensing;
+		IsSensing = true;
 		int radius = Class->CloakRadiusInCells;
 		int dist = radius * radius;
-		HousesType houseid = House->HeapID;
 		Cell origin = Center_Coord().As_Cell();
 		for (int y = -radius; y < radius; y++) {
 			for (int x = -radius; x < radius; x++) {
 				Cell newcell = Cell(origin.X + x, origin.Y + y);
 				if (x * x + y * y < dist) {
 					CellClass * cellptr = &Map[newcell];
-					cellptr->Sensed_By(houseid);
+					if (add) {
+						cellptr->Add_Sensor(House);
+					}
 					Cloak_Cell_Occupiers(cellptr);
 					BuildingClass * building = cellptr->Cell_Building();
 					if (building != NULL && building->House != PlayerPtr) {
@@ -9641,12 +9746,11 @@ void BuildingClass::Reserve_Base_Area(bool skip_inner_cells)
 	int width = 2 * spacing + Class->Width();
 	int height = 2 * spacing + Class->Height();
 
-	unsigned owner = 1 << House->HeapID;
 	Cell top_left = PositionCoord.As_Cell() - Cell(spacing, spacing);
 
 	for (int x = top_left.X; x < top_left.X + width; x++) {
 		for (int y = top_left.Y; y < top_left.Y + height; y++) {
-			Map[Cell(x, y)].OccupiedBy |= owner;
+			Map[Cell(x, y)].OccupiedBy.Set(House);
 		}
 	}
 
@@ -9678,7 +9782,7 @@ void BuildingClass::Reserve_Base_Area(bool skip_inner_cells)
 		for (int x = top_left.X - 1; x < top_left.X + width + 2; x++) {
 			for (int y = top_left.Y - 1; y < top_left.Y + height + 2; y++) {
 				Cell cell = Cell(x, y);
-				int mask = Map[cell].Occupation_Mask(House->HeapID);
+				int mask = Map[cell].Occupation_Mask(House);
 				if (mask == (1 << FACING_COUNT) - 1) {
 					House->Base.InnerCells.Delete(cell);
 				} else if (mask > 0) {
@@ -9704,14 +9808,13 @@ void BuildingClass::Release_Base_Area(void)
 	int width = 2 * spacing + Class->Width();
 	int height = 2 * spacing + Class->Height();
 
-	unsigned owner = 1 << House->HeapID;
 	Cell top_left = PositionCoord.As_Cell() - Cell(spacing, spacing);
 
 	int x, y;
 
 	for (x = top_left.X; x < top_left.X + width; x++) {
 		for (y = top_left.Y; y < top_left.Y + height; y++) {
-			Map[Cell(x, y)].OccupiedBy &= ~owner;
+			Map[Cell(x, y)].OccupiedBy.Clear(House);
 		}
 	}
 
@@ -9727,7 +9830,7 @@ void BuildingClass::Release_Base_Area(void)
 	for (x = top_left.X - 1; x < top_left.X + width + 2; x++) {
 		for (y = top_left.Y - 1; y < top_left.Y + height + 2; y++) {
 			Cell cell = Cell(x, y);
-			int mask = Map[cell].Occupation_Mask(House->HeapID);
+			int mask = Map[cell].Occupation_Mask(House);
 			if (mask == (1 << FACING_COUNT) - 1) {
 				House->Base.InnerCells.Delete(cell);
 			} else if (mask > 0) {
@@ -9736,7 +9839,7 @@ void BuildingClass::Release_Base_Area(void)
 				}
 			} else {
 				House->Base.InnerCells.Delete(cell);
-				Map[cell].OccupiedBy &= ~owner;
+				Map[cell].OccupiedBy.Clear(House);
 			}
 		}
 	}
@@ -10000,7 +10103,7 @@ bool BuildingClass::Is_Radar_Visible(DetectedType & detected) const
 			return(true);
 		}
 		if (House->Is_Player_Control()) {
-			return(IsDiscoveredByPlayer ? true : false);
+			return(DiscoveredBy[PlayerPtr]);
 		}
 
 		int height = Class->Height() * CELL_LEPTON_H - CELL_LEPTON;
@@ -10030,7 +10133,7 @@ bool BuildingClass::Is_Radar_Visible(DetectedType & detected) const
 /// <param name="house">The house that has gained the intelligence.</param>
 void BuildingClass::Spied_By(HouseClass * house)
 {
-	SpiedBy |= 1 << house->Class->House;
+	SpiedBy.Set(house);
 	if (Class->IsRadar) {
 		House->Update_Spied_Radar(house);
 	}

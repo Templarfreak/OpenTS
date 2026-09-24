@@ -318,7 +318,7 @@ HouseClass::HouseClass(HouseTypeClass const * type) :
 	LATime(0),
 	LAEnemy(HOUSE_NONE),
 	ToCapture(NULL),
-	RadarSpied(0),
+	RadarSpied(),
 	PointTotal(0),
 	PreferredTarget(QUARRY_ANYTHING),
 	Attack(),
@@ -341,7 +341,7 @@ HouseClass::HouseClass(HouseTypeClass const * type) :
 	RecalcRadar(true),
 	EMPDest(0,0),
 	NukeDest(0,0),
-	Allies(0),
+	Allies(),
 	DamageTime(TICKS_PER_MINUTE * Rule->DamageDelay),
 	TeamTime(1),
 	TriggerTime(0),
@@ -406,7 +406,7 @@ HouseClass::HouseClass(HouseTypeClass const * type) :
 	IniName = Fetch_String(TXT_COMPUTER);	// Default computer name.
 	memset((void *)&Regions[0], 0x00, sizeof(Regions));
 	//Allies |= (1L << HeapID);
-	Control.Allies |= (1L << HeapID);
+	Control.Allies.Set(this);
 
 	/*
 	**	Set the time of the first AI attack.
@@ -764,7 +764,7 @@ void HouseClass::Debug_Dump(MonoClass * mono) const
 	mono->Set_Cursor(21, 3);mono->Printf("%3d", CurAircraft);
 	mono->Set_Cursor(27, 3);mono->Printf("%8d", Credits);
 	mono->Set_Cursor(37, 3);mono->Printf("%5d", Power);
-	mono->Set_Cursor(45, 3);mono->Printf("%04X", RadarSpied);
+	mono->Set_Cursor(45, 3);mono->Printf("%04X", (unsigned)RadarSpied.Raw());
 	mono->Set_Cursor(52, 3);mono->Printf("%5d", PointTotal);
 	mono->Set_Cursor(62, 3);mono->Printf("%5d", (int)TeamTime);
 	mono->Set_Cursor(71, 3);mono->Printf("%5d", (int)AlertTime);
@@ -781,7 +781,7 @@ void HouseClass::Debug_Dump(MonoClass * mono) const
 	mono->Set_Cursor(21, 7);mono->Printf("%3d", CurUnits);
 	mono->Set_Cursor(27, 7);mono->Printf("%8d", Control.InitialCredits);
 	mono->Set_Cursor(38, 7);mono->Printf("%5d", UnitsLost);
-	mono->Set_Cursor(44, 7);mono->Printf("%08X", Allies);
+	mono->Set_Cursor(44, 7);mono->Printf("%08X", (unsigned)Allies.Raw());
 	mono->Set_Cursor(71, 7);mono->Printf("%5d", (int)Attack.Timer);
 
 	mono->Set_Cursor(10, 9);mono->Printf("%8.8s", (BuildInfantry == INFANTRY_NONE) ? " " : InfantryTypes[BuildInfantry]->Graphic_Name());
@@ -858,7 +858,7 @@ void HouseClass::Debug_Dump(MonoClass * mono) const
 HouseStaticClass::HouseStaticClass(void) :
 	IQ(0),
 	TechLevel(1),
-	Allies(0),
+	Allies(),
 	InitialCredits(0),
 	Edge(SOURCE_NORTH)
 {
@@ -1689,9 +1689,9 @@ void HouseClass::AI(void)
 		DidRepair = false;
 	}
 
-	if (this == PlayerPtr && IsToLook) {
+	if (IsToLook) {
 		IsToLook = false;
-		Map.All_To_Look();
+		Map.All_To_Look(false, false, this);
 	}
 }
 
@@ -2011,8 +2011,8 @@ void HouseClass::Silo_Redraw_Check(int oldtib, int oldcap)
 bool HouseClass::Is_Ally(HousesType house) const
 {
 	if (house == HeapID) return(true);
-	if (house != HOUSE_NONE) {
-		return(((1<<house) & Allies) != 0);
+	if (house >= 0 && house < Houses.Count()) {
+		return(Allies[Houses[house]]);
 	}
 	return(false);
 }
@@ -2086,6 +2086,40 @@ bool HouseClass::Is_Ally(AbstractClass const * target) const
 
 
 /// <summary>
+/// Does this house keep the whole map uncovered for the rest of the match?
+/// </summary>
+bool HouseClass::Sees_Whole_Map(void) const
+{
+	return(IsObserver || (IsDefeated && !Session.Options.CoachMode));
+}
+
+
+/// <summary>
+/// Fetches the house whose view a person sees for this one: the player's house for every house
+/// the player controls in a campaign, the house itself for a human seat outside one, and NULL
+/// for a house no person plays.
+/// </summary>
+HouseClass * HouseClass::Player_View(void) const
+{
+	if (Session.Type == GAME_NORMAL) {
+		return(Is_Player_Control() ? PlayerPtr : NULL);
+	}
+	// The heap entry is this house, without casting away const.
+	return(IsHuman ? Houses[HeapID] : NULL);
+}
+
+
+/// <summary>
+/// Is this house a player's view itself? Only such a house discovers objects by sight and
+/// receives scripted reveals.
+/// </summary>
+bool HouseClass::Is_Player_View(void) const
+{
+	return(Player_View() == this);
+}
+
+
+/// <summary>
 /// Does this house see the other as its owner does? True for an ally, and either way round
 /// once the local player has the whole map. Display only; never a simulation rule.
 /// </summary>
@@ -2129,7 +2163,7 @@ void HouseClass::Make_Ally(HouseClass * house)
 {
 	if (Is_Allowed_To_Ally(house)) {
 
-		Allies |= (1L << house->HeapID);
+		Allies.Set(house);
 
 		Recalc_Threat_Regions();
 		Clear_Anger(house);
@@ -2142,7 +2176,7 @@ void HouseClass::Make_Ally(HouseClass * house)
 		}
 
 		if (ScenarioInit) {
-			Control.Allies |= (1L << house->HeapID);
+			Control.Allies.Set(house);
 		}
 
 		if (!ScenarioInit) {
@@ -2178,7 +2212,7 @@ void HouseClass::Make_Ally(HouseClass * house)
 			**	Cause all structures to be revealed to the house that has been
 			**	allied with.
 			*/
-			if (Rule->IsAllyReveal && house == PlayerPtr) {
+			if (Rule->IsAllyReveal) {
 				for (int index = 0; index < Technos.Count(); index++) {
 					TechnoClass * t = Technos[index];
 
@@ -2189,7 +2223,7 @@ void HouseClass::Make_Ally(HouseClass * house)
 			}
 
 			if (Is_Human_Player() && Session.Type != GAME_NORMAL && !house->Class->IsMultiplayPassive) {
-				snprintf(buffer, sizeof(buffer), Fetch_String(TXT_HAS_ALLIED), (char const *)IniName, (char const *)house->IniName);
+				snprintf(buffer, sizeof(buffer), Fetch_String(TXT_HAS_ALLIED), Session.Shown_Name(this).c_str(), Session.Shown_Name(house).c_str());
 				Session.Messages.Add_Message(NULL, 0, buffer, Class->Scheme, TextPrintType(TPF_6PT_GRAD|TPF_USE_GRAD_PAL|TPF_FULLSHADOW), int(TICKS_PER_MINUTE * Rule->MessageDelay));
 
 				if (Is_Player_Control()) {
@@ -2238,10 +2272,10 @@ void HouseClass::Make_Enemy(HouseClass * house)
 		Add_Anger(1, house);
 
 		if (house != NULL && Is_Ally(house)) {
-			Allies &= ~(1L << house->HeapID);
+			Allies.Clear(house);
 
 			if (ScenarioInit) {
-				Control.Allies &= ~(1L << house->HeapID);
+				Control.Allies.Clear(house);
 			}
 
 			Recalc_Threat_Regions();
@@ -2250,10 +2284,10 @@ void HouseClass::Make_Enemy(HouseClass * house)
 			**	Breaking an alliance is a bilateral event.
 			*/
 			if (house->Is_Ally(this)) {
-				house->Allies &= ~(1L << HeapID);
+				house->Allies.Clear(this);
 
 				if (ScenarioInit) {
-					house->Control.Allies &= ~(1L << HeapID);
+					house->Control.Allies.Clear(this);
 				}
 				house->Recalc_Threat_Regions();
 				house->Add_Anger(1, house);
@@ -2262,7 +2296,7 @@ void HouseClass::Make_Enemy(HouseClass * house)
 			if (Session.Type != GAME_NORMAL && !ScenarioInit && IsHuman) {
 				char buffer[80];
 
-				snprintf(buffer, sizeof(buffer), Fetch_String(TXT_AT_WAR), (char const *)IniName, (char const *)house->IniName);
+				snprintf(buffer, sizeof(buffer), Fetch_String(TXT_AT_WAR), Session.Shown_Name(this).c_str(), Session.Shown_Name(house).c_str());
 				Session.Messages.Add_Message(NULL, 0, buffer, Class->Scheme, TextPrintType(TPF_6PT_GRAD|TPF_USE_GRAD_PAL|TPF_FULLSHADOW), int(TICKS_PER_MINUTE * Rule->MessageDelay));
 				Map.Flag_To_Redraw();
 				if (Is_Player_Control()) {
@@ -2275,13 +2309,12 @@ void HouseClass::Make_Enemy(HouseClass * house)
 
 
 /// <summary>
-/// Gives the local player the whole map for the rest of the match: shroud and fog are lifted
-/// everywhere, the radar stays up, and messages can only go to everyone.
+/// Gives the local player the whole map for the rest of the match: the fog is no longer drawn,
+/// the radar stays up, and messages can only go to everyone. The caller reveals the map first.
 /// </summary>
 void HouseClass::Become_ObiWan(void)
 {
 	Session.ObiWan = 1;
-	Map.Reveal_The_Map(true);
 	HiddenSurface->Fill(TBLACK);
 	Map.Flag_To_Redraw(GS_REDRAW_ALL);
 	RecalcRadar = true;
@@ -2733,7 +2766,6 @@ bool HouseClass::Place_Object(RTTIType type, Cell const & cell)
 						**	the production manager tied to this slot in the sidebar. Its job
 						**	has been completed.
 						*/
-						LastRadarEventCell = builder->Center_Coord().As_Cell();
 						factory->Completed();
 						Abandon_Production(type, -1);
 						placed = true;
@@ -2772,10 +2804,11 @@ bool HouseClass::Place_Object(RTTIType type, Cell const & cell)
 						Abandon_Production(type, -1);
 						placed = true;
 
+						if (tech->IsActive && !tech->DiscoveredBy[this]) {
+							tech->Revealed(this);
+						}
+
 						if (PlayerPtr == this) {
-							if (tech->IsActive && !tech->IsDiscoveredByPlayer) {
-								tech->Revealed(this);
-							}
 							Sound_Effect(Rule->BuildingSlam);
 							Map.Set_Cursor_Shape(0);
 							Map.PendingObjectPtr = 0;
@@ -3308,6 +3341,10 @@ void HouseClass::MPlayer_Defeated(void)
 	**	map -- unless coach mode leaves me with my allies' vision instead
 	**	- Add my defeat message
 	*/
+	if (Sees_Whole_Map()) {
+		Map.Reveal_The_Map(this, true);
+	}
+
 	if (PlayerPtr == this) {
 		if (!Session.Options.CoachMode) {
 			Become_ObiWan();
@@ -3316,7 +3353,7 @@ void HouseClass::MPlayer_Defeated(void)
 		/*
 		**	Pop up a message showing that I was defeated
 		*/
-		snprintf(txt, sizeof(txt), Fetch_String(TXT_PLAYER_DEFEATED), (char const *)IniName);
+		snprintf(txt, sizeof(txt), Fetch_String(TXT_PLAYER_DEFEATED), Session.Shown_Name(this).c_str());
 		Session.Messages.Add_Message(NULL, 0, txt, Session.ColorIdx,
 		TextPrintType(TPF_6PT_GRAD|TPF_USE_GRAD_PAL|TPF_FULLSHADOW), int(Rule->MessageDelay * TICKS_PER_MINUTE));
 
@@ -3330,7 +3367,7 @@ void HouseClass::MPlayer_Defeated(void)
 		**	If it wasn't me, find out who was defeated
 		*/
 		if (!Class->IsMultiplayPassive) {
-			snprintf(txt, sizeof(txt), Fetch_String(TXT_PLAYER_DEFEATED), (char const *)IniName);
+			snprintf(txt, sizeof(txt), Fetch_String(TXT_PLAYER_DEFEATED), Session.Shown_Name(this).c_str());
 
 			Session.Messages.Add_Message(NULL, 0, txt, Scheme,
 				TextPrintType(TPF_6PT_GRAD | TPF_USE_GRAD_PAL | TPF_FULLSHADOW), int(Rule->MessageDelay * TICKS_PER_MINUTE));
@@ -4033,7 +4070,7 @@ int HouseClass::Expert_AI(void)
 
 				for (HousesType house = HOUSE_FIRST; house < Houses.Count(); house++) {
 					HouseClass * h = Houses[house];
-					if (h != this && !h->Class->IsMultiplayPassive && !h->IsDefeated) {
+					if (h != this && !h->Class->IsMultiplayPassive && !h->IsDefeated && !Is_Ally(h)) {
 
 						/*
 						**	Determine a priority value based on distance to the center of the
@@ -5493,6 +5530,10 @@ void HouseClass::Read_All(CCINIClass const & ini)
 		/// spawn house entry registers no type at all.
 		ini.Get_HousesType("Houses", ini.Get_Entry("Houses", index), HOUSE_NONE);
 		if (index < HouseTypes.Count()) {
+			if (Houses.Count() >= HOUSE_MAX) {
+				DebugString("[Houses] %s skipped: only %d houses fit.\n", HouseTypes[index]->Name(), HOUSE_MAX);
+				continue;
+			}
 			new HouseClass(HouseTypes[index]);
 		}
 	}
@@ -5573,7 +5614,7 @@ void HouseClass::Read_INI(CCINIClass const & ini)
 	Control.Edge = ini.Get_SourceType(hname, "Edge", SOURCE_NORTH);
 	IsPlayerControl = ini.Get_Bool(hname, "PlayerControl", false);
 
-	int owners = ini.Get_Owners(hname, "Allies", Allies);
+	int owners = ini.Get_Owners(hname, "Allies", 0);
 	Make_Ally(Houses[HeapID]);
 
 	Scheme = ini.Get_Scheme_Index(hname, "Color", Scheme);
@@ -5650,7 +5691,7 @@ void HouseClass::Write_INI(CCINIClass & ini)
 
 	unsigned allies = 0;
 	for (HousesType index = HOUSE_FIRST; index < Houses.Count(); index++) {
-		if ((Control.Allies & (1 << Houses[index]->HeapID)) != 0) {
+		if (Control.Allies[Houses[index]]) {
 			allies |= (1 << Houses[index]->Class->House);
 		}
 	}
@@ -5916,7 +5957,7 @@ void HouseClass::Update_Spied_Power_Plants(void)
 			if (tech && tech->RTTI==RTTI_BUILDING) {
 				BuildingClass *bldg = (BuildingClass *)tech;
 				if (!bldg->IsOwnedByPlayer && bldg->Class->Power > 0) {
-					if ( bldg->SpiedBy & (1<<(PlayerPtr->Class->House)) ) {
+					if (bldg->SpiedBy[PlayerPtr]) {
 						bldg->Mark(MARK_CHANGE);
 					}
 				}
@@ -6428,13 +6469,11 @@ void HouseClass::Compute_CRC(CRCEngine & crc) const
 	crc(Drain);
 	crc(WhoLastHurtMe);
 	crc(Enemy);
-	crc((int)Allies);
+	Allies.Compute_CRC(crc);
 	crc(FactoryPlants.Length());
-
 	for (int i = 0; i < FactoryPlants.Length(); i++) {
 		crc(FactoryPlants[i]->TClass->Name());
 	}
-
 	Base.Compute_CRC(crc);
 }
 
@@ -7297,7 +7336,6 @@ Cell HouseClass::Where_To_Place_Building(BuildingTypeClass *buildingtype, int (*
 
 	/// Height at base placement center.
 	int base_height = Map[Base.PlacementCenter].Height;
-	int house_mask  = 1 << HeapID;
 
 	/// Declared out here deliberately -- scoped to the loop, MSVC6 pools its frame slot with
 	/// the cloak generator distance temporary and the whole slot map shifts.
@@ -7311,7 +7349,7 @@ Cell HouseClass::Where_To_Place_Building(BuildingTypeClass *buildingtype, int (*
 			/// Sum the directions of the neighbors this house already occupies.
 			for (int face = 0; face < FACING_COUNT; face++) {
 				CellClass *cptr = &Map[Adjacent_Cell(base_cell, (FacingType)face)];
-				if (cptr->OccupiedBy & house_mask) {
+				if (cptr->OccupiedBy[this]) {
 					occupied_dir = Adjacent_Cell(occupied_dir, (FacingType)face);
 				}
 			}
@@ -7385,7 +7423,7 @@ Cell HouseClass::Where_To_Place_Building(BuildingTypeClass *buildingtype, int (*
 					rect.Height = total_height;
 
 					/// The second pass relaxes the area-availability requirement.
-					if (pass == 1 || Map.Is_Area_Available(rect, HeapID)) {
+					if (pass == 1 || Map.Is_Area_Available(rect, this)) {
 						if (buildingtype->Legal_Placement(pos, this)) {
 							if (abs(base_height - Map[pos].Height) < 3 && Can_Build_Here(buildingtype, pos)) {
 								return(pos);
@@ -7945,7 +7983,7 @@ void HouseClass::AI_Build_Wall(void)
 
 			bool height_check = abs(cellptr->Height - base_height) <= 2;
 			bool land_check = land != LAND_ROCK && land != LAND_WATER && land != LAND_ICE && adjland != LAND_ROCK && adjland != LAND_WATER && adjland != LAND_ICE;
-			bool overlay_check = cellptr->Overlay == OVERLAY_NONE;
+			bool overlay_check = cellptr->Overlay == OVERLAY_NONE || OverlayTypes[cellptr->Overlay]->Can_Build_Over();
 			bool building_check = cellptr->Cell_Building() == NULL && adjptr->Cell_Building() == NULL;
 			bool terrain_check = cellptr->Cell_Terrain() == NULL && adjptr->Cell_Terrain() == NULL;
 			bool ramp_check = cellptr->Ramp == 0;
@@ -8067,7 +8105,7 @@ void HouseClass::Recalc_Power_Drain(void)
 	for (int i = 0; i < Buildings.Count(); i++) {
 		BuildingClass * b = Buildings[i];
 		if (b && b->House == this && !b->IsInLimbo && b->IsDown) {
-			if (Is_Player_Control() && !b->IsDiscoveredByPlayer && Session.Type == GAME_NORMAL) continue;
+			if (Is_Player_Control() && !b->DiscoveredBy[PlayerPtr] && Session.Type == GAME_NORMAL) continue;
 			Power += Buildings[i]->Power_Output();
 			Drain += b->Power_Drain();
 		}
@@ -8105,7 +8143,7 @@ void HouseClass::Recalc_Radar_Availability(void)
 				for (int i = 0; i < Buildings.Count(); i++) {
 					BuildingClass * b = Buildings[i];
 					if (b && b->House == this && b->IsOn && b->Class->IsRadar && !b->IsInLimbo && b->IsDown) {
-						if (Is_Player_Control() && !b->IsDiscoveredByPlayer && Session.Type == GAME_NORMAL) continue;
+						if (Is_Player_Control() && !b->DiscoveredBy[PlayerPtr] && Session.Type == GAME_NORMAL) continue;
 						if (b->CurrentMission != MISSION_DECONSTRUCTION && b->MissionQueue != MISSION_DECONSTRUCTION) {
 							if (b->StunDuration == 0) {
 								radar_on = true;
@@ -8243,14 +8281,14 @@ void HouseClass::Update_Factories(RTTIType rtti)
 /// <param name="house">The house that performed the spying.</param>
 void HouseClass::Update_Spied_Radar(HouseClass * house)
 {
-	RadarSpied |= 1 << house->Class->House;
-	if (house == PlayerPtr) {
-		for (int index = 0; index < Technos.Count(); index++) {
-			TechnoClass * obj = Technos[index];
-			if (obj && !obj->IsInLimbo && obj->House == this) {
-				obj->Look();
-			}
+	RadarSpied.Set(house);
+	for (int index = 0; index < Technos.Count(); index++) {
+		TechnoClass * obj = Technos[index];
+		if (obj && !obj->IsInLimbo && obj->House == this) {
+			obj->Look();
 		}
+	}
+	if (house == PlayerPtr) {
 		Map.Flag_To_Redraw(GS_REDRAW_ALL);
 	}
 }
@@ -9049,6 +9087,12 @@ bool HouseClass::Is_Build_Limited(TechnoTypeClass const * type) const
 		FactoryClass * factory = Fetch_Factory(type->RTTI);
 		if (factory != NULL) {
 			queued = factory->Total(type);
+
+			// A positive limit already counts the object under construction among those owned.
+			TechnoClass const * object = factory->Get_Object();
+			if (type->BuildLimit > 0 && object != NULL && object->TClass == type && !type->IsInsignificant) {
+				queued--;
+			}
 		}
 
 		switch ((RTTIType)type->RTTI) {
@@ -9161,11 +9205,9 @@ bool HouseClass::Can_Build_Here(BuildingTypeClass *building, Cell const & cell)
 	int width = (2 * spacing) + building->Width();
 	int height = (2 * spacing) + building->Height();
 
-	int mask = 1 << HeapID;
-
 	for (int x = cell.X - spacing - 1; x < cell.X + width + 1; x++) {
 		for (int y = cell.Y - spacing - 1; y < cell.Y + height + 1; y++) {
-			if (Map[Cell(x, y)].OccupiedBy & mask) {
+			if (Map[Cell(x, y)].OccupiedBy[this]) {
 				return(true);
 			}
 		}

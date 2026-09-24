@@ -1837,6 +1837,24 @@ AltPalette:
       source: code/animtype.cpp
       guard: null
     level: AnimTypeClass
+AltToRally:
+  key: AltToRally
+  scopes:
+  - applies_to:
+    - client settings
+    file: sun.ini
+    section:
+      kind: literal
+      name: Options
+    value_type: boolean
+    status: generated
+    _provenance:
+      default_candidate: 'no'
+      declared_in: OptionsClass
+      member: AltToRally
+      source: code/options.cpp
+      guard: null
+    level: OptionsClass
 AlwaysShowActionLines:
   key: AlwaysShowActionLines
   scopes:
@@ -2292,6 +2310,24 @@ Armor:
       source: code/rules.cpp
       guard: null
     level: DifficultyClass
+ArmorCrateStacks:
+  key: ArmorCrateStacks
+  scopes:
+  - applies_to:
+    - global rules
+    file: rules.ini
+    section:
+      kind: literal
+      name: CrateRules
+    value_type: boolean
+    status: generated
+    _provenance:
+      default_candidate: 'no'
+      declared_in: RulesClass
+      member: IsArmorCrateStacking
+      source: code/rules.cpp
+      guard: null
+    level: RulesClass
 Armory:
   key: Armory
   scopes:
@@ -2994,6 +3030,24 @@ Biome:
       source: code/mapgen.cpp
       guard: null
     level: MapSeedClass
+BitmapSystemFont:
+  key: BitmapSystemFont
+  scopes:
+  - applies_to:
+    - client settings
+    file: sun.ini
+    section:
+      kind: literal
+      name: Options
+    value_type: boolean
+    status: generated
+    _provenance:
+      default_candidate: 'yes'
+      declared_in: OptionsClass
+      member: BitmapSystemFont
+      source: code/options.cpp
+      guard: null
+    level: OptionsClass
 BlackTile:
   key: BlackTile
   scopes:
@@ -3889,6 +3943,24 @@ Buildable:
       source: code/rules.cpp
       guard: null
     level: RulesClass
+BuildableOver:
+  key: BuildableOver
+  scopes:
+  - applies_to: &id016
+    - OverlayType
+    file: rules.ini
+    section:
+      kind: identifier
+      source: object-type
+    value_type: boolean
+    status: generated
+    _provenance:
+      default_candidate: 'no'
+      declared_in: OverlayTypeClass
+      member: IsBuildableOver
+      source: code/overtype.cpp
+      guard: null
+    level: OverlayTypeClass
 BuildingDrop:
   key: BuildingDrop
   scopes:
@@ -4361,8 +4433,7 @@ Cell:
 CellAnim:
   key: CellAnim
   scopes:
-  - applies_to: &id016
-    - OverlayType
+  - applies_to: *id016
     file: rules.ini
     section:
       kind: identifier
@@ -4984,7 +5055,7 @@ Color:
     section:
       kind: identifier
       source: object-type
-    value_type: colour scheme
+    value_type: color scheme
     status: reviewed
     _provenance:
       default_candidate: '0'
@@ -4998,7 +5069,7 @@ Color:
     section:
       kind: identifier
       source: object-type
-    value_type: colour scheme
+    value_type: color scheme
     status: reviewed
     _provenance:
       default_candidate: '0'
@@ -5013,7 +5084,7 @@ Color:
     section:
       kind: identifier
       source: object-type
-    value_type: colour scheme
+    value_type: color scheme
     status: reviewed
     _provenance:
       default_candidate: '0'
@@ -5028,7 +5099,7 @@ Color:
     section:
       kind: identifier
       source: house
-    value_type: colour scheme
+    value_type: color scheme
     status: reviewed
     _provenance:
       default_candidate: null
@@ -5465,6 +5536,24 @@ CrateMinimum:
       default_candidate: '1'
       declared_in: RulesClass
       member: CrateMinimum
+      source: code/rules.cpp
+      guard: null
+    level: RulesClass
+CrateMoneyBonus:
+  key: CrateMoneyBonus
+  scopes:
+  - applies_to:
+    - global rules
+    file: rules.ini
+    section:
+      kind: literal
+      name: CrateRules
+    value_type: integer
+    status: generated
+    _provenance:
+      default_candidate: '900'
+      declared_in: RulesClass
+      member: CrateMoneyBonus
       source: code/rules.cpp
       guard: null
     level: RulesClass
@@ -8583,6 +8672,24 @@ Firepower:
     level: HouseTypeClass
   case_collides_with:
   - FirePower
+FirepowerCrateStacks:
+  key: FirepowerCrateStacks
+  scopes:
+  - applies_to:
+    - global rules
+    file: rules.ini
+    section:
+      kind: literal
+      name: CrateRules
+    value_type: boolean
+    status: generated
+    _provenance:
+      default_candidate: 'no'
+      declared_in: RulesClass
+      member: IsFirepowerCrateStacking
+      source: code/rules.cpp
+      guard: null
+    level: RulesClass
 FirestormActiveAnim:
   key: FirestormActiveAnim
   scopes:
@@ -9111,7 +9218,7 @@ FreeUnit:
     section:
       kind: identifier
       source: object-type
-    value_type: class
+    value_type: UnitType, InfantryType or AircraftType
     status: generated
     _provenance:
       default_candidate: none
@@ -10987,6 +11094,23 @@ Immune:
       source: code/objtype.cpp
       guard: null
     level: ObjectTypeClass
+ImmuneToEMP:
+  key: ImmuneToEMP
+  scopes:
+  - applies_to: *id003
+    file: rules.ini
+    section:
+      kind: identifier
+      source: object-type
+    value_type: boolean
+    status: generated
+    _provenance:
+      default_candidate: 'no'
+      declared_in: TechnoTypeClass
+      member: IsImmuneToEMP
+      source: code/techtype.cpp
+      guard: null
+    level: TechnoTypeClass
 ImmuneToVeins:
   key: ImmuneToVeins
   scopes:
@@ -12645,7 +12769,7 @@ LaserColor:
     section:
       kind: identifier
       source: object-type
-    value_type: colour (R,G,B)
+    value_type: color (R,G,B)
     status: generated
     _provenance:
       default_candidate: ''
@@ -12713,7 +12837,7 @@ LaserInnerColor:
     section:
       kind: identifier
       source: object-type
-    value_type: colour (R,G,B)
+    value_type: color (R,G,B)
     status: generated
     _provenance:
       default_candidate: 0,0,0
@@ -12730,7 +12854,7 @@ LaserOuterColor:
     section:
       kind: identifier
       source: object-type
-    value_type: colour (R,G,B)
+    value_type: color (R,G,B)
     status: generated
     _provenance:
       default_candidate: 0,0,0
@@ -12747,7 +12871,7 @@ LaserOuterSpread:
     section:
       kind: identifier
       source: object-type
-    value_type: colour (R,G,B)
+    value_type: color (R,G,B)
     status: generated
     _provenance:
       default_candidate: 0,0,0
@@ -13567,6 +13691,23 @@ MaxMoney:
       source: code/rules.cpp
       guard: null
     level: RulesClass
+MaxPips:
+  key: MaxPips
+  scopes:
+  - applies_to: *id003
+    file: rules.ini
+    section:
+      kind: identifier
+      source: object-type
+    value_type: integer
+    status: generated
+    _provenance:
+      default_candidate: '0'
+      declared_in: TechnoTypeClass
+      member: null
+      source: code/techtype.cpp
+      guard: null
+    level: TechnoTypeClass
 MaxPlayers:
   key: MaxPlayers
   scopes:
@@ -14237,7 +14378,7 @@ MovementLineColor:
     section:
       kind: literal
       name: Ingame
-    value_type: colour (R,G,B)
+    value_type: color (R,G,B)
     status: generated
     _provenance:
       default_candidate: null
@@ -14291,7 +14432,7 @@ MovementLineDropShadowColor:
     section:
       kind: literal
       name: Ingame
-    value_type: colour (R,G,B)
+    value_type: color (R,G,B)
     status: generated
     _provenance:
       default_candidate: null
@@ -14490,6 +14631,24 @@ MultipleFactory:
       default_candidate: '1'
       declared_in: RulesClass
       member: MultipleFactory
+      source: code/rules.cpp
+      guard: null
+    level: RulesClass
+MultipleFactoryCap:
+  key: MultipleFactoryCap
+  scopes:
+  - applies_to:
+    - global rules
+    file: rules.ini
+    section:
+      kind: literal
+      name: General
+    value_type: integer
+    status: generated
+    _provenance:
+      default_candidate: '0'
+      declared_in: RulesClass
+      member: MultipleFactoryCap
       source: code/rules.cpp
       guard: null
     level: RulesClass
@@ -14713,7 +14872,7 @@ NavComQueueLineColor:
     section:
       kind: literal
       name: Ingame
-    value_type: colour (R,G,B)
+    value_type: color (R,G,B)
     status: generated
     _provenance:
       default_candidate: null
@@ -14767,7 +14926,7 @@ NavComQueueLineDropShadowColor:
     section:
       kind: literal
       name: Ingame
-    value_type: colour (R,G,B)
+    value_type: color (R,G,B)
     status: generated
     _provenance:
       default_candidate: null
@@ -17552,7 +17711,7 @@ RadialColor:
     section:
       kind: identifier
       source: object-type
-    value_type: colour (R,G,B)
+    value_type: color (R,G,B)
     status: generated
     _provenance:
       default_candidate: 0,0,0
@@ -17566,7 +17725,7 @@ RadialColor:
     section:
       kind: identifier
       source: object-type
-    value_type: colour (R,G,B)
+    value_type: color (R,G,B)
     status: generated
     _provenance:
       default_candidate: 0,0,0
@@ -17663,6 +17822,24 @@ RandomLoopDelay:
       source: code/animtype.cpp
       guard: null
     level: AnimTypeClass
+RandomMap:
+  key: RandomMap
+  scopes:
+  - applies_to:
+    - scenarios
+    file: map file
+    section:
+      kind: literal
+      name: Basic
+    value_type: boolean
+    status: generated
+    _provenance:
+      default_candidate: 'no'
+      declared_in: ScenarioClass
+      member: random_map
+      source: code/scenario.cpp
+      guard: null
+    level: ScenarioClass
 RandomRate:
   key: RandomRate
   scopes:
@@ -17870,6 +18047,24 @@ RechargeVoice:
       source: code/suprtype.cpp
       guard: null
     level: SuperWeaponTypeClass
+RecheckPrerequisites:
+  key: RecheckPrerequisites
+  scopes:
+  - applies_to:
+    - global rules
+    file: rules.ini
+    section:
+      kind: literal
+      name: General
+    value_type: boolean
+    status: generated
+    _provenance:
+      default_candidate: 'no'
+      declared_in: RulesClass
+      member: IsRecheckPrerequisites
+      source: code/rules.cpp
+      guard: null
+    level: RulesClass
 Recoilless:
   key: Recoilless
   scopes:
@@ -19924,6 +20119,24 @@ SilverCrate:
       source: code/rules.cpp
       guard: null
     level: RulesClass
+SimulateWhileUnfocused:
+  key: SimulateWhileUnfocused
+  scopes:
+  - applies_to:
+    - client settings
+    file: sun.ini
+    section:
+      kind: literal
+      name: Options
+    value_type: boolean
+    status: generated
+    _provenance:
+      default_candidate: 'no'
+      declared_in: OptionsClass
+      member: SimulateWhileUnfocused
+      source: code/options.cpp
+      guard: null
+    level: OptionsClass
 Size:
   key: Size
   scopes:
@@ -21343,7 +21556,7 @@ StartColor1:
     section:
       kind: identifier
       source: object-type
-    value_type: colour (R,G,B)
+    value_type: color (R,G,B)
     status: generated
     _provenance:
       default_candidate: ''
@@ -21360,7 +21573,7 @@ StartColor2:
     section:
       kind: identifier
       source: object-type
-    value_type: colour (R,G,B)
+    value_type: color (R,G,B)
     status: generated
     _provenance:
       default_candidate: ''
@@ -22140,7 +22353,7 @@ TargetLaserColor:
     section:
       kind: literal
       name: Ingame
-    value_type: colour (R,G,B)
+    value_type: color (R,G,B)
     status: generated
     _provenance:
       default_candidate: null
@@ -22194,7 +22407,7 @@ TargetLaserDropShadowColor:
     section:
       kind: literal
       name: Ingame
-    value_type: colour (R,G,B)
+    value_type: color (R,G,B)
     status: generated
     _provenance:
       default_candidate: null
@@ -22248,7 +22461,7 @@ TargetLineColor:
     section:
       kind: literal
       name: Ingame
-    value_type: colour (R,G,B)
+    value_type: color (R,G,B)
     status: generated
     _provenance:
       default_candidate: null
@@ -22302,7 +22515,7 @@ TargetLineDropShadowColor:
     section:
       kind: literal
       name: Ingame
-    value_type: colour (R,G,B)
+    value_type: color (R,G,B)
     status: generated
     _provenance:
       default_candidate: null

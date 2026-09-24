@@ -123,6 +123,7 @@ extern bool Debug_Playtest;
 extern bool Debug_Trap_Check_Heap;
 extern bool Debug_Print_Events;
 extern bool Debug_Console;
+extern bool Debug_MultipleInstances;
 
 extern ParticleSystemClass *GasSystem;
 
@@ -243,7 +244,6 @@ extern int										NewMaxAheadFrame2;
 extern bool VisceroidsAsSnoBees;
 extern bool Just4Fun;
 
-extern int 							_dialog_count;
 extern int							Seed;
 extern int							CustomSeed;
 extern bool							IgnoreInput;

@@ -10,6 +10,4 @@ when_omitted:
 
 The credits charged to produce one object of the type, before the country and difficulty multipliers scale it. Three other figures are derived from it: the [base build time](/keys/buildspeed/), the [experience a kill is worth](/systems/veterancy/#earning-experience), and the [price of one repair step](/systems/repair/#the-cost-of-one-step).
 
-Repair works from a reduced figure. A structure that hands something out has that removed first — the price of its [`FreeUnit`](/keys/freeunit/), and, on the structure the first entry of [`PadAircraft`](/keys/padaircraft/) docks at, the average price of the first two pad aircraft unless [`SeparateAircraft=yes`](/keys/separateaircraft/). Production adds both back, so the deduction shows up in repair bills alone.
-
-Three sections carry a hard-coded price of `250` after their own value is read: `GAFSDF`, `GAWALL` and `NAWALL`. Assigning anything else in those sections changes nothing.
+Repair of a structure that comes with a [`FreeUnit`](/keys/freeunit/) or pad aircraft is priced from a reduced figure, which [What a structure gives away](/keys/cost/#what-a-structure-gives-away) explains; its purchase price is unchanged. An aircraft's own repair uses its full written price.

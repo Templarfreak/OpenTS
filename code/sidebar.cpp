@@ -84,6 +84,7 @@
 #include "_rules.h"
 #include "_surface.h"
 #include "_tooltip.h"
+#include "_ui.h"
 #include "bench.h"
 #include "building.h"
 #include "builtype.h"
@@ -115,8 +116,9 @@
 #include "suprtype.h"
 #include "surface.h"
 #include "techtype.h"
-#include "voc.h"
+#include "ui/uishell.h"
 #include "utf8.h"
+#include "voc.h"
 #include "vox.h"
 
 #include "bench.hh"
@@ -837,7 +839,7 @@ bool SidebarClass::Add(RTTIType type, int id)
  *=============================================================================================*/
 bool SidebarClass::Scroll(bool up, int column)
 {
-	if (_dialog_count != 0) {
+	if (UIShell.Screen_Shown()) {
 		return(false);
 	}
 
@@ -2110,7 +2112,7 @@ bool SidebarClass::StripClass::Recalc(void)
 		TechnoTypeClass const * tech = Fetch_Techno_Type(Buildables[index].BuildableType, Buildables[index].BuildableID);
 		if (tech != NULL) {
 			BuildingClass const * who = tech->Who_Can_Build_Me(true, false, false, PlayerPtr);
-			ok = who != NULL && who->House->Can_Build(tech, true, true);
+			ok = who != NULL && who->House->Can_Build(tech, !Rule->IsRecheckPrerequisites, true);
 		} else {
 			if ((unsigned)Buildables[index].BuildableID < (unsigned)PlayerPtr->SuperWeapon.Count()) {
 				ok = PlayerPtr->SuperWeapon[Buildables[index].BuildableID]->Is_Present();
@@ -2120,6 +2122,16 @@ bool SidebarClass::StripClass::Recalc(void)
 		}
 
 		if (!ok) {
+			// This sweep runs for the local player alone, so the abandon travels as an event.
+			if (Rule->IsRecheckPrerequisites && tech != NULL) {
+				FactoryClass * fptr = PlayerPtr->Fetch_Factory(Buildables[index].BuildableType);
+				int pending = (fptr != NULL) ? fptr->Total(tech) : 0;
+				if (pending > 0) {
+					OutList.push_back(EventClass(PlayerPtr->HeapID, EventClass::ABANDON_COUNT,
+							Buildables[index].BuildableType, Buildables[index].BuildableID, pending));
+				}
+			}
+
 			for (int i = 0; i < max_visible; i++) {
 				if (unshifted[i] == Buildables[index]) {
 					unshifted[i] = BuildType(0, RTTI_NONE);

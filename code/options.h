@@ -59,7 +59,7 @@ class OptionsClass {
 		int Normalize_Volume(int volume) const;
 		int Get_Scroll_Method(void) const;
 
-		bool Hotkey_Dialog(void);
+		void Hotkey_Dialog(void);
 
 		/*
 		**	File I/O routines
@@ -126,6 +126,17 @@ class OptionsClass {
 		 * If tooltips are to pop up over the user interface, then this flag will be true.
 		 */
 		bool ToolTips;
+
+		/*
+		 * If true, the force-move key sets a rally point and the plain click moves the structure.
+		 */
+		bool AltToRally;
+
+		/*
+		 * If true, a solo or skirmish game keeps running, silent and without input, while
+		 * another program has the focus.
+		 */
+		bool SimulateWhileUnfocused;
 
 		/*
 		 * The palette index drawn behind each glyph of the in-game message list, or zero for
@@ -222,6 +233,8 @@ class OptionsClass {
 		KeyNumType KeySelect2;
 		KeyNumType KeyQueueMove1;
 		KeyNumType KeyQueueMove2;
+
+		bool BitmapSystemFont;
 
 	private:
 

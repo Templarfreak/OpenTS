@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -133,6 +133,35 @@ test('DropPodWeapon remains a null default loaded before object type registratio
 	assertOrdered(addition, ['General(ini);', 'Objects(ini);'], 'Rules addition order');
 });
 
+test('Tiberium types register by name, stop at four, and read every rules file', () => {
+	const rules = source('code/rules.cpp');
+	const addition = functionBody(rules, 'bool RulesClass::Addition(CCINIClass const & ini)');
+	assertOrdered(
+		addition,
+		['Do_ParticleSystemTypes(ini);', 'Do_Tiberiums(ini);', 'Objects(ini);'],
+		'Tiberium registration order',
+	);
+	assert.doesNotMatch(addition, /TiberiumClass::/);
+
+	const register = functionBody(rules, 'bool RulesClass::Do_Tiberiums(CCINIClass const & ini)');
+	assert.match(register, /TiberiumClass::Find_Or_Make\(buffer\);/);
+
+	const findOrMake = functionBody(
+		source('code/tiberium.cpp'),
+		'TiberiumClass * TiberiumClass::Find_Or_Make(char const * name)',
+	);
+	assertOrdered(findOrMake, [
+		'if (Tiberiums.Count() < TIBERIUM_COUNT)',
+		'TFind_Or_Make<TiberiumClass>(name, Tiberiums)',
+		'return(Tiberiums[index]);',
+		'return(NULL);',
+	], 'Tiberium Find_Or_Make');
+	assert.match(source('code/tiberium.hh'), /TIBERIUM_RIPARIUS,\s+TIBERIUM_CRUENTUS,\s+TIBERIUM_VINIFERA,\s+TIBERIUM_ABOREUS,\s+TIBERIUM_COUNT,/);
+
+	const objects = functionBody(rules, 'bool RulesClass::Objects(CCINIClass const & ini)');
+	assert.match(objects, /Tiberiums\[tibindex\]->Read_INI\(ini\);/);
+});
+
 test('Drop pod superweapon placement draws on one shared 3-per-passenger attempt budget', () => {
 	const dropPods = functionBody(
 		source('code/super.cpp'),
@@ -193,15 +222,14 @@ test('Building main-shape Image is additive to the inherited ObjectType Image re
 	assert.doesNotMatch(fetchImage, /\bGraphicName\s*=/);
 });
 
-test('Every field the launch file reader carries is bound or named as unhonored', () => {
+test('Every field the launch file reader carries is used', () => {
 	const header = source('code/spawnerconfig.h');
-	const spawner = source('code/spawner.cpp');
-
-	assert.match(
-		spawner,
-		/Read, not honored/,
-		'the binding step keeps its ledger of fields it deliberately leaves alone',
-	);
+	const config = source('code/spawnerconfig.cpp');
+	const users = [
+		source('code/spawner.cpp'),
+		functionBody(config, 'SpawnerConfigClass::LaunchType SpawnerConfigClass::Launch_Type(void) const'),
+		functionBody(config, 'bool SpawnerConfigClass::Is_Playable(int countries, int colors, std::string & fault) const'),
+	].join('\n');
 
 	const fields = [];
 	for (const line of header.split('\n')) {
@@ -212,10 +240,77 @@ test('Every field the launch file reader carries is bound or named as unhonored'
 
 	for (const field of fields) {
 		assert.match(
-			spawner,
+			users,
 			new RegExp(String.raw`\b${field}\b`),
-			`${field} is read from a launch file but code/spawner.cpp neither binds it nor names it in the "Read, not honored" ledger`,
+			`${field} is read from a launch file but neither code/spawner.cpp nor the launch checks use it`,
 		);
+	}
+});
+
+test('Every name a match shows passes through the session', () => {
+	const shown = /Shown_(?:Seat_)?Name\(/;
+
+	// Each of these strings puts a player's name on the screen.
+	const naming = [
+		'TXT_TO', 'TXT_CONNECTION_LOST', 'TXT_LEFT_GAME', 'TXT_PLAYER_DEFEATED', 'TXT_RECONNECTING_TO',
+		'TXT_HAS_ALLIED', 'TXT_AT_WAR', 'TXT_SPECIAL_WARNING', 'TXT_PLAYER_CHANGED_SPEED',
+		'TXT_PLAYER_CHANGED_LATENCY', 'TXT_CHAT_TAGGED', 'TXT_CHAT_TO_PLAYER', 'TXT_MOVIE_SKIP_ONE',
+		'TXT_RECONNECT_KICK_RECEIVED',
+	];
+	const named = new RegExp(String.raw`\b(?:${naming.join('|')})\b`, 'g');
+
+	// The lobby dialogs come before a match, and a launch file never opens them.
+	const lobby = new Set(['netdlg2.cpp', 'skirmish.cpp']);
+	const files = readdirSync(resolve(repository, 'code')).filter((name) => name.endsWith('.cpp') && !lobby.has(name));
+
+	let formats = 0;
+	for (const file of files) {
+		const text = source(`code/${file}`);
+		for (const match of text.matchAll(named)) {
+			const start = Math.max(
+				text.lastIndexOf(';', match.index),
+				text.lastIndexOf('{', match.index),
+				text.lastIndexOf('}', match.index),
+			) + 1;
+
+			// A string fetched in one statement is formatted in a later one.
+			let end = text.indexOf(';', match.index);
+			while (end !== -1 && end - start < 1000 && !text.slice(start, end).includes('printf(')) {
+				end = text.indexOf(';', end + 1);
+			}
+			const line = text.slice(0, match.index).split('\n').length;
+			assert.ok(end !== -1 && end - start < 1000, `code/${file}:${line} fetches ${match[0]} and never formats it`);
+
+			formats++;
+			assert.match(
+				text.slice(start, end),
+				shown,
+				`code/${file}:${line} formats ${match[0]} with a name that does not pass through the session`,
+			);
+		}
+	}
+	assert.ok(formats >= 17, `expected the names in every match message to be found, found ${formats}`);
+
+	// These draw or keep a name without a string of their own.
+	const draws = [
+		['code/radar.cpp', 'void RadarClass::Draw_Names(void)'],
+		['code/progress.cpp', 'void ProgressScreenClass::Set_Graphic_Data('],
+		['code/chat.cpp', 'void Chat_Show(HouseClass const * sender'],
+		['code/ipxmgr.cpp', 'void IPXManagerClass::Multiplayer_Debug_Print(int top)'],
+		['code/mpscore.cpp', 'void MultiScore::Tally_Score(void)'],
+		['code/ui/screens/desync/uidesyncdlg.cpp', 'virtual void Read(UIDesyncState & state) override'],
+		['code/queue.cpp', 'static UIReconnectState Reconnect_Notice(FrameSyncStruct * their, int num_conn, int seconds)'],
+	];
+	for (const [path, signature] of draws) {
+		const body = functionBody(definitionFrom(source(path), signature), signature);
+		assert.match(body, shown, `${signature} in ${path} shows a player without asking the session how`);
+
+		for (const statement of body.split(';')) {
+			if (/IniName|->Name\b|Connection_Name\(|Left_Name\(/.test(statement)
+				&& /printf\(|Fancy_Text_Print\(|WM_SETTEXT|ListBox_AddString\(|strncpy\(|\.Name = /.test(statement)) {
+				assert.match(statement, shown, `${signature} in ${path} shows a name the session did not choose: ${statement.trim()}`);
+			}
+		}
 	}
 });
 
@@ -414,15 +509,10 @@ test('A resume is judged before it is loaded, and the save answers for the rest'
 		'gameloaded = true;',
 	], 'a network resume seats the players and opens the network before the save is read');
 
-	for (const dialog of ['IDD_OPT_CTRL_WOL']) {
-		const template = source('code/language/language.rc');
-		const body = template.slice(template.indexOf(dialog + ' DIALOG'));
-		assert.match(
-			body.slice(0, body.indexOf('END')),
-			/IDC_SAVE_GAME/,
-			`${dialog} offers the synchronized save the options handler has always known`,
-		);
-	}
+	assertOrdered(functionBody(source('code/ui/screens/gameopt/uigameoptdlg.cpp'), 'void UI_Game_Options_State(UIGameOptionsState & state)'), [
+		'state.Internet = (Session.Type == GAME_INTERNET);',
+		'state.SaveEnabled = SaveManager.Is_Multiplayer_Saving_Allowed();',
+	], 'an internet game offers the synchronized save the options menu has always known');
 
 	assertOrdered(functionBody(source('code/saveload.cpp'), 'bool Reconcile_Players(void)'), [
 		'stricmp(Session.Players[i]->Name, Houses[house]->IniName) == 0',
@@ -455,15 +545,19 @@ test('Saved games are named in one folder rather than searched for', () => {
 	const gamedirs = source('code/gamedirs.cpp');
 
 	assertOrdered(functionBody(gamedirs, 'std::string Saved_Game_Name(char const * filename)'), [
-		'UserDirectory + SavedGamesFolder',
-		'CreateDirectory(folder.c_str(), NULL);',
-	], 'a saved game is named inside the user directory, and the folder is made on the way');
+		'Own_Folder_Name(SavedGamesFolder, filename)',
+	], 'a saved game is named inside the folder saved games are kept in');
+
+	assertOrdered(functionBody(gamedirs, 'static std::string Own_Folder_Name(char const * folder, char const * filename)'), [
+		'UserDirectory + folder',
+		'CreateDirectory(path.c_str(), NULL);',
+	], 'and that folder sits in the user directory and is made on the way');
 
 	for (const [file, signature] of [
 		['code/saveload.cpp', 'bool Save_Game(const char *file_name, char const * descr)'],
 		['code/saveload.cpp', 'bool Load_Game(const char *file_name)'],
 		['code/saveload.cpp', 'bool Get_Savefile_Info(char const * name, SaveVersionInfo * info)'],
-		['code/loaddlg.cpp', 'void LoadOptionsClass::Fill_List(HWND window)'],
+		['code/loaddlg.cpp', 'void LoadOptionsClass::Gather_Files(void)'],
 		['code/loaddlg.cpp', 'bool LoadOptionsClass::Files_Present(void)'],
 		['code/loaddlg.cpp', 'bool LoadOptionsClass::Delete_File(const char * file_name)'],
 	]) {
@@ -475,7 +569,7 @@ test('Saved games are named in one folder rather than searched for', () => {
 	}
 
 	assert.doesNotMatch(
-		functionBody(source('code/loaddlg.cpp'), 'void LoadOptionsClass::Fill_List(HWND window)') +
+		functionBody(source('code/loaddlg.cpp'), 'void LoadOptionsClass::Gather_Files(void)') +
 			functionBody(source('code/loaddlg.cpp'), 'bool LoadOptionsClass::Files_Present(void)'),
 		/Search_Files\(/,
 		'the listing no longer scans the folders the game reads from',
@@ -527,20 +621,29 @@ test('A multiplayer load replaces the match around the seats it keeps', () => {
 		'Reset_Multiplayer_Save_State();',
 	], 'the old traffic is discarded, the save read, the seats matched, and the connections rebuilt in that order');
 
-	const template = source('code/language/language.rc');
-	const body = template.slice(template.indexOf('IDD_OPT_CTRL_WOL DIALOG'));
+	const gameopt = source('code/ui/screens/gameopt/uigameoptdlg.cpp');
+
 	assert.match(
-		body.slice(0, body.indexOf('END')),
-		/IDC_LOAD_GAME/,
+		functionBody(gameopt, 'void UI_Game_Options_State(UIGameOptionsState & state)'),
+		/state\.LoadEnabled = SaveManager\.Multiplayer_Load_Is_Allowed\(\)/,
 		'the internet options offer the load the master starts for every machine',
 	);
 
-	assertOrdered(definitionFrom(source('code/goptions.cpp'), 'INT_PTR CALLBACK Game_Options_Dialog_Proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)'), [
-		'case IDC_LOAD_GAME:',
-		'LoadOptionsClass().Load()',
-		'Multiplayer_Load_Is_Allowed()',
+	assertOrdered(functionBody(gameopt, 'UIGameOptionsChoice UI_Game_Options_Dialog(void)'), [
+		'!state.Solo && choice == UI_GAME_OPTIONS_LOAD',
 		'SpecialDialog = SDLG_LOAD;',
-	], 'a network game defers the list to the menu loop rather than nesting it in the options dialog');
+	], 'a network game defers the list to the menu loop rather than opening it inside a frame');
+
+	assert.match(
+		functionBody(gameopt, 'virtual bool Load(void) override'),
+		/LoadOptionsClass\(\)\.Load\(\)/,
+		'a solo game opens its list, over the menu',
+	);
+
+	assertOrdered(functionBody(source('code/ui/screens/gameopt/uigameopt.cpp'), 'void UIGameOptionsPresenterClass::Execute(UIIntent const & intent)'), [
+		'!State.Solo || Service.Load()',
+		'Choice = UI_GAME_OPTIONS_LOAD;',
+	], 'and the menu closes with the load only once a game has been loaded');
 
 	assertOrdered(definitionFrom(source('code/conquer.cpp'), 'void Ingame_Menu_Dialog(void)'), [
 		'case SDLG_OPTIONS:',
@@ -615,7 +718,7 @@ test('A match against other machines is assembled whole and wired to its network
 test('The scenario file is kept from its first read and carried in the save', () => {
 	const scenario = source('code/scenario.cpp');
 
-	assertOrdered(functionBody(scenario, 'static int Load_Scenario_File(CCINIClass & ini, char const * name, bool withdigest)'), [
+	assertOrdered(functionBody(definitionFrom(scenario, 'static int Load_Scenario_File(CCINIClass & ini, char const * name, bool withdigest)'), 'static int Load_Scenario_File(CCINIClass & ini, char const * name, bool withdigest)'), [
 		'Scen->SourceFile.Matches(name)',
 		'Load_Held_Scenario_File(ini, name, withdigest)',
 		'CCFileClass file(name);',
@@ -623,10 +726,11 @@ test('The scenario file is kept from its first read and carried in the save', ()
 		'Scen->SourceFile.Assign(name, std::move(bytes));',
 	], 'a name the scenario already holds is served from memory, and a fresh read is kept where the deployment asked for it');
 
-	assertOrdered(functionBody(scenario, 'ScenarioState Read_Scenario_INI(char const * fname, bool)'), [
-		'Load_Scenario_File(ini, fname, true)',
-		'strcpy(Scen->ScenarioName, fname);',
-	], 'the scenario is read through the holder');
+	assertOrdered(functionBody(scenario, 'bool Read_Scenario(char const * fname)'), [
+		'file_read = Load_Scenario_File(requested, name, true) != 0;',
+		'strcpy(Scen->ScenarioName, name);',
+		'state = Read_Scenario_INI(requested);',
+	], 'the scenario is read once, through the holder');
 
 	assertOrdered(functionBody(scenario, 'ScenarioState Read_Scenario_INI(CCINIClass const & ini, bool is_mapgen)'), [
 		'Scen->SourceFile.Clear();',
@@ -645,6 +749,56 @@ test('The scenario file is kept from its first read and carried in the save', ()
 		/CarryScenarioFile = ini\.Get_Bool\("Saves", "CarryScenarioFile", CarryScenarioFile\);/,
 		'the deployment configuration decides whether the file is carried',
 	);
+});
+
+test('A seed file played as a scenario is held to the ranges the dialog allows', () => {
+	assertOrdered(functionBody(source('code/scenario.cpp'), 'bool Read_Scenario(char const * fname)'), [
+		'RandomMapGen.SeedData.Load(',
+		'RandomMapGen.SeedData.Fixup_Settings();',
+		'RandomMapGen.Generate_Random_Map(',
+	], 'the settings are checked after they are read and before anything is built from them');
+
+	assertOrdered(functionBody(source('code/mapgen.cpp'), 'void MapSeedClass::Read_INI(INIClass const & ini)'), [
+		'Reset_Settings();',
+		'ini.Get_String("RandomMap", "Description"',
+	], 'a setting the file leaves out starts from its default, not from what the generator last held');
+});
+
+test('A map file may ask to be generated, and is built from the match seed', () => {
+	assertOrdered(functionBody(source('code/scenario.cpp'), 'bool Read_Scenario(char const * fname)'), [
+		'random_map = requested.Get_Bool("Basic", "RandomMap", false);',
+		'Scen->IsRandom = is_seed_file || random_map;',
+		'RandomMapGen.SeedData.Read_INI(requested);',
+		'RandomMapGen.SeedData.Fixup_Settings();',
+		'RandomMapGen.SeedData.Seed = Seed;',
+		'state = RandomMapGen.Generate_Random_Map(false, random_map ? &requested : NULL);',
+		'if (state == ScenarioState::Ok) {',
+		'Multiplayer_Last_Minute_Fixups();',
+	], 'the file decides before the branch, its settings are checked, and the match seed replaces its own after the check');
+
+	const mapgen = source('code/mapgen.cpp');
+	const initMap = functionBody(mapgen, 'ScenarioState MapGeneratorClass::Init_Map(bool full_init, CCINIClass * scenario)');
+
+	assertOrdered(initMap, [
+		'CCINIClass & ini = scenario != NULL ? *scenario : generated;',
+		'ini.Put_String("Map", "Theater"',
+		'ScenarioState const state = Read_Scenario_INI(ini, true);',
+		'ScenarioInit--;',
+		'return(state);',
+	], 'the generator writes its own entries over the requesting file before the scenario is read from it, and a file that fails to read stops the build');
+
+	const lighting = [...initMap.slice(0, initMap.indexOf('Read_Scenario_INI(ini, true)')).matchAll(/ini\.Put_Float\("Lighting", "(\w+)"/g)].map((match) => match[1]);
+	assert.deepEqual(lighting, ['Ambient', 'Red', 'Green', 'Blue', 'Ground', 'Level'], 'the key page names every [Lighting] entry the generator writes');
+	const readScenario = functionBody(source('code/scenario.cpp'), 'bool ScenarioClass::Read_INI(CCINIClass const & ini)');
+	for (const key of lighting) {
+		assert.ok(readScenario.includes(`ini.Get_Float(LIGHTING, "${key}"`), `the scenario reads the [Lighting] ${key} the generator writes`);
+	}
+
+	assertOrdered(functionBody(mapgen, 'ScenarioState MapGeneratorClass::Generate_Random_Map(bool full_init, CCINIClass * scenario)'), [
+		'ScenarioState const state = Init_Map(full_init, scenario);',
+		'return(state);',
+		'return(ScenarioState::Ok);',
+	], 'and the failure reaches the scenario loader, which reports it as it would any map');
 });
 
 test('Owning a factory is asked of the whole list rather than of its first entries', () => {
@@ -684,7 +838,7 @@ test('A house counts every listed construction yard type towards its own', () =>
 		assert.doesNotMatch(source(path), /BuildConst\[0\]/, `${path} reads no construction yard by position`);
 	}
 	assert.match(
-		functionBody(source('code/objtype.cpp'), 'BuildingClass * ObjectTypeClass::Who_Can_Build_Me(bool intheory, bool needsnopower, bool legal, HouseClass * house) const'),
+		functionBody(source('code/objtype.cpp'), 'bool ObjectTypeClass::Can_Be_Built_At(BuildingClass const * building, bool needsnopower, bool legal, HouseClass const * house) const'),
 		/Rule->BuildConst\.Is_In_List\(building->Class\)/,
 		'every listed yard produces only for the country its record names',
 	);
@@ -817,12 +971,26 @@ test('A computer player draws a country from the lobby roster', () => {
 });
 
 test('A lobby side entry carries its country', () => {
-	const netdlg = source('code/netdlg2.cpp');
+	const lobby = source('code/ui/screens/netlobby/uinetlobbydlg.cpp');
 
-	assertOrdered(functionBody(netdlg, 'void Fill_Country_Box(HWND combo)'), ['CB_INSERTSTRING', 'CB_SETITEMDATA'], 'each entry carries its country');
-	assert.match(functionBody(netdlg, 'int Country_From_Box(HWND combo)'), /CB_GETITEMDATA/, 'the selection is read back through its country');
-	assert.doesNotMatch(netdlg, /CB_SETCURSEL, Session\.House/, 'no box is positioned by a country index');
-	assert.doesNotMatch(source('code/skirmish.cpp'), /Session\.House = ComboBox_GetCurSel/, 'the skirmish box stores a country, not a position');
+	assertOrdered(functionBody(lobby, 'void UINetLobbyEngineServiceClass::Read(UINetLobbyState & state)'), [
+		'house->IsMultiplay',
+		'option.Value = index;',
+		'if (index == Session.House) {',
+	], 'each entry carries its country and the list is positioned by the country it holds');
+	assertOrdered(functionBody(lobby, 'void UINetLobbyEngineServiceClass::Set_Side(int index)'), [
+		'Net2Country_At(index)',
+		'Session.House = country;',
+	], 'the selection is read back through its country');
+	assertOrdered(functionBody(source('code/netdlg2.cpp'), 'int Net2Country_At(int index)'), [
+		'HouseTypes[country]->IsMultiplay',
+		'return(country);',
+	], 'a row names the country standing at it');
+	assert.match(
+		functionBody(source('code/ui/screens/skirmish/uiskirmishdlg.cpp'), 'static void Remember_Preferences(UISkirmishState const & state)'),
+		/Session\.House = state\.Sides\[state\.Side\]\.Value;/,
+		'the skirmish list stores a country, not a position',
+	);
 });
 
 test('A side is declared in the side list alone', () => {
@@ -1005,5 +1173,553 @@ test('The deployment names the files the game reads', () => {
 		functionBody(source('code/addon.cpp'), 'void Detect_Addons(void)'),
 		/CCFileClass\(DeploymentConfig\.RulesExpansionFile\.c_str\(\)\)\.Is_Available\(\)/,
 		'the expansion is looked for under the name the deployment gives it',
+	);
+});
+
+test('Every building placement path asks whether the overlay may be built over', () => {
+	assert.match(
+		source('code/overtype.h'),
+		/bool Can_Build_Over\(void\) const \{return\(IsBuildableOver && !IsWall\);\}/,
+		'a wall is refused before the key is consulted',
+	);
+
+	assert.match(
+		functionBody(source('code/cell.cpp'), 'bool CellClass::Is_Clear_To_Build(SpeedType loco, BuildingTypeClass * what, HouseClass * who) const'),
+		/OverlayTypes\[Overlay\]->Can_Build_Over\(\)/,
+		'a player placing a building asks it',
+	);
+
+	assert.match(
+		functionBody(source('code/builtype.cpp'), 'int BuildingTypeClass::Flush_For_Placement(Cell const & cell, HouseClass * house) const'),
+		/OverlayTypes\[cptr\.Overlay\]->Can_Build_Over\(\)/,
+		'a computer house laying its base asks it',
+	);
+
+	assert.match(
+		functionBody(source('code/house.cpp'), 'void HouseClass::AI_Build_Wall(void)'),
+		/OverlayTypes\[cellptr->Overlay\]->Can_Build_Over\(\)/,
+		'a computer house running a wall line asks it',
+	);
+});
+
+test('The sidebar offers only a type some factory can build', () => {
+	const buildables = functionBody(source('code/building.cpp'), 'void BuildingClass::Update_Buildables(void)');
+
+	assert.match(
+		buildables,
+		/auto should_be_on_sidebar = \[this\]\(ObjectTypeClass const \* type\) \{\s*return\(PlayerPtr->Can_Build\(type, false, true\) != 0\s*&& \(type->Can_Be_Built_At\(this, false, false, PlayerPtr\) \|\| type->Who_Can_Build_Me\(true, false, false, PlayerPtr\) != NULL\)\);/,
+		'a cameo needs a buildable type and a factory both, and a build-limited type still counts',
+	);
+
+	assert.equal(
+		buildables.match(/should_be_on_sidebar\(/g)?.length,
+		4,
+		'all four type loops ask through the one test',
+	);
+
+	assert.equal(
+		buildables.match(/Can_Build\(/g)?.length,
+		1,
+		'and none of them asks a second way',
+	);
+});
+
+test('The sidebar sweep re-checks buildability behind its rules key', () => {
+	const recalc = functionBody(source('code/sidebar.cpp'), 'bool SidebarClass::StripClass::Recalc(void)');
+
+	assert.match(
+		recalc,
+		/ok = who != NULL && who->House->Can_Build\(tech, !Rule->IsRecheckPrerequisites, true\);/,
+		'the key supplies the forced argument, and the result stays a truth test so a build-limited cameo is kept',
+	);
+
+	assert.match(
+		recalc,
+		/EventClass::ABANDON_COUNT/,
+		'the abandon travels as an event, because the sweep runs for the local player alone',
+	);
+});
+
+test('A harvester let out of a factory goes to work', () => {
+	const percell = functionBody(source('code/unit.cpp'), 'void UnitClass::Per_Cell_Process(PCPType why)');
+
+	assertOrdered(
+		percell,
+		['} else if (Class->IsToHarvest || Class->IsToVeinHarvest) {', 'Assign_Mission(MISSION_HARVEST);'],
+		'the capability alone decides it, so an armed harvester is let out to work too',
+	);
+
+	const idle = functionBody(source('code/unit.cpp'), 'bool UnitClass::Enter_Idle_Mode(bool initial, bool resume_waypoint)');
+
+	assertOrdered(
+		idle,
+		['if (Class->IsToHarvest || Class->IsToVeinHarvest) {', '} else if (!Is_Weapon_Equipped()) {'],
+		'the idle fork asks what the vehicle does before it asks what it carries',
+	);
+
+	assert.equal(
+		idle.match(/Idle_Guard_Mission\(\)/g)?.length,
+		2,
+		'both the harvester refusal and the armed branch take the same guard decision',
+	);
+});
+
+test('The docking bay search rates candidates in a width that cannot overflow', () => {
+	const search = functionBody(source('code/techno.cpp'), 'BuildingClass * TechnoClass::Find_Docking_Bay(BuildingTypeClass const * b, bool friendly, bool unoccupied) const');
+
+	assert.doesNotMatch(
+		search,
+		/Relative_Distance\(/,
+		'the int-wide squared distance is gone, because it turns negative past about 181 cells',
+	);
+
+	assertOrdered(
+		search,
+		['long long bestval = -1;', 'long long dist = (dx * dx) + (dy * dy);', 'if (bestval == -1 || dist < bestval'],
+		'the running best and each candidate are both held wide enough for any map',
+	);
+});
+
+test('A harvester weighs every dock type and the queue at each', () => {
+	const harvest = functionBody(source('code/unit.cpp'), 'int UnitClass::Do_MISSION_HARVEST(void)');
+
+	assertOrdered(
+		harvest,
+		['Find_Docking_Bay(Class->Dock, false, false, &freedist);', 'ScenarioInit++;', 'Find_Docking_Bay(Class->Dock, false, false, &anydist);', 'ScenarioInit--;'],
+		'the whole list is weighed twice over, once for free bays and once counting reserved ones',
+	);
+
+	assert.match(
+		harvest,
+		/freedist > anydist \+ Queue_Wait_Distance\(anybay\)/,
+		'and a far free bay only wins by more than the wait at the near one is worth',
+	);
+
+	const wait = functionBody(source('code/unit.cpp'), 'int UnitClass::Queue_Wait_Distance(BuildingClass * dock) const');
+
+	assertOrdered(
+		wait,
+		['dock->Contact_With_Whom()', 'waiter->QueuedDock == dock', 'DriveLocomotionClass::Travel_Leptons(Class->MaxSpeed, frames)'],
+		'the wait is the load being handed over plus the loads queued behind it, priced as distance',
+	);
+
+	const unit = source('code/unit.cpp');
+
+	assertOrdered(
+		unit,
+		['stream.Serialize(QueuedDock);', 'crc(QueuedDock->Fetch_ID());', 'if (QueuedDock == target) {'],
+		'the place in line survives a save, joins the checksum, and drops when the building does',
+	);
+});
+
+test('A free unit may come from any of the three object heaps', () => {
+	const lookup = functionBody(
+		source('code/ccini.cpp'),
+		'TechnoTypeClass const * CCINIClass::Get_Foot_Type(char const * section, char const * entry, TechnoTypeClass const * defvalue) const',
+	);
+
+	assertOrdered(
+		lookup,
+		['UnitTypeClass::From_Name(buffer)', 'InfantryTypeClass::From_Name(buffer)', 'AircraftTypeClass::From_Name(buffer)'],
+		'a name is looked for among vehicles first, then infantry, then aircraft',
+	);
+
+	assert.doesNotMatch(
+		lookup,
+		/Find_Or_Make/,
+		'and a name in none of them invents no type',
+	);
+
+	const grant = functionBody(source('code/building.cpp'), 'void BuildingClass::Place_Free_Unit(void)');
+
+	assertOrdered(
+		grant,
+		[
+			'type->Fetch_RTTI() == RTTI_AIRCRAFTTYPE',
+			'Place_Free_Aircraft(static_cast<AircraftTypeClass const *>(type))',
+			'type->Fetch_RTTI() == RTTI_INFANTRYTYPE',
+			'new InfantryClass(static_cast<InfantryTypeClass const *>(type), House)',
+			'new UnitClass(unittype, House)',
+		],
+		'each heap builds the object its own class calls for',
+	);
+
+	assertOrdered(
+		grant,
+		['harvests = unittype->IsToHarvest || unittype->IsToVeinHarvest;', 'if (harvests) {', 'Assign_Mission(MISSION_HARVEST)', 'Enter_Idle_Mode(true)'],
+		'and only a vehicle that harvests is sent harvesting',
+	);
+
+	const padded = functionBody(source('code/builtype.cpp'), 'bool BuildingTypeClass::Is_Pad_Aircraft_Dock(void) const');
+
+	assert.match(
+		padded,
+		/if \(FreeUnit != NULL && FreeUnit->Fetch_RTTI\(\) == RTTI_AIRCRAFTTYPE\) \{/,
+		'a free aircraft is priced in place of the pad aircraft',
+	);
+
+	const opening = functionBody(source('code/building.cpp'), 'void BuildingClass::Grand_Opening(bool captured)');
+
+	assert.match(
+		opening,
+		/bool const gives_aircraft = Class->FreeUnit != NULL && Class->FreeUnit->Fetch_RTTI\(\) == RTTI_AIRCRAFTTYPE;\s*if \([^)]*Rule->PadAircraft\.Count\(\) > 0 && !gives_aircraft\)/,
+		'and handed over in place of it, even when the free aircraft could not be placed and was refunded',
+	);
+
+	assert.match(
+		opening,
+		/Place_Free_Aircraft\(Rule->PadAircraft\[0\]\)/,
+		'both grants stand an aircraft on the structure the one way',
+	);
+});
+
+test('A rally point is set with the plain click', () => {
+	const action = functionBody(
+		source('code/techno.cpp'),
+		'ActionType TechnoClass::What_Action(Cell const & cell, bool check_fog, bool disallow_force) const',
+	);
+
+	assertOrdered(
+		action,
+		['if (Is_Move_Override()) {', 'if (!disallow_force && altdown == Options.AltToRally) {', 'return(ACTION_RALLY_TO_POINT);'],
+		'the key the rally point answers to comes from the setting rather than from the force-move key alone',
+	);
+
+	const clicked = functionBody(
+		source('code/building.cpp'),
+		'ActionType BuildingClass::What_Action(ObjectClass const * object, bool disallow_force) const',
+	);
+
+	assertOrdered(
+		clicked,
+		['} else if (Is_Move_Override()) {', 'if (altdown != Options.AltToRally) {'],
+		'a click on an object asks the same question of the same predicate',
+	);
+
+	assert.match(
+		functionBody(source('code/options.cpp'), 'void OptionsClass::Load_Settings(void)'),
+		/AltToRally = ConfigINI\.Get_Bool\("Options", "AltToRally", AltToRally\);/,
+		'and the player owns it in their own settings file',
+	);
+});
+
+test('An EM pulse can be refused by type', () => {
+	const read = functionBody(source('code/techtype.cpp'), 'bool TechnoTypeClass::Read_INI(CCINIClass const & ini)');
+
+	assertOrdered(
+		read,
+		['if (ini.Is_Present(Name(), "ImmuneToEMP")) {', 'IsImmuneToEMP = ini.Get_Bool(Name(), "ImmuneToEMP", false);'],
+		'an absent entry leaves the answer an earlier layer gave',
+	);
+
+	assert.match(
+		functionBody(source('code/techtype.cpp'), 'bool TechnoTypeClass::Is_Immune_To_EMP(void) const'),
+		/return\(IsImmuneToEMP\.value_or\(false\)\);/,
+		'a type that has been told nothing is not immune',
+	);
+
+	for (const [path, signature] of [
+		['code/builtype.cpp', 'bool BuildingTypeClass::Is_Immune_To_EMP(void) const'],
+		['code/unittype.cpp', 'bool UnitTypeClass::Is_Immune_To_EMP(void) const'],
+	]) {
+		assert.match(
+			functionBody(source(path), signature),
+			/return\(IsImmuneToEMP\.value_or\(IsCoreDefender\)\);/,
+			`${signature} takes its default from the core defender flag`,
+		);
+	}
+
+	const pulse = functionBody(source('code/empulse.cpp'), 'void EMPulseClass::Create(TechnoClass * source)');
+
+	assertOrdered(
+		pulse,
+		[
+			'if (!aircraft->Class->Is_Immune_To_EMP()) {',
+			'if (!foot->TClass->Is_Immune_To_EMP()) {',
+			'if (!building->Class->Is_Immune_To_EMP()) {',
+			'bool immune = techno->TClass->Is_Immune_To_EMP();',
+		],
+		'every effect a pulse has asks the same question',
+	);
+
+	assertOrdered(
+		pulse,
+		['if (caught) {', 'if (immune) {', 'techno->Spring_Tag(TEVENT_PARALYZED, techno, CELL_NONE, false, source);'],
+		'and an immune object springs its trigger in place of the stun',
+	);
+});
+
+test('A type can set how many pips its row has', () => {
+	const techtype = source('code/techtype.cpp');
+
+	assertOrdered(
+		functionBody(techtype, 'bool TechnoTypeClass::Read_INI(CCINIClass const & ini)'),
+		['if (ini.Is_Present(Name(), "MaxPips")) {', 'MaxPips = std::max(ini.Get_Int(Name(), "MaxPips", 0), 0);'],
+		'an absent entry leaves the length an earlier layer gave',
+	);
+
+	assertOrdered(
+		functionBody(techtype, 'int TechnoTypeClass::Max_Pips(void) const'),
+		[
+			'return(MaxPips.value_or(10));',
+			'return(std::min(MaxAmmo, MaxPips.value_or(5)));',
+			'return(MaxPips.value_or(5));',
+			'return(std::min(MaxPassengers, MaxPips.value_or(5)));',
+			'return(MaxPips.value_or(8));',
+		],
+		'every pip scale keeps its own length as the default',
+	);
+
+	assert.match(
+		functionBody(source('code/builtype.cpp'), 'int BuildingTypeClass::Max_Pips(void) const'),
+		/int maxpips = MaxPips\.value_or\(\(Width\(\) \* ISO_TILE_PIXEL_W\) \/ 8\);/,
+		'and a structure keeps the allowance it sizes from its own footprint',
+	);
+});
+
+test('A repairing vehicle keeps its own deploy cursor', () => {
+	const action = functionBody(
+		source('code/unit.cpp'),
+		'ActionType UnitClass::What_Action(ObjectClass const * object, bool disallow_force) const',
+	);
+
+	assertOrdered(
+		action,
+		[
+			'bool deploying = object == this && (action == ACTION_SELF || action == ACTION_NO_DEPLOY);',
+			'if (Combat_Damage() < 0 && House->Is_Player_Control()) {',
+			'} else if ( object->RTTI != RTTI_BUILDING && !deploying ) {',
+		],
+		'the repair rules run after the deploy rules and must not overwrite them',
+	);
+});
+
+test('Both halves of the drag gesture read the same system setting', () => {
+	assert.match(
+		functionBody(source('code/display.cpp'), 'void DisplayClass::Mouse_Left_Held(Point2D const & point)'),
+		/if \(abs\(travel\.X\) > GetSystemMetrics\(SM_CXDRAG\) \|\| abs\(travel\.Y\) > GetSystemMetrics\(SM_CYDRAG\)\) \{/,
+		'a band starts at the distance the system calls a drag',
+	);
+
+	assert.match(
+		functionBody(source('code/scroll.cpp'), 'void ScrollClass::Scroll_Coast(Point2D const & point)'),
+		/GetSystemMetrics\(SM_CXDRAG\) \* 2/,
+		'and coast scrolling keeps reading the same setting, doubled',
+	);
+});
+
+test('A solo game may keep running while the window is away', () => {
+	assert.match(
+		functionBody(source('code/options.cpp'), 'void OptionsClass::Load_Settings(void)'),
+		/SimulateWhileUnfocused = ConfigINI\.Get_Bool\("Options", "SimulateWhileUnfocused", SimulateWhileUnfocused\);/,
+		'the player owns it in their own settings file',
+	);
+
+	assertOrdered(
+		functionBody(source('code/mainloop.cpp'), 'static void Check_For_Focus_Loss(void)'),
+		[
+			'bool parks = (Session.Type == GAME_NORMAL || Session.Type == GAME_SKIRMISH) && !Options.SimulateWhileUnfocused;',
+			'while (!GameInFocus) {',
+			'if (!parks) {',
+			'break;',
+			'Sleep(10);',
+		],
+		'and only a session that parks waits for the focus to come back',
+	);
+
+	assert.equal(
+		(source('code/mainloop.cpp').match(/while \(!GameInFocus\)/g) ?? []).length,
+		1,
+		'the rule is written once, not once per copy of the loop',
+	);
+});
+
+test('A game played alone is paced by its own speed table', () => {
+	const mainloop = source('code/mainloop.cpp');
+
+	assert.match(
+		functionBody(definitionFrom(mainloop, 'static int Target_Frame_Rate(void)'), 'static int Target_Frame_Rate(void)'),
+		/NetTiming::Solo_Game_Speed_Frame_Rate\(Options\.GameSpeed\)/,
+		'a solo game takes its rate from the single-player table',
+	);
+	assert.doesNotMatch(
+		functionBody(definitionFrom(mainloop, 'bool Main_Loop(void)'), 'bool Main_Loop(void)'),
+		/FrameTimer\s*=\s*Options\.GameSpeed/,
+		'the speed setting is a frame rate, not a count of timer ticks',
+	);
+	assert.match(
+		functionBody(definitionFrom(mainloop, 'bool Main_Loop(void)'), 'bool Main_Loop(void)'),
+		/FrameTimer = pacer\.Next_Wait\(Target_Frame_Rate\(\)\);/,
+		'and each frame waits whatever keeps the average on that rate',
+	);
+	assert.doesNotMatch(
+		functionBody(definitionFrom(mainloop, 'void Sync_Delay(void)'), 'void Sync_Delay(void)'),
+		/GAME_NORMAL|GAME_SKIRMISH/,
+		'one wait serves every kind of game',
+	);
+	assert.doesNotMatch(
+		source('code/queue.cpp'),
+		/static int Game_Speed_Frame_Rate/,
+		'and the table is kept in one place',
+	);
+	assert.doesNotMatch(source('code/_timer.h'), /NetFrameTimer/, 'one timer holds every frame to its rate');
+	assert.doesNotMatch(
+		source('code/mstimer.cpp'),
+		/MillisecondSystemTimerClass::MillisecondSystemTimerClass/,
+		'and arming it each frame asks Windows for nothing',
+	);
+	assert.match(
+		source('code/mstimer.cpp'),
+		/ControlMask = PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;/,
+		'and the millisecond request holds while the window is out of sight',
+	);
+	assertOrdered(functionBody(definitionFrom(mainloop, 'void Sync_Delay(void)'), 'void Sync_Delay(void)'), [
+		'static CDTimerClass<MillisecondSystemTimerClass> fps_timer;',
+		'LastFramesPerSecond = FramesThisSecond;',
+		'fps_timer = 1000;',
+	], 'frames are counted over a second of the millisecond clock, not sixty ticks of the old one');
+});
+
+test('An insignificant unit dies without announcing it', () => {
+	assert.equal(
+		functionBody(source('code/foot.cpp'), 'void FootClass::Death_Announcement(TechnoClass const * ) const')
+			.replace(/[\s]+/g, ' ')
+			.trim(),
+		'if (IsOwnedByPlayer && !TClass->IsInsignificant) { LastRadarEventCell = Destination_Coord().As_Cell(); Speak(VOX_UNIT_LOST); }',
+		'the voice and the remembered cell are refused together',
+	);
+
+	assert.equal(
+		(source('code/foot.cpp').match(/Speak\(VOX_UNIT_LOST\)/g) ?? []).length,
+		1,
+		'and the announcement has one site, inherited by every kind of foot object',
+	);
+});
+
+test('A Tiberium overlay is chosen inside the type that owns it', () => {
+	const cell = source('code/cell.cpp');
+	const signature = 'static OverlayType Tiberium_Overlay_Here(CellClass const & cell, TiberiumClass const & tiberium)';
+	const overlay = functionBody(definitionFrom(cell, signature), signature);
+
+	assertOrdered(
+		overlay,
+		[
+			'if (cell.Ramp != RAMP_NONE) {',
+			'if (cell.Ramp > RAMP_SOUTH || tiberium.RampVariety < 4) {',
+			'return(OVERLAY_NONE);',
+			'tiberium.RampVariety / 4',
+		],
+		'the slope branch refuses a slope the set has no overlay for before it divides by their count',
+	);
+
+	assert.match(
+		functionBody(cell, 'void CellClass::Cell_Color(RGBClass & lowcolor, RGBClass & highcolor) const'),
+		/Tiberium_Overlay_Here\(\*this, \*tiberium\)/,
+		'and the radar picks its color by the same rule',
+	);
+
+	assertOrdered(
+		functionBody(cell, 'void CellClass::Remove_Steep_Slope_Tiberium(void)'),
+		['OverlayTypes[Overlay]->IsTiberium', 'Ramp_Type(SubTile) > RAMP_SOUTH', 'Overlay = OVERLAY_NONE;'],
+		'and Tiberium a map puts on a steep slope is cleared',
+	);
+
+	assertOrdered(
+		functionBody(source('code/scenario.cpp'), 'ScenarioState Read_Scenario_INI(CCINIClass const & ini, bool is_mapgen)'),
+		[
+			'OverlayClass::Read_INI(ini);',
+			'cptr->Remove_Steep_Slope_Tiberium();',
+			'cptr->Recalc_Attributes();',
+			'TiberiumClass::Init_Tiberium_Growth_System();',
+		],
+		'once, as the map loads, before the growth and spread lists are built',
+	);
+
+	assert.doesNotMatch(
+		functionBody(cell, 'void CellClass::Recalc_Attributes(int cell_height)'),
+		/Ramp_Type\(SubTile\) > RAMP_SOUTH/,
+		'and a cell recalculated during play keeps its overlay',
+	);
+
+	assert.match(
+		functionBody(source('code/cell.cpp'), 'bool CellClass::Place_Tiberium(TiberiumType tib, int data)'),
+		/HeapID \+ Random_Pick\(0, tiberium->Variety - 1\)/,
+		'and a bare cell germinates inside the flat overlays the type owns',
+	);
+});
+
+test('Every Tiberium overlay set is read with twelve growth stages', () => {
+	const read = functionBody(
+		source('code/tiberium.cpp'),
+		'bool TiberiumClass::Read_INI(CCINIClass const & ini)',
+	);
+
+	assert.equal(
+		(read.match(/FrameCount = 12;/g) ?? []).length,
+		4,
+		'each arm of the Image switch carries the same count',
+	);
+
+	assert.equal(
+		(read.match(/FrameCount = (?!12;)/g) ?? []).length,
+		0,
+		'and no arm carries another',
+	);
+
+	assertOrdered(
+		read,
+		[
+			'case 2:',
+			'Overlay = OverlayTypes[OVERLAY_LARGE_TIBERIUM01];',
+			'RampVariety = 0;',
+			'FrameCount = 12;',
+			'case 3:',
+		],
+		'the large-Tiberium arm names its own overlay and no slope overlays, whatever an earlier read set',
+	);
+});
+
+test('A screen capture is named in the folder it is kept in', () => {
+	const capture = functionBody(
+		source('code/init.cpp'),
+		'class ScreenCaptureCommandClass',
+	);
+
+	assertOrdered(
+		capture,
+		[
+			'sprintf(fname, "SCRN%04d.png", index);',
+			'path = Screenshot_Name(fname);',
+			'} while (RawFileClass(path.c_str()).Is_Available());',
+			'RawFileClass file(path.c_str());',
+		],
+		'the free number is looked for in that folder alone, and the file is opened by name',
+	);
+
+	for (const [pattern, why] of [
+		[/CCFileClass/, 'nothing consults the read path or the archives for it'],
+		[/GetFileAttributes/, 'and the file layer is asked rather than the platform'],
+	]) {
+		assert.doesNotMatch(capture, pattern, why);
+	}
+
+	assertOrdered(
+		capture,
+		[
+			'surface->Get_Buffer()',
+			'Write_PNG_File(file, surface->Get_Width(), surface->Get_Height(), surface->Stride(), pixels)',
+			'file.Delete();',
+		],
+		'the frame as presented is written out whole, and a failed one is not left behind',
+	);
+
+	for (const gone of [/Blit_From/, /Hide_Mouse/, /Show_Mouse/, /HiddenSurface/]) {
+		assert.doesNotMatch(capture, gone, `a capture no longer needs ${gone.source}`);
+	}
+
+	assertOrdered(
+		functionBody(source('code/gamedirs.cpp'), 'std::string Screenshot_Name(char const * filename)'),
+		['Own_Folder_Name(ScreenshotsFolder, filename)'],
+		'and the folder is made on every request, as it is for a saved game',
 	);
 });

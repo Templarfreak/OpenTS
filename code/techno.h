@@ -125,7 +125,7 @@ class TechnoClass :	public RadioClass,
 		**	This is a list of bits of which houses are spying on this building,
 		**	if in fact this is a building.
 		*/
-		unsigned SpiedBy;
+		HouseSet SpiedBy;
 
 		/*
 		**	If this object is part of a pseudo-team that the player is managing, then
@@ -383,12 +383,7 @@ class TechnoClass :	public RadioClass,
 		**	or not. This is because the state of discovery can often control how the object
 		**	behaves. In addition, this fact is used in radar and user I/O processing.
 		*/
-		bool IsDiscoveredByPlayer;
-
-		/*
-		**	This is used to control the computer recognizing this object.
-		*/
-		bool IsDiscoveredByComputer;
+		HouseSet DiscoveredBy;
 
 		/*
 		**	Some game objects can be of the "lemon" variety. This means that they take damage
@@ -472,7 +467,7 @@ class TechnoClass :	public RadioClass,
 		 * object. A house that has limpeted an object sees whatever that object sees, so the
 		 * drone serves as a spy that travels along with its victim.
 		 */
-		unsigned LimpetType;
+		HouseSet LimpetType;
 
 		/*
 		 * This is the speed penalty imposed by an attached limpet drone, expressed as a
@@ -528,7 +523,8 @@ class TechnoClass :	public RadioClass,
 		int Get_Z_Fudge_Cliff(void) const;
 		virtual ZGradientType Get_Z_Gradient(void) const {return(ZGRAD_90DEG);}
 
-		virtual BuildingClass * Find_Docking_Bay(BuildingTypeClass const * b, bool friendly = false, bool evenoccupied = false) const;
+		virtual BuildingClass * Find_Docking_Bay(BuildingTypeClass const * b, bool friendly = false, bool unoccupied = false) const;
+		BuildingClass * Find_Docking_Bay(TypeList<BuildingTypeClass const *> const & list, bool friendly = false, bool unoccupied = false, int * distance = NULL) const;
 		virtual Cell Find_Exit_Cell(TechnoClass const * techno) const;
 		virtual Coord Turret_Coord(int which=0) const;
 		virtual FacingType Desired_Load_Dir(ObjectClass * , Cell & moveto) const;
@@ -678,6 +674,7 @@ class TechnoClass :	public RadioClass,
 		virtual void Draw_Insignia(Point2D const & bottomleft, Point2D const & center, Rect const & rect) const;
 		virtual void Draw_Text_Overlay(Point2D const & point1, Point2D const & point2, Rect const & rect) const;
 		virtual void Hidden(void) override;
+		void Forget_Human_Discovery(void);
 		virtual bool Mark(MarkType mark=MARK_CHANGE) override;
 		virtual int Exit_Object(TechnoClass *) override;
 		virtual void Do_Uncloak(bool silent=false);

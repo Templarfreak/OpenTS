@@ -124,6 +124,7 @@
 #include "combat.h"
 #include "conquer.h"
 #include "draw.h"
+#include "drive.h"
 #include "fog.h"
 #include "house.h"
 #include "houstype.h"
@@ -214,6 +215,7 @@ UnitClass::UnitClass(UnitTypeClass const * type, HouseClass * house) :
 	VisceroidFacing(FACING_NONE),
 	DeathCounter(-1),
 	FollowingMe(NULL),
+	QueuedDock(NULL),
 	IsFollowing(false),
 	IsCompositingToEightBitSurface(false),
 	Charge(0)
@@ -1580,12 +1582,7 @@ ResultType UnitClass::Take_Damage(int & damage, int distance, WarheadTypeClass c
 					/*
 					**	Find nearby refinery and head to it?
 					*/
-					for (int i = 0; i < Class->Dock.Count(); i++) {
-						building = Find_Docking_Bay(Class->Dock[i], false);
-						if (building != NULL) {
-							break;
-						}
-					}
+					building = Find_Docking_Bay(Class->Dock, false);
 
 					/*
 					**	Since the refinery said it was ok to load, establish radio
@@ -1684,6 +1681,18 @@ bool UnitClass::Active_Click_With(ActionType action, Cell const & cell, bool is_
 }
 
 
+MissionType UnitClass::Idle_Guard_Mission(void) const
+{
+	if (!Is_Weapon_Equipped()) {
+		return(MISSION_GUARD);
+	}
+	if (House->IQ < Rule->IQGuardArea && !Has_Ability(ABILITY_GUARD_AREA) || Team != NULL) {
+		return(MISSION_GUARD);
+	}
+	return(MISSION_GUARD_AREA);
+}
+
+
 /***********************************************************************************************
  * UnitClass::Enter_Idle_Mode -- Unit enters idle mode state.                                  *
  *                                                                                             *
@@ -1724,30 +1733,28 @@ bool UnitClass::Enter_Idle_Mode(bool initial, bool resume_waypoint)
 	} else {
 
 		if (!Class->IsMobileEMP || Mission != MISSION_UNLOAD) {
-			if (!Is_Weapon_Equipped()) {
-				if (Class->IsToHarvest || Class->IsToVeinHarvest) {
-					if (!In_Radio_Contact() && Mission != MISSION_HARVEST && MissionQueue != MISSION_HARVEST) {
-						if (initial || !House->Is_Human_Player() || Map[Get_Coord()].Land_Type() == (Class->IsToHarvest ? LAND_TIBERIUM : LAND_WEEDS)) {
-							order = MISSION_HARVEST;
-						} else {
-							order = MISSION_GUARD;
-						}
+			if (Class->IsToHarvest || Class->IsToVeinHarvest) {
+				if (!In_Radio_Contact() && Mission != MISSION_HARVEST && MissionQueue != MISSION_HARVEST) {
+					if (initial || !House->Is_Human_Player() || Map[Get_Coord()].Land_Type() == (Class->IsToHarvest ? LAND_TIBERIUM : LAND_WEEDS)) {
+						order = MISSION_HARVEST;
+					} else {
+						order = Idle_Guard_Mission();
+					}
+					Assign_Target(NULL);
+					Assign_Destination(NULL);
+				} else {
+					return(res);
+				}
+			} else if (!Is_Weapon_Equipped()) {
+				if (IsALoaner && Class->Max_Passengers() > 0 && Cargo.Is_Something_Attached() && Team == NULL) {
+					order = MISSION_UNLOAD;
+				} else {
+					if (!IsDeploying && (CurrentMission != MISSION_UNLOAD || Class->DeploysInto == NULL) && CurrentMission != MISSION_GUARD_AREA) {
+						order = MISSION_GUARD;
 						Assign_Target(NULL);
 						Assign_Destination(NULL);
 					} else {
 						return(res);
-					}
-				} else {
-					if (IsALoaner && Class->Max_Passengers() > 0 && Cargo.Is_Something_Attached() && Team == NULL) {
-						order = MISSION_UNLOAD;
-					} else {
-						if (!IsDeploying && (CurrentMission != MISSION_UNLOAD || Class->DeploysInto == NULL) && CurrentMission != MISSION_GUARD_AREA) {
-							order = MISSION_GUARD;
-							Assign_Target(NULL);
-							Assign_Destination(NULL);
-						} else {
-							return(res);
-						}
 					}
 				}
 			} else {
@@ -1756,11 +1763,7 @@ bool UnitClass::Enter_Idle_Mode(bool initial, bool resume_waypoint)
 					return(res);
 				}
 
-				if (House->IQ < Rule->IQGuardArea && !Has_Ability(ABILITY_GUARD_AREA) || Team != NULL) {
-					order = MISSION_GUARD;
-				} else {
-					order = MISSION_GUARD_AREA;
-				}
+				order = Idle_Guard_Mission();
 			}
 		} else {
 			return(res);
@@ -2208,6 +2211,9 @@ void UnitClass::Per_Cell_Process(PCPType why)
 							if (techno != NULL) {
 								Transmit_Message(RADIO_DOCKING, techno);
 							}
+						} else if (Class->IsToHarvest || Class->IsToVeinHarvest) {
+							// Only a weapons factory or a repair bay answers RADIO_RUN_AWAY.
+							Assign_Mission(MISSION_HARVEST);
 						} else {
 							BuildingClass * building = dynamic_cast<BuildingClass *>(contact);
 							if (!House->Is_Human_Player() && building != NULL && building->Class->IsWeaponsFactory) {
@@ -3366,6 +3372,40 @@ int UnitClass::Do_MISSION_UNLOAD(void)
 }
 
 
+/// <summary>
+/// The leptons this harvester could drive in the time it would wait at the dock: the load being
+/// unloaded plus every load queued there by harvesters naming it in QueuedDock.
+/// </summary>
+int UnitClass::Queue_Wait_Distance(BuildingClass * dock) const
+{
+	int const perunit = int(Rule->HarvesterDumpRate * TICKS_PER_MINUTE);
+	int frames = 0;
+
+	TechnoClass * holder = dock->Contact_With_Whom();
+	if (holder != NULL && holder->RTTI == RTTI_UNIT) {
+		UnitClass * incumbent = (UnitClass *)holder;
+		frames = incumbent->Storage.Get_Total_Amount() * perunit;
+		if (incumbent->IsDumping) {
+			frames -= incumbent->Fetch_Stage();
+		} else {
+			frames += DriveLocomotionClass::Travel_Frames(incumbent->Class->MaxSpeed, incumbent->Distance(dock));
+		}
+	}
+
+	for (int index = 0; index < Units.Count(); index++) {
+		UnitClass * waiter = Units[index];
+		if (waiter != this && waiter->QueuedDock == dock && waiter->Mission == MISSION_HARVEST) {
+			frames += waiter->Storage.Get_Total_Amount() * perunit;
+		}
+	}
+
+	if (frames <= 0) {
+		return(0);
+	}
+	return(DriveLocomotionClass::Travel_Leptons(Class->MaxSpeed, frames));
+}
+
+
 /***********************************************************************************************
  * UnitClass::Mission_Harvest -- Handles the harvesting process used by harvesters.            *
  *                                                                                             *
@@ -3401,6 +3441,11 @@ int UnitClass::Do_MISSION_HARVEST(void)
 	**	allows combat units to act "brain dead".
 	*/
 	if (!Class->IsToHarvest && !Class->IsToVeinHarvest) return(TICKS_PER_SECOND*30);
+
+	// A harvester holds a place in line only while it is still looking for one.
+	if (Status != FINDHOME) {
+		QueuedDock = NULL;
+	}
 
 	if (Class->Dock.Count() == 0 && !House->Is_Human_Player()) {
 		Assign_Mission(MISSION_GUARD);
@@ -3548,14 +3593,23 @@ int UnitClass::Do_MISSION_HARVEST(void)
 				/*
 				**	Find nearby refinery and head to it?
 				*/
-				BuildingClass * nearest = NULL;
+				int freedist = 0;
+				int anydist = 0;
+				BuildingClass * freebay = Find_Docking_Bay(Class->Dock, false, false, &freedist);
 
-				for (i = 0; i < Class->Dock.Count(); i++) {
-					nearest = Find_Docking_Bay(Class->Dock[i], false);
-					if (nearest != NULL) {
-						break;
-					}
+				// Under ScenarioInit a busy refinery does not refuse, so this sweep sees every bay.
+				ScenarioInit++;
+				BuildingClass * anybay = Find_Docking_Bay(Class->Dock, false, false, &anydist);
+				ScenarioInit--;
+
+				BuildingClass * nearest = freebay;
+				if (freebay != NULL && anybay != NULL && freebay != anybay &&
+					freedist > anydist + Queue_Wait_Distance(anybay)) {
+
+					nearest = NULL;
 				}
+
+				QueuedDock = NULL;
 
 				/*
 				**	Since the refinery said it was ok to load, establish radio
@@ -3566,25 +3620,17 @@ int UnitClass::Do_MISSION_HARVEST(void)
 ///					if (nearest->House == PlayerPtr && (PlayerPtr->Capacity - PlayerPtr->Tiberium) < 300 && PlayerPtr->Capacity > 500 && (PlayerPtr->ActiveBScan & (STRUCTF_REFINERY | STRUCTF_CONST))) {
 ///						Speak(VOX_NEED_MO_CAPACITY);
 ///					}
-				} else {
-					ScenarioInit++;
-					nearest = NULL;
-					for (i = 0; i < Class->Dock.Count(); i++) {
-						nearest = Find_Docking_Bay(Class->Dock[i], false);
-						if (nearest != NULL) {
-							break;
-						}
-					}
-					ScenarioInit--;
-					if (nearest != NULL) {
-						if (Distance_To(nearest) > 3 * CELL_LEPTON) {
-							Cell cell = Cell(nearest->Get_Coord());
-							Cell nearby = Map.Nearby_Location(Cell(nearest->Get_Coord()), SPEED_WHEEL, Map.Get_Cell_Zone(cell, Class->MZone), Class->MZone, false, Point2D(1, 1), false, true, false, false);
-							if (nearby != CELL_NONE) {
-								Assign_Destination(&Map[nearby]);
-							} else {
-								Assign_Destination(NULL);
-							}
+				} else if (anybay != NULL) {
+
+					// Nothing is reserved, so the choice is made again on arrival.
+					QueuedDock = anybay;
+					if (Distance_To(anybay) > 3 * CELL_LEPTON) {
+						Cell cell = Cell(anybay->Get_Coord());
+						Cell nearby = Map.Nearby_Location(cell, SPEED_WHEEL, Map.Get_Cell_Zone(cell, Class->MZone), Class->MZone, false, Point2D(1, 1), false, true, false, false);
+						if (nearby != CELL_NONE) {
+							Assign_Destination(&Map[nearby]);
+						} else {
+							Assign_Destination(NULL);
 						}
 					}
 				}
@@ -4244,6 +4290,9 @@ ActionType UnitClass::What_Action(ObjectClass const * object, bool disallow_forc
 		}
 	}
 
+	// A repairing vehicle that can deploy keeps its deploy verdict over itself.
+	bool deploying = object == this && (action == ACTION_SELF || action == ACTION_NO_DEPLOY);
+
 	if (Combat_Damage() < 0 && House->Is_Player_Control()) {
 		if (House->Is_Ally(object)) {
 			if (Can_Heal(object) && object != this && object->Not_Underground()) {
@@ -4252,7 +4301,7 @@ ActionType UnitClass::What_Action(ObjectClass const * object, bool disallow_forc
 						action = object->RTTI == RTTI_INFANTRY ? ACTION_HEAL : ACTION_GREPAIR;
 					}
 				}
-			} else if ( object->RTTI != RTTI_BUILDING ) {
+			} else if ( object->RTTI != RTTI_BUILDING && !deploying ) {
 				action = ACTION_SELECT;
 			}
 		} else {
@@ -5852,7 +5901,7 @@ void UnitClass::Scatter(Coord const & threat, bool forced, bool nokidding)
 
 			CellClass *cellptr = &Map[destcell];
 
-			int z = cellptr->Height + Is_Moving_Onto_Bridge() ? BRIDGE_CELL_HEIGHT : 0;
+			int z = cellptr->Height + (Is_Moving_Onto_Bridge() ? BRIDGE_CELL_HEIGHT : 0);
 			Coord destcoord = Destination_Coord();
 			destcoord.Z = z * LEVEL_LEPTON_H;
 
@@ -6059,6 +6108,7 @@ void UnitClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(Reload);
 	stream.Serialize(Class);
 	stream.Serialize(FollowingMe);
+	stream.Serialize(QueuedDock);
 	stream.Serialize(Flagged);
 	stream.Serialize(IsFollowing);
 	stream.Serialize(IsDumping);
@@ -6098,6 +6148,9 @@ void UnitClass::Compute_CRC(CRCEngine & crc) const
 	if (FollowingMe != NULL) {
 		crc(FollowingMe->Fetch_ID());
 	}
+	if (QueuedDock != NULL) {
+		crc(QueuedDock->Fetch_ID());
+	}
 	crc(Flagged);
 	crc(IsFollowing);
 	crc(IsDumping);
@@ -6118,6 +6171,9 @@ void UnitClass::Detach(AbstractClass const * target, bool all)
 	BASECLASS::Detach(target, all);
 	if (FollowingMe == target) {
 		FollowingMe = NULL;
+	}
+	if (QueuedDock == target) {
+		QueuedDock = NULL;
 	}
 	if (Class == target) {
 		Class = NULL;
@@ -6203,7 +6259,7 @@ double UnitClass::Weed_Load(void) const
 int UnitClass::Get_Max_Speed(void) const
 {
 	int speed = BASECLASS::Get_Max_Speed();
-	if (LimpetType) {
+	if (LimpetType.Any()) {
 		speed = (int)(speed * LimpetSpeedFactor);
 	}
 	return(speed);

@@ -614,7 +614,7 @@ void AircraftClass::AI(void)
 		}
 	}
 
-	if (House->Is_Ally(PlayerPtr) && SightTimer == 0) {
+	if (SightTimer == 0) {
 		Look();
 		SightTimer = TICKS_PER_SECOND;
 	}
@@ -1044,9 +1044,9 @@ int AircraftClass::Paradrop_Cargo(void)
  * HISTORY:                                                                                    *
  *   03/19/1995 JLB : Created.                                                                 *
  *=============================================================================================*/
-static inline bool Aircraft_Fire_Shrouded(Coord const & coord)
+static inline bool Aircraft_Fire_Shrouded(Coord const & coord, HouseClass const * house)
 {
-	return(Map.Is_Shrouded(coord + Coord(2 * CELL_LEPTON_W, -2 * CELL_LEPTON_H)));
+	return(Map.Is_Shrouded(coord + Coord(2 * CELL_LEPTON_W, -2 * CELL_LEPTON_H), house));
 }
 
 
@@ -1104,13 +1104,14 @@ BulletClass * AircraftClass::Fire_At(AbstractClass * target, int which)
 			bullet->Velocity.Set_Speed(PrimaryWeapon->MaxSpeed);
 		}
 
-		if (House->Is_Player_Control()) {
-			if (Map.Is_Shrouded(PositionCoord) ||
-				Map.Is_Shrouded(PositionCoord + Coord(2 * CELL_LEPTON_W, 2 * CELL_LEPTON_H)) ||
-				Map.Is_Shrouded(PositionCoord + Coord(-2 * CELL_LEPTON_W, -2 * CELL_LEPTON_H)) ||
-				Map.Is_Shrouded(PositionCoord + Coord(2 * CELL_LEPTON_W, -2 * CELL_LEPTON_H)) ||
-				Aircraft_Fire_Shrouded(PositionCoord) ||
-				Map.Is_Shrouded(target->Center_Coord())) {
+		HouseClass const * viewer = House->Player_View();
+		if (viewer != NULL) {
+			if (Map.Is_Shrouded(PositionCoord, viewer) ||
+				Map.Is_Shrouded(PositionCoord + Coord(2 * CELL_LEPTON_W, 2 * CELL_LEPTON_H), viewer) ||
+				Map.Is_Shrouded(PositionCoord + Coord(-2 * CELL_LEPTON_W, -2 * CELL_LEPTON_H), viewer) ||
+				Map.Is_Shrouded(PositionCoord + Coord(2 * CELL_LEPTON_W, -2 * CELL_LEPTON_H), viewer) ||
+				Aircraft_Fire_Shrouded(PositionCoord, viewer) ||
+				Map.Is_Shrouded(target->Center_Coord(), viewer)) {
 				Map.Sight_From(PositionCoord, Rule->AttackingAircraftSightRange, House);
 			}
 		}
@@ -2806,7 +2807,7 @@ MoveType AircraftClass::Can_Enter_Cell(CellClass const * cell, FacingType, int c
 		if (!cell->Is_Clear_To_Move(SPEED_WINGED, false, false)) return(MOVE_NO);
 	}
 
-	if (Session.Type == GAME_NORMAL && IsOwnedByPlayer && !IsALoaner && Map.Is_Shrouded(cell->Center_Coord())) {
+	if (Session.Type == GAME_NORMAL && IsOwnedByPlayer && !IsALoaner && Map.Is_Shrouded(cell->Center_Coord(), House)) {
 		return(MOVE_NO);
 	}
 
@@ -2862,7 +2863,7 @@ AbstractClass * AircraftClass::Good_Fire_Location(AbstractClass * target) const
 				Coord newcoord = Move_Coord(tcoord, (Dir256)face, r);
 				Cell newcell = newcoord.As_Cell();
 
-				if (Map.In_Local_Radar(newcell) && (Session.Type != GAME_NORMAL || Map[newcell].IsVisible) && Cell_Seems_Ok(newcell, true)) {
+				if (Map.In_Local_Radar(newcell) && (Session.Type != GAME_NORMAL || Map[newcell].IsVisible[PlayerPtr]) && Cell_Seems_Ok(newcell, true)) {
 					int dist;
 					if (altcoord != COORD_NONE) {
 						dist = Point2D(newcoord).Distance_To(Point2D(altcoord));

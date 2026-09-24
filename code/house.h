@@ -39,6 +39,7 @@
 #include "credits.h"
 #include "dropship.h"
 #include "ftimer.h"
+#include "houseset.h"
 #include "object.h"
 #include "region.h"
 #include "rgb.h"
@@ -113,7 +114,7 @@ class HouseStaticClass {
 		**	start. Various forces during play may adjust the ally state
 		**	of this house.
 		*/
-		int Allies;
+		HouseSet Allies;
 
 		/*
 		**	This records the initial credits assigned to this house when the scenario
@@ -612,7 +613,7 @@ class HouseClass : public AbstractClass
 		**	This is used for the other side to be able to update their radar
 		**	map based on the cells that this house's units reveal.
 		*/
-		int RadarSpied;
+		HouseSet RadarSpied;
 
 		/*
 		**	Running score, based on units destroyed and units lost.
@@ -807,6 +808,9 @@ class HouseClass : public AbstractClass
 		bool Is_Ally(ObjectClass const * object) const;
 		bool Is_Ally(AbstractClass const * target) const;
 		bool Shares_View_With(HouseClass const * house) const;
+		bool Sees_Whole_Map(void) const;
+		HouseClass * Player_View(void) const;
+		bool Is_Player_View(void) const;
 #ifdef _DEBUG
 		void Debug_Dump(MonoClass *mono) const;
 		void Print_Zone_Stats(int x, int y, ZoneType zone, MonoClass * mono) const;
@@ -1024,7 +1028,7 @@ class HouseClass : public AbstractClass
 		**	this house. It is presumed that any house that isn't an ally, is therefore
 		**	an enemy. A house is always considered allied with itself.
 		*/
-		unsigned Allies;
+		HouseSet Allies;
 
 		/*
 		**	General low-power related damaged is doled out whenever this timer

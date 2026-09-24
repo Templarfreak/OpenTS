@@ -233,7 +233,7 @@ fixed_controls:
     context: Classic main menu
     availability: *all
     sites:
-      - { file: code/init.cpp, function: Main_Menu, expression: KN_V+KN_CTRL_BIT }
+      - { file: code/init.cpp, function: Main_Menu_Keys, expression: KN_V+KN_CTRL_BIT }
   - id: fixed:main-menu-credits
     title: Open credits
     description: Opens the credits from the classic main menu.
@@ -242,7 +242,7 @@ fixed_controls:
     context: Classic main menu
     availability: *all
     sites:
-      - { file: code/init.cpp, function: Main_Menu, expression: VK_C+KN_CTRL_BIT+KN_ALT_BIT }
+      - { file: code/init.cpp, function: Main_Menu_Keys, expression: VK_C+KN_CTRL_BIT+KN_ALT_BIT }
   - id: fixed:skip-credits
     title: Exit credits
     description: Stops the credits and returns to the menu.
@@ -280,6 +280,15 @@ fixed_controls:
     availability: *all
     sites:
       - { file: code/wdtsel.cpp, function: Selection::Check_For_Breakout, expression: VK_ESCAPE }
+  - id: fixed:debug-benchmark-overlay
+    title: Toggle the benchmark overlay
+    description: Shows or hides the Dear ImGui frame benchmark window drawn over the game and its menus.
+    audience: debug
+    bindings: [F6]
+    context: Any game window focused, with Debug_Flag enabled
+    availability: *debug
+    sites:
+      - { file: code/ui/uishell.cpp, function: UIShellClass::Handle_Window_Message, expression: VK_F6, guard: _DEBUG }
 
 fixed_exclusions:
   - site: { file: code/debug.cpp, function: Debug_Key, expression: KN_BUTTON, guard: _DEBUG }
@@ -349,7 +358,8 @@ fixed_exclusions:
     reason: Generic graphic-menu polling and activation, not a named application control.
   - site: { file: code/grphmsct.cpp, function: GM_Build_Key, expression: VK_NONE }
     reason: Sentinel used while translating a menu accelerator into a virtual key.
-  - site: { file: code/init.cpp, function: Main_Menu, expression: KN_RLSE_BIT }
+  - sites:
+      - { file: code/init.cpp, function: Main_Menu_Keys, expression: KN_RLSE_BIT }
     reason: Filters release events before the classic main-menu cheat handler.
   - sites:
       - { file: code/init.cpp, function: Init_Commands, expression: KN_DELETE }
@@ -389,12 +399,6 @@ fixed_exclusions:
       - { file: code/msglist.cpp, function: MessageListClass::Input, expression: KN_BACKSPACE }
       - { file: code/msglist.cpp, function: MessageListClass::Input, expression: KN_ESC }
     reason: Message editor polling, cursor placement, and text-edit termination.
-  - site: { file: code/ownrdraw.cpp, function: CtrlProc_Internal, expression: VK_TAB }
-    reason: Windows dialog focus traversal handled by the shared control procedure.
-  - sites:
-      - { file: code/ownrdraw.cpp, function: EditBoxCtrlProc, expression: VK_TAB }
-      - { file: code/ownrdraw.cpp, function: EditBoxCtrlProc, expression: VK_RETURN }
-    reason: Windows edit-control navigation handled by the shared dialog procedure.
   - sites:
       - { file: code/ownrdraw.cpp, function: Build_Hotkey_String, expression: VK_MENU }
       - { file: code/ownrdraw.cpp, function: Build_Hotkey_String, expression: VK_CONTROL }
@@ -428,6 +432,30 @@ fixed_exclusions:
     reason: World Domination Tour territory-screen polling and hit-testing.
   - site: { file: code/winstub.cpp, function: Create_Main_Window, expression: VK_M }
     reason: Registers a Windows hotkey that has no WM_HOTKEY handler in the current source tree.
+  - sites:
+      - { file: code/ui/uishell.cpp, function: UIShellClass::Key_Modifiers, expression: VK_SHIFT }
+      - { file: code/ui/uishell.cpp, function: UIShellClass::Key_Modifiers, expression: VK_CONTROL }
+      - { file: code/ui/uishell.cpp, function: UIShellClass::Key_Modifiers, expression: VK_MENU }
+      - { file: code/ui/uishell.cpp, function: UIShellClass::Key_Modifiers, expression: VK_CAPITAL }
+      - { file: code/ui/uishell.cpp, function: UIShellClass::Key_Modifiers, expression: VK_NUMLOCK }
+    reason: UI shell modifier-state encoding for RmlUi, not separate controls.
+  - sites:
+      - { file: code/ui/uishell.cpp, function: Modifier_Key, expression: VK_SHIFT }
+      - { file: code/ui/uishell.cpp, function: Modifier_Key, expression: VK_CONTROL }
+      - { file: code/ui/uishell.cpp, function: Modifier_Key, expression: VK_MENU }
+      - { file: code/ui/uishell.cpp, function: Modifier_Key, expression: VK_LSHIFT }
+      - { file: code/ui/uishell.cpp, function: Modifier_Key, expression: VK_RSHIFT }
+      - { file: code/ui/uishell.cpp, function: Modifier_Key, expression: VK_LCONTROL }
+      - { file: code/ui/uishell.cpp, function: Modifier_Key, expression: VK_RCONTROL }
+      - { file: code/ui/uishell.cpp, function: Modifier_Key, expression: VK_LMENU }
+      - { file: code/ui/uishell.cpp, function: Modifier_Key, expression: VK_RMENU }
+    reason: UI shell modifier keys kept out of press ownership, not separate controls.
+  - site: { file: code/ui/uishell.cpp, function: UIShellClass::Quarantine_Held_Input, expression: VK_XBUTTON2 }
+    reason: UI shell loop bound over the virtual keys past the mouse buttons, not a control.
+  - sites:
+      - { file: code/ui/uienginehost.cpp, function: <file-scope>, expression: VK_LBUTTON }
+      - { file: code/ui/uienginehost.cpp, function: <file-scope>, expression: VK_RBUTTON }
+    reason: UI shell host naming the primary and secondary buttons as the messages do when the user swapped them, not controls.
 
 launch_options:
   - id: launch:help
@@ -546,6 +574,16 @@ launch_options:
     availability: *all
     sites:
       - { file: code/init.cpp, function: Parse_Command_Line, expression: 'literal:-WIN' }
+  - id: launch:multiple-instances
+    title: Multiple copies
+    syntax: -MULTIINSTANCE
+    description: >-
+      Lets this copy start while another copy of the game is running. Without it, a second copy
+      brings the running copy's window to the front and exits.
+    audience: developer
+    availability: *all
+    sites:
+      - { file: code/init.cpp, function: Parse_Command_Line, expression: 'literal:-MULTIINSTANCE' }
   - id: launch:exception-test
     title: Exception reporting test
     syntax: -EXCEPTIONTEST=<fault>
@@ -572,7 +610,7 @@ launch_options:
   - id: launch:seed
     title: Random seed
     syntax: -SEED<number>
-    description: Selects a custom random seed; the current parser does not advance past the option name and resolves the suffix to zero.
+    description: Seeds the random number generator with the number given, for a campaign mission or skirmish started from the menu, so it repeats the same random draws each time. 0 draws a new seed.
     audience: debug
     availability: *debug
     sites:

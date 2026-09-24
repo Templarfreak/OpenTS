@@ -1504,7 +1504,7 @@ registered_commands:
   route_id: screencapture
   kind: registered
   title: Screen Capture
-  description: Take a snapshot of the game screen. (Saved as 'SCRNxxxx.PCX' file in Tiberian Sun run directory.)
+  description: Take a snapshot of the game screen. (Saved as 'SCRNxxxx.png' in the Screenshots folder.)
   category: Interface
   audience: player
   availability:
@@ -2197,6 +2197,19 @@ fixed_controls:
   _provenance:
     source: code/wdtsel.cpp
     guard: null
+- id: fixed:debug-benchmark-overlay
+  route_id: fixed-debug-benchmark-overlay
+  kind: fixed
+  title: Toggle the benchmark overlay
+  description: Shows or hides the Dear ImGui frame benchmark window drawn over the game and its menus.
+  audience: debug
+  availability: *id002
+  bindings:
+  - F6
+  context: Any game window focused, with Debug_Flag enabled
+  _provenance:
+    source: code/ui/uishell.cpp
+    guard: _DEBUG
 launch_options:
 - id: launch:help
   route_id: help
@@ -2359,6 +2372,18 @@ launch_options:
   _provenance:
     source: code/init.cpp
     guard: null
+- id: launch:multiple-instances
+  route_id: multiple-instances
+  kind: launch
+  title: Multiple copies
+  description: Lets this copy start while another copy of the game is running. Without it, a second copy
+    brings the running copy's window to the front and exits.
+  audience: developer
+  availability: *id001
+  syntax: -MULTIINSTANCE
+  _provenance:
+    source: code/init.cpp
+    guard: null
 - id: launch:exception-test
   route_id: exception-test
   kind: launch
@@ -2389,8 +2414,8 @@ launch_options:
   route_id: seed
   kind: launch
   title: Random seed
-  description: Selects a custom random seed; the current parser does not advance past the option name
-    and resolves the suffix to zero.
+  description: Seeds the random number generator with the number given, for a campaign mission or skirmish
+    started from the menu, so it repeats the same random draws each time. 0 draws a new seed.
   audience: debug
   availability: *id002
   syntax: -SEED<number>

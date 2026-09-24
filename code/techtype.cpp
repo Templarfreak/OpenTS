@@ -543,6 +543,16 @@ bool TechnoTypeClass::Is_Two_Shooter(void) const
 }
 
 
+/// <summary>
+/// Does an EM pulse leave this type alone? An immune object still springs its paralyzed
+/// trigger event.
+/// </summary>
+bool TechnoTypeClass::Is_Immune_To_EMP(void) const
+{
+	return(IsImmuneToEMP.value_or(false));
+}
+
+
 /***********************************************************************************************
  * _Scale_To_256 -- Scales a 1..100 number into a 1..255 number.                               *
  *                                                                                             *
@@ -610,14 +620,7 @@ bool TechnoTypeClass::Read_INI(CCINIClass const & ini)
 		}
 		CollateralDamageCoefficient = ini.Get_Float(Name(), "CollateralDamageCoefficient", CollateralDamageCoefficient);
 
-		if (strcmp(Name(), "GAFSDF") == 0 || strcmp(Name(), "GAWALL") == 0 || strcmp(Name(), "NAWALL") == 0) {
-			ThreatRange = (CELL_LEPTON*5); /// 1280
-		}
-
 		IsExploding = ini.Get_Bool(Name(), "Explodes", IsExploding);
-		if (stricmp(Name(), "E2") == 0) {
-			IsExploding = true;
-		}
 
 		FlightLevel = ini.Get_Int(Name(), "FlightLevel", FlightLevel);
 		IsDropship = ini.Get_Bool(Name(), "IsDropship", IsDropship);
@@ -680,6 +683,9 @@ bool TechnoTypeClass::Read_INI(CCINIClass const & ini)
 		IsCloakable = ini.Get_Bool(Name(), "Cloakable", IsCloakable);
 		IsScanner = ini.Get_Bool(Name(), "Sensors", IsScanner);
 		PipScale = ini.Get_PipScaleType(Name(), "PipScale", PipScale);
+		if (ini.Is_Present(Name(), "MaxPips")) {
+			MaxPips = std::max(ini.Get_Int(Name(), "MaxPips", 0), 0);
+		}
 		Prerequisite = ini.Get_BuildingType_List(ini, IniName, "Prerequisite", Prerequisite);
 		SightRange = ini.Get_Int(Name(), "Sight", SightRange);
 		Level = ini.Get_Int(Name(), "TechLevel", Level);
@@ -688,9 +694,6 @@ bool TechnoTypeClass::Read_INI(CCINIClass const & ini)
 			MaxSpeed = MPHType(_Scale_To_256(maxspeed));
 		}
 		Cost = ini.Get_Int(Name(), "Cost", Cost);
-		if (strcmp(Name(), "GAFSDF") == 0 || strcmp(Name(), "GAWALL") == 0 || strcmp(Name(), "NAWALL") == 0) {
-			Cost = 250;
-		}
 		BuildTime = ini.Get_Int(Name(), "BuildTime", BuildTime);
 		MaxAmmo = ini.Get_Int(Name(), "Ammo", MaxAmmo);
 		Reward = Points = ini.Get_Int(Name(), "Points", Points);
@@ -719,6 +722,9 @@ bool TechnoTypeClass::Read_INI(CCINIClass const & ini)
 		IsToProtect = ini.Get_Bool(Name(), "ToProtect", IsToProtect);
 		IsTiberiumHeal = ini.Get_Bool(Name(), "TiberiumHeal", IsTiberiumHeal);
 		IsImmuneToVeins = ini.Get_Bool(Name(), "ImmuneToVeins", IsImmuneToVeins);
+		if (ini.Is_Present(Name(), "ImmuneToEMP")) {
+			IsImmuneToEMP = ini.Get_Bool(Name(), "ImmuneToEMP", false);
+		}
 		IsAllowedToStartInMultiplayer = ini.Get_Bool(Name(), "AllowedToStartInMultiplayer", IsAllowedToStartInMultiplayer);
 		IsTargetLaser = ini.Get_Bool(Name(), "TargetLaser", IsTargetLaser);
 		IsHunterSeeker = ini.Get_Bool(Name(), "HunterSeeker", IsHunterSeeker);
@@ -898,19 +904,19 @@ int TechnoTypeClass::Max_Pips(void) const
 {
 	switch (PipScale) {
 		case PIPSCALE_POWER:
-			return(10);
+			return(MaxPips.value_or(10));
 
 		case PIPSCALE_AMMO:
-			return(std::min(MaxAmmo, 5));
+			return(std::min(MaxAmmo, MaxPips.value_or(5)));
 
 		case PIPSCALE_TIBERIUM:
-			return(5);
+			return(MaxPips.value_or(5));
 
 		case PIPSCALE_PASSENGERS:
-			return(std::min(MaxPassengers, 5));
+			return(std::min(MaxPassengers, MaxPips.value_or(5)));
 
 		case PIPSCALE_CHARGE:
-			return(8);
+			return(MaxPips.value_or(8));
 	}
 	return(0);
 }
@@ -1083,6 +1089,7 @@ void TechnoTypeClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(DeployTime);
 	stream.Serialize(FireAngle);
 	stream.Serialize(PipScale);
+	stream.Serialize(MaxPips);
 	stream.Serialize(Dock);
 	stream.Serialize(DeploysInto);
 	stream.Serialize(UndeploysInto);
@@ -1139,6 +1146,7 @@ void TechnoTypeClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(IsDamageSparks);
 	stream.Serialize(IsTargetLaser);
 	stream.Serialize(IsImmuneToVeins);
+	stream.Serialize(IsImmuneToEMP);
 	stream.Serialize(IsTiberiumHeal);
 	stream.Serialize(IsCloakStop);
 	stream.Serialize(IsTrain);
@@ -1237,6 +1245,7 @@ void TechnoTypeClass::Compute_CRC(class CRCEngine & crc) const
 	crc(PhysicalSize);
 	crc(InitialMission);
 	crc(IsImmuneToVeins);
+	crc(Is_Immune_To_EMP());
 	crc(IsTiberiumHeal);
 	crc(IsTargetLaser);
 	crc(RollAngle);
@@ -1248,6 +1257,7 @@ void TechnoTypeClass::Compute_CRC(class CRCEngine & crc) const
 	crc(DeployTime);
 	crc(FireAngle);
 	crc(PipScale);
+	crc(Max_Pips());
 	crc(VoiceSelect.Count());
 	crc(VoiceMove.Count());
 	crc(VoiceAttack.Count());

@@ -82,6 +82,7 @@
 #include "savestream.h"
 #include "scheme.h"
 #include "script.h"
+#include "session.h"
 #include "side.h"
 #include "smudtype.h"
 #include "stimer.h"
@@ -172,6 +173,9 @@ RulesClass::RulesClass(void) :
 	InfantryReserve(2000),
 	InfantryBaseMult(2),
 	SoloCrateMoney(2000),
+	CrateMoneyBonus(900),
+	IsArmorCrateStacking(false),
+	IsFirepowerCrateStacking(false),
 	UnitCrateType(NULL),
 	PatrolTime(.016),
 	CloakDelay(0),
@@ -228,6 +232,7 @@ RulesClass::RulesClass(void) :
 	IsComputerParanoid(true),
 	IsCurleyShuffle(false),
 	IsMultiMCV(false),
+	IsRecheckPrerequisites(false),
 	IsBlendedFog(true),
 	IsCompEasyBonus(true),
 	IsFineDifficulty(false),
@@ -416,6 +421,7 @@ RulesClass::RulesClass(void) :
 	TiberiumStrength(10),
 	MinLowPowerProductionSpeed(.5),
 	MultipleFactory(1),
+	MultipleFactoryCap(0),
 	CraterLevel(4),
 	TreeFlammability(.1),
 	MissileSpeedVar(.25),
@@ -619,11 +625,13 @@ RulesClass::~RulesClass(void)
 /// <summary>
 /// Builds the game's rule data from scratch.
 /// This routine wipes every object type heap clean, reloads the art database, and then
-/// processes the rule file supplied. The Firestorm and language specific rule files are
-/// layered over the top afterwards, so that each may override what came before it.
+/// processes the rule file supplied. The language, Firestorm and multiplayer rule files are
+/// layered over the top afterwards, so that each may override what came before it. The
+/// caller's own overrides are applied after this returns, so a scenario outranks them all.
 /// </summary>
 /// <remarks>Every type object in the game is destroyed here, so nothing may be holding a
-/// pointer to one when this routine is called.</remarks>
+/// pointer to one when this routine is called. The scalars are not reset first, so one no
+/// file names keeps the value the last game left it with.</remarks>
 void RulesClass::Initialize(CCINIClass const & ini)
 {
 	while (ColorSchemes.Count()) {
@@ -726,6 +734,20 @@ void RulesClass::Initialize(CCINIClass const & ini)
 		langfsini.Load(langfsfile, false);
 		Addition(langfsini);
 	}
+
+	// A pass over an empty database still walks every type heap, so the section counts keep
+	// that cost off a deployment that ships neither file.
+	if (Session.Type != GAME_NORMAL) {
+		if (MPRuleINI.Section_Count() > 0) {
+			DebugString("Processing %s\n", DeploymentConfig.MultiplayerRulesFile.c_str());
+			Addition(MPRuleINI);
+		}
+
+		if (Addon_Enabled(ADDON_FIRESTORM) == true && FSMPRuleINI.Section_Count() > 0) {
+			DebugString("Processing %s\n", DeploymentConfig.MultiplayerRulesExpansionFile.c_str());
+			Addition(FSMPRuleINI);
+		}
+	}
 }
 
 
@@ -764,6 +786,7 @@ bool RulesClass::Addition(CCINIClass const & ini)
 	Do_VoxelAnimTypes(ini);
 	Do_ParticleTypes(ini);
 	Do_ParticleSystemTypes(ini);
+	Do_Tiberiums(ini);
 
 	Jumpjet_Controls(ini);
 	MPlayer(ini);
@@ -779,11 +802,10 @@ bool RulesClass::Addition(CCINIClass const & ini)
 	Combat_Damage(ini);
 	Audio_Visual_Rules(ini);
 	Special_Weapons(ini);
-	bool result = TiberiumClass::Process(ini);
 
 	BEnd(BENCH_RULES);
 
-	return(result);
+	return(true);
 }
 
 
@@ -951,6 +973,9 @@ bool RulesClass::Crate_Rules(CCINIClass const & ini)
 		CrateTime = ini.Get_Float(CRATERULES, "CrateRegen", CrateTime);
 		UnitCrateType = TGet_Class(ini, CRATERULES, "UnitCrateType", UnitCrateType);
 		SoloCrateMoney = ini.Get_Int(CRATERULES, "SoloCrateMoney", SoloCrateMoney);
+		CrateMoneyBonus = ini.Get_Int(CRATERULES, "CrateMoneyBonus", CrateMoneyBonus);
+		IsArmorCrateStacking = ini.Get_Bool(CRATERULES, "ArmorCrateStacks", IsArmorCrateStacking);
+		IsFirepowerCrateStacking = ini.Get_Bool(CRATERULES, "FirepowerCrateStacks", IsFirepowerCrateStacking);
 		SilverCrate = ini.Get_CrateType(CRATERULES, "SilverCrate", SilverCrate);
 		WoodCrate = ini.Get_CrateType(CRATERULES, "WoodCrate", WoodCrate);
 		//WaterCrate = ini.Get_CrateType(CRATERULES, "WaterCrate", WaterCrate);
@@ -1084,6 +1109,7 @@ bool RulesClass::General(CCINIClass const & ini)
 		AircraftFogReveal = ini.Get_Int(GENERAL, "AircraftFogReveal", AircraftFogReveal);
 		MinLowPowerProductionSpeed = ini.Get_Float(GENERAL, "MinProductionSpeed", MinLowPowerProductionSpeed);
 		MultipleFactory = ini.Get_Float(GENERAL, "MultipleFactory", MultipleFactory);
+		MultipleFactoryCap = ini.Get_Int(GENERAL, "MultipleFactoryCap", MultipleFactoryCap);
 		CraterLevel = ini.Get_Int(GENERAL, "CraterLevel", CraterLevel);
 		TreeFlammability = ini.Get_Float(GENERAL, "TreeFlammability", TreeFlammability);
 		MissileROTVar = ini.Get_Float(GENERAL, "MissileROTVar", MissileROTVar);
@@ -1149,6 +1175,7 @@ bool RulesClass::General(CCINIClass const & ini)
 		Crew = TGet_Class(ini, GENERAL, "Crew", Crew);
 		IsCurleyShuffle = ini.Get_Bool(GENERAL, "CurleyShuffle", IsCurleyShuffle);
 		IsMultiMCV = ini.Get_Bool(GENERAL, "MultiMCV", IsMultiMCV);
+		IsRecheckPrerequisites = ini.Get_Bool(GENERAL, "RecheckPrerequisites", IsRecheckPrerequisites);
 		IsFineDifficulty = ini.Get_Bool(GENERAL, "FineDiffControl", IsFineDifficulty);
 		TeamDelays = ini.Get_IntList(GENERAL, "TeamDelays", TeamDelays);
 		AIHateDelays = ini.Get_IntList(GENERAL, "AIHateDelays", AIHateDelays);
@@ -1739,6 +1766,26 @@ bool RulesClass::Do_ParticleSystemTypes(CCINIClass const & ini)
 }
 
 
+/// <summary>
+/// Creates the tiberium types declared in the control file.
+/// Each entry of the tiberium list names a type, which is created if the game has not heard
+/// of it before and one of the four slots is free.
+/// </summary>
+/// <returns>bool; Were any tiberium types declared?</returns>
+bool RulesClass::Do_Tiberiums(CCINIClass const & ini)
+{
+	static char const * const TIBERIUMS = "Tiberiums";
+	char buffer[32];
+	int count = ini.Entry_Count(TIBERIUMS);
+	for (int i = 0; i < count; i++) {
+		if (ini.Get_String(TIBERIUMS, ini.Get_Entry(TIBERIUMS, i), "", buffer, sizeof(buffer))) {
+			TiberiumClass::Find_Or_Make(buffer);
+		}
+	}
+	return(count > 0);
+}
+
+
 /***********************************************************************************************
  * RulesClass::AI -- Processes the AI control constants from the database.                     *
  *                                                                                             *
@@ -2203,6 +2250,7 @@ void RulesClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(TiberiumStrength);
 	stream.Serialize(MinLowPowerProductionSpeed);
 	stream.Serialize(MultipleFactory);
+	stream.Serialize(MultipleFactoryCap);
 	stream.Serialize(CraterLevel);
 	stream.Serialize(TreeFlammability);
 	stream.Serialize(MissileSpeedVar);
@@ -2412,6 +2460,9 @@ void RulesClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(InfantryReserve);
 	stream.Serialize(InfantryBaseMult);
 	stream.Serialize(SoloCrateMoney);
+	stream.Serialize(CrateMoneyBonus);
+	stream.Serialize(IsArmorCrateStacking);
+	stream.Serialize(IsFirepowerCrateStacking);
 	stream.Serialize(TreeStrength);
 	stream.Serialize(UnitCrateType);
 	stream.Serialize(PatrolTime);
@@ -2546,6 +2597,7 @@ void RulesClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(IsComputerParanoid);
 	stream.Serialize(IsCurleyShuffle);
 	stream.Serialize(IsMultiMCV);
+	stream.Serialize(IsRecheckPrerequisites);
 	stream.Serialize(IsBlendedFog);
 	stream.Serialize(IsCompEasyBonus);
 	stream.Serialize(IsFineDifficulty);
@@ -3008,6 +3060,10 @@ bool RulesClass::Objects(CCINIClass const & ini)
 		VoxelAnimTypes[vindex]->Read_INI(ini);
 	}
 
+	for (int tibindex = 0; tibindex < Tiberiums.Count(); tibindex++) {
+		Tiberiums[tibindex]->Read_INI(ini);
+	}
+
 	/*
 	**	Fetch the mission control values.
 	*/
@@ -3024,7 +3080,9 @@ bool RulesClass::Objects(CCINIClass const & ini)
 /// Fetches the identifying checksum of the main rule file.
 /// This routine is used when comparing rule versions between machines, so that a
 /// multiplayer game can be refused when the players are not running the same rules. The
-/// Firestorm rule file is folded into the result whenever that addon is enabled.
+/// Firestorm rule file is folded into the result whenever that addon is enabled, and each
+/// multiplayer rule file whenever it supplied a section. An absent file has to leave the
+/// result alone, because an empty database still hashes to a value of its own.
 /// </summary>
 /// <returns>Returns with the unique ID of the rules currently in force.</returns>
 int RulesClass::Get_Rule_Unique_ID(void)
@@ -3032,6 +3090,12 @@ int RulesClass::Get_Rule_Unique_ID(void)
 	int id = RuleINI->Get_Unique_ID();
 	if (Addon_Enabled(ADDON_FIRESTORM)) {
 		id += FSRuleINI.Get_Unique_ID();
+	}
+	if (MPRuleINI.Section_Count() > 0) {
+		id += MPRuleINI.Get_Unique_ID();
+	}
+	if (Addon_Enabled(ADDON_FIRESTORM) && FSMPRuleINI.Section_Count() > 0) {
+		id += FSMPRuleINI.Get_Unique_ID();
 	}
 	return(id);
 }

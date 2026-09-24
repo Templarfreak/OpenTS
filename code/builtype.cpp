@@ -782,7 +782,7 @@ int BuildingTypeClass::Height(bool bib) const
  *=============================================================================================*/
 int BuildingTypeClass::Max_Pips(void) const
 {
-	int maxpips = (Width() * ISO_TILE_PIXEL_W) / 8;
+	int maxpips = MaxPips.value_or((Width() * ISO_TILE_PIXEL_W) / 8);
 
 	switch (PipScale) {
 		case PIPSCALE_TIBERIUM:
@@ -881,6 +881,12 @@ bool BuildingTypeClass::Is_Pad_Aircraft_Dock(void) const
 	if (Rule->IsSeparate || Rule->PadAircraft.Count() == 0) {
 		return(false);
 	}
+
+	// A free aircraft stands in for the pad aircraft, so its price is the one that counts.
+	if (FreeUnit != NULL && FreeUnit->Fetch_RTTI() == RTTI_AIRCRAFTTYPE) {
+		return(false);
+	}
+
 	AircraftTypeClass const * aircraft = Rule->PadAircraft[0];
 	return(aircraft->Dock.Count() > 0 && this == aircraft->Dock[0]);
 }
@@ -915,7 +921,8 @@ int BuildingTypeClass::Flush_For_Placement(Cell const & cell, HouseClass * house
 
 			if (Map.In_Radar(newcell)) {
 				CellClass & cptr = Map[newcell];
-				if (cptr.Overlay != OVERLAY_NONE && (this != Rule->WallTower || cptr.Overlay != OVERLAY_BRICK_WALL)) {
+				if (cptr.Overlay != OVERLAY_NONE && !OverlayTypes[cptr.Overlay]->Can_Build_Over()
+						&& (this != Rule->WallTower || cptr.Overlay != OVERLAY_BRICK_WALL)) {
 					return(2);
 				}
 				ObjectClass * occupier = cptr.Cell_Occupier();
@@ -1188,9 +1195,6 @@ bool BuildingTypeClass::Read_INI(CCINIClass const & ini)
 		IsUnsellable = ini.Get_Bool(Name(), "Unsellable", IsUnsellable);
 
 		IsBase = ini.Get_Bool(Name(), "BaseNormal", IsBase);
-		if (!stricmp(Name(), "NAFNCE") || !stricmp(Name(), "NAPOST")) {
-			IsBase = false;
-		}
 
 		IsWall = ini.Get_Bool(Name(), "Wall", IsWall);
 		IsWeeder = ini.Get_Bool(Name(), "Weeder", IsWeeder);
@@ -1216,7 +1220,7 @@ bool BuildingTypeClass::Read_INI(CCINIClass const & ini)
 		AuxSound1 = ini.Get_VocType(Name(), "DeploySound", AuxSound1);
 		AuxSound2 = ini.Get_VocType(Name(), "UndeploySound", AuxSound2);
 		ToBuild = ini.Get_RTTIType(Name(), "Factory", ToBuild);
-		FreeUnit = TGet_Class(ini, Name(), "FreeUnit", FreeUnit);
+		FreeUnit = ini.Get_Foot_Type(Name(), "FreeUnit", FreeUnit);
 		IsHoverPad = ini.Get_Bool(Name(), "HoverPad", IsHoverPad);
 		IsTemple = ini.Get_Bool(Name(), "IsTemple", IsTemple);
 		IsPlug = ini.Get_Bool(Name(), "IsPlug", IsPlug);
@@ -2187,6 +2191,15 @@ bool BuildingTypeClass::Can_Always_Undeploy(void) const
 bool BuildingTypeClass::Is_Mobile_Deployer(void) const
 {
 	return(IsSensorArray || IsTickTank || IsICBMLauncher || IsArtillary || IsMobileStealth || IsJuggernaut || IsCoreDefender || IsLimpetMine);
+}
+
+
+/// <summary>
+/// Does an EM pulse leave this type alone? Unset, a structure follows IsCoreDefender.
+/// </summary>
+bool BuildingTypeClass::Is_Immune_To_EMP(void) const
+{
+	return(IsImmuneToEMP.value_or(IsCoreDefender));
 }
 
 

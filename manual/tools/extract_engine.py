@@ -80,7 +80,7 @@ VALUE_TYPES = {
     "VocType_List": "list of sounds",
     "VoxType": "EVA speech",
     "VQType": "movie",
-    "RGBClass": "colour (R,G,B)",
+    "RGBClass": "color (R,G,B)",
     "IntList": "list of integers",
     "ArmorType": "ArmorType",
     "CategoryType": "CategoryType",
@@ -95,8 +95,9 @@ VALUE_TYPES = {
     "Side": "Side",
     "ClassID": "Locomotor class identifier",
     "Owners": "list of HouseTypes",
-    "Scheme_Index": "colour scheme",
+    "Scheme_Index": "color scheme",
     "BuildingType_List": "list of BuildingTypes",
+    "Foot_Type": "UnitType, InfantryType or AircraftType",
     "Entry": "string",
     "TextBlock": "text",
     "UUBlock": "binary block",
@@ -105,8 +106,8 @@ VALUE_TYPES = {
     "Floater_Gravity": "floating point",
     "Speed_Accum": "floating point",
     "Number_Of_Drives": "integer",
-    "Color": "colour",
-    "Color_Scheme": "colour scheme",
+    "Color": "color",
+    "Color_Scheme": "color scheme",
 }
 
 # Common C++ section expressions. Reader-specific variables are classified by
@@ -186,6 +187,7 @@ RULES_OBJECTS_LOADERS = {
     'ParticleTypes': 'ParticleTypeClass',
     'ParticleSystemTypes': 'ParticleSystemTypeClass',
     'VoxelAnimTypes': 'VoxelAnimTypeClass',
+    'Tiberiums': 'TiberiumClass',
     'miss': 'MissionControlClass',
 }
 
@@ -858,7 +860,7 @@ GLOBAL_UNITS = [
     ], None),
     ("scenario.cpp", "ScenarioClass", [
         "Read_INI", "Read_Global_INI", "Read_Local_INI", "Read_Waypoints",
-        ":Read_Scenario_INI",
+        ":Read_Scenario_INI", ":Read_Scenario",
     ], {"file": "map file", "group": "scenarios"}),
     ("special.cpp", "SpecialClass", ["Read_INI"],
      {"file": "map file", "group": "scenarios"}),
@@ -1026,7 +1028,7 @@ def prettify_default(expr, value_type):
         return e.rstrip("f").replace("f,", ",")
     if re.match(r"^(0[xX][0-9A-Fa-f]+,)+0[xX][0-9A-Fa-f]+$", e):
         return ",".join(str(int(p, 16)) for p in e.split(","))
-    # An unrecognised identifier or expression is code, not an omission value a
+    # An unrecognized identifier or expression is code, not an omission value a
     # modder could type -- retain no candidate rather than something confusing.
     if re.match(r"^[A-Za-z_0-9*/+.()-]+$", e):
         return None

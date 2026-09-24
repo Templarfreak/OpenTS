@@ -76,7 +76,9 @@
 #include "_theater.h"
 #include "_tooltip.h"
 #include "_wsproto.h"
+#include "airctype.h"
 #include "autosave.h"
+#include "builtype.h"
 #include "cctooltip.h"
 #include "chat.h"
 #include "data.h"
@@ -88,6 +90,7 @@
 #include "globals.h"
 #include "houstype.h"
 #include "incdec.h"
+#include "infatype.h"
 #include "init.h"
 #include "ipxmgr.h"
 #include "keyboard.h"
@@ -116,6 +119,7 @@
 #include "surface.h"
 #include "tactical.h"
 #include "theme.h"
+#include "unittype.h"
 #include "voc.h"
 #include "vox.h"
 #include "wsproto.h"
@@ -273,18 +277,12 @@ void Ingame_Menu_Dialog(void)
 
 				case SDLG_ABORT:
 					switch (Abort_Dialog()) {
-
-						/// cancel
-						case 1:
+						case UI_ABORT_QUIT:
 							Queue_Exit();
 							SpecialDialog = SDLG_NONE;
 							break;
 
-						case 2:
-							break;
-
-						// abort
-						case 3:
+						case UI_ABORT_RESTART:
 							if (Session.Type == GAME_NORMAL) {
 								PlayerRestarts = true;
 							} else {
@@ -293,6 +291,8 @@ void Ingame_Menu_Dialog(void)
 							}
 							break;
 
+						case UI_ABORT_CONTINUE:
+							break;
 					}
 					SpecialDialog = SDLG_NONE;
 					break;
@@ -1157,28 +1157,28 @@ TechnoTypeClass const * Fetch_Techno_Type(RTTIType type, int id)
 		case RTTI_UNITTYPE:
 		case RTTI_UNIT:
 			if (id >= 0 && id < UnitTypes.Count()) {
-				return(TechnoTypeClass *)(UnitTypes[id]);
+				return(UnitTypes[id]);
 			}
 			break;
 
 		case RTTI_BUILDINGTYPE:
 		case RTTI_BUILDING:
 			if (id >= 0 && id < BuildingTypes.Count()) {
-				return(TechnoTypeClass *)(BuildingTypes[id]);
+				return(BuildingTypes[id]);
 			}
 			break;
 
 		case RTTI_INFANTRYTYPE:
 		case RTTI_INFANTRY:
 			if (id >= 0 && id < InfantryTypes.Count()) {
-				return(TechnoTypeClass *)(InfantryTypes[id]);
+				return(InfantryTypes[id]);
 			}
 			break;
 
 		case RTTI_AIRCRAFTTYPE:
 		case RTTI_AIRCRAFT:
 			if (id >= 0 && id < AircraftTypes.Count()) {
-				return(TechnoTypeClass *)(AircraftTypes[id]);
+				return(AircraftTypes[id]);
 			}
 			break;
 

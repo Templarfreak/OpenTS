@@ -35,6 +35,7 @@
 #include "_map.h"
 #include "abstract.h"
 #include "globals.h"
+#include "houseset.h"
 #include "map.h"
 #include "rect.h"
 
@@ -167,14 +168,14 @@ class CellClass : public AbstractClass
 		Rect LastBridgeDrawRect;
 
 		/*
-		 * These are bit lists of which houses have cloaked, sensed or built over this
-		 * cell -- one bit per house. Cloaking and sensing are per house because an object
-		 * hidden from one player may be plainly visible to another, and the occupation
-		 * bits let base placement logic tell whose structures already stand here.
+		 * These count, for each house, the cloak generators and sensor arrays covering this
+		 * cell, and mark the houses that have built over it. Cloaking and sensing are per house
+		 * because an object hidden from one player may be plainly visible to another, and the
+		 * occupation marks let base placement logic tell whose structures already stand here.
 		 */
-		unsigned CloakedBy;
-		unsigned SensedBy;
-		unsigned OccupiedBy;
+		HouseArray<std::uint16_t> CloakCount;
+		HouseArray<std::uint16_t> SensorCount;
+		HouseSet OccupiedBy;
 
 	private:
 
@@ -346,25 +347,25 @@ class CellClass : public AbstractClass
 		**	A mapped cell has some portion of it visible. Maybe it has a shroud piece
 		**	over it and maybe not.
 		*/
-		unsigned IsMapped:1;
+		HouseSet IsMapped;
 
 		/*
 		**	A visible cell means that it is completely visible with no shroud over
 		**	it at all.
 		*/
-		unsigned IsVisible:1;
+		HouseSet IsVisible;
 
 		/*
 		 * A visible cell means that it is completely visible with no fog over
 		 * it at all.
 		 */
-		unsigned IsFogVisible:1;
+		HouseSet IsFogVisible;
 
 		/*
 		 * A mapped cell has some portion of it visible. Maybe it has a fog piece
 		 * over it and maybe not.
 		 */
-		unsigned IsFogMapped:1;
+		HouseSet IsFogMapped;
 
 		/*
 		**	Every cell can be assigned a waypoint.  A waypoint can only be assigned
@@ -390,14 +391,14 @@ class CellClass : public AbstractClass
 		**	shrouded. By using this flag it allows a single pass through the map
 		**	cells for determining shadow regrowth logic.
 		*/
-		unsigned IsToShroud:1;
+		HouseSet IsToShroud;
 
 		/*
 		 * This is a working flag used to help keep track of what cells should be
 		 * fogged. By using this flag it allows a single pass through the map
 		 * cells for determining fog regrowth logic.
 		 */
-		unsigned IsToFog:1;
+		HouseSet IsToFog;
 
 		/*
 		 * This cell hosts a bridge deck piece: it carries the bridge overlay and
@@ -578,13 +579,13 @@ class CellClass : public AbstractClass
 		virtual Coord Center_Coord(void) const override;
 		virtual Coord As_Coord(void) const override;
 
-		bool Is_Cloaked(HousesType house) const;
-		bool Is_Sensed(HousesType house) const;
-		void Cloaked_By(HousesType house);
-		void Uncloaked_By(HousesType house);
-		void Sensed_By(HousesType house);
-		void Unsensed_By(HousesType house);
-		bool Should_Draw_As_Cloaked(HousesType house) const;
+		bool Is_Cloaked(HouseClass const * house) const;
+		bool Is_Sensed(HouseClass const * house) const;
+		bool Add_Cloak(HouseClass const * house);
+		bool Remove_Cloak(HouseClass const * house);
+		bool Add_Sensor(HouseClass const * house);
+		bool Remove_Sensor(HouseClass const * house);
+		bool Should_Draw_As_Cloaked(HouseClass const * house) const;
 
 		int Get_Vein_Frame(void) const;
 		bool Can_Place_Veins(void);
@@ -618,7 +619,7 @@ class CellClass : public AbstractClass
 		bool Is_Fogged(void) const;
 		bool Is_Shrouded(void) const;
 		bool Can_Build_Here(void) const;
-		int Occupation_Mask(HousesType house) const;
+		int Occupation_Mask(HouseClass const * house) const;
 
 		/*
 		**	Object placement and removal flag operations.
@@ -663,6 +664,7 @@ class CellClass : public AbstractClass
 		bool Has_Wall_Or_Gate(OverlayType type=OVERLAY_NONE, FacingType facing=FACING_NONE) const;
 		BuildingClass * Get_Gate(void) const;
 		void Recalc_Attributes(int cell_height=-1);
+		void Remove_Steep_Slope_Tiberium(void);
 		void Recalc_Passability(void);
 		void Destroy_Bridge(void);
 		void On_Bridge_Collapse(void);

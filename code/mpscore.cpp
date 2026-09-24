@@ -35,7 +35,6 @@
 #include "session.h"
 #include "stats.h"
 #include "surface.h"
-#include "windlg.h"
 #include "winstub.h"
 
 #include "color.hh"
@@ -182,8 +181,6 @@ bool MultiScore::Multi_Presentation(void)
 	if (AlternateSurface == NULL || HiddenSurface == NULL) {
 		return(false);
 	}
-
-	while (WS_Destroy_Dialog(0, 0)) { }
 
 	if (Init() == true) {
 		Keyboard->Clear();
@@ -393,7 +390,7 @@ void MultiScore::Tally_Score(void)
 		**	Initialize this new score entry
 		*/
 		Session.Score[score_index].Wins = 0;
-		strncpy(Session.Score[score_index].Name, hptr->IniName, MPLAYER_NAME_MAX);
+		strncpy(Session.Score[score_index].Name, Session.Shown_Name(hptr).c_str(), MPLAYER_NAME_MAX);
 		Session.Score[score_index].Name[MPLAYER_NAME_MAX - 1] = '\0';
 
 		/*

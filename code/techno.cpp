@@ -248,13 +248,12 @@ TechnoClass::TechnoClass(HouseClass * house) :
 	IsInRecoilState(false),
 	IsTethered(false),
 	IsOwnedByPlayer(false),
-	IsDiscoveredByPlayer(false),
-	IsDiscoveredByComputer(false),
+	DiscoveredBy(),
 	IsALemon(false),
 	ArmorBias(1),
 	FirepowerBias(1),
 	IdleTimer(0),
-	SpiedBy(0),
+	SpiedBy(),
 	ArchivedTarget(NULL),
 	House(house),
 	Cloak(UNCLOAKED),
@@ -303,7 +302,7 @@ TechnoClass::TechnoClass(HouseClass * house) :
 	IsOnWaypointPatrol(false),
 	NearbyObject(NULL),
 	StunDuration(0),
-	LimpetType(0)
+	LimpetType()
 {
 	if (house != NULL) {
 		ActLike = house->ActLike;
@@ -398,7 +397,7 @@ bool TechnoClass::Is_Players_Army(void) const
 	**	If not discoverd by the player, then don't consider it part of the
 	**	player's army (yet).
 	*/
-	if (!IsDiscoveredByPlayer) {
+	if (!DiscoveredBy[PlayerPtr]) {
 		return(false);
 	}
 
@@ -784,8 +783,8 @@ void TechnoClass::Debug_Dump(MonoClass * mono) const
 	mono->Fill_Attrib(27, 16, 12, 1, IsInRecoilState ? MonoClass::INVERSE : MonoClass::NORMAL);
 	mono->Fill_Attrib(27, 17, 12, 1, IsTethered ? MonoClass::INVERSE : MonoClass::NORMAL);
 	mono->Fill_Attrib(40, 13, 12, 1, IsOwnedByPlayer ? MonoClass::INVERSE : MonoClass::NORMAL);
-	mono->Fill_Attrib(40, 14, 12, 1, IsDiscoveredByPlayer ? MonoClass::INVERSE : MonoClass::NORMAL);
-	mono->Fill_Attrib(40, 15, 12, 1, IsDiscoveredByComputer ? MonoClass::INVERSE : MonoClass::NORMAL);
+	mono->Fill_Attrib(40, 14, 12, 1, DiscoveredBy[PlayerPtr] ? MonoClass::INVERSE : MonoClass::NORMAL);
+	mono->Fill_Attrib(40, 15, 12, 1, DiscoveredBy.Any() ? MonoClass::INVERSE : MonoClass::NORMAL);
 	mono->Fill_Attrib(40, 16, 12, 1, IsALemon ? MonoClass::INVERSE : MonoClass::NORMAL);
 
 	BASECLASS::Debug_Dump(mono);
@@ -856,9 +855,14 @@ int TechnoClass::Time_To_Build(void) const
 	power = std::max(power, Rule->MinLowPowerProductionSpeed);
 	val /= power;
 
-	int divisor = House->Factory_Count(RTTI);
-	if (divisor > 1 && Rule->MultipleFactory > 0) {
-		val *= 1.0 / ((divisor - 1) * Rule->MultipleFactory);
+	int extra = House->Factory_Count(RTTI) - 1;
+	if (Rule->MultipleFactoryCap > 0) {
+		extra = std::min(extra, Rule->MultipleFactoryCap - 1);
+	}
+	if (Rule->MultipleFactory > 0) {
+		for (; extra > 0; extra--) {
+			val *= Rule->MultipleFactory;
+		}
 	}
 	if (RTTI == RTTI_BUILDING && ((BuildingClass *)this)->Class->IsWall) {
 		val *= Rule->WallBuildSpeedCoefficient;
@@ -886,28 +890,40 @@ int TechnoClass::Time_To_Build(void) const
  *=============================================================================================*/
 bool TechnoClass::Revealed(HouseClass * house)
 {
-	if (house == PlayerPtr && IsDiscoveredByPlayer) return(false);
-	if (house != PlayerPtr) {
-		if (IsDiscoveredByComputer) return(false);
-		IsDiscoveredByComputer = true;
-	}
+	if (house == NULL || DiscoveredBy[house]) return(false);
 
 	if (BASECLASS::Revealed(house)) {
+		bool const human = house->Is_Player_View();
+
+		// An ambusher wakes for the first player and the first other house to find it; the
+		// trigger springs only for the first player other than the owner.
+		bool first_of_kind = true;
+		bool found_by_stranger = false;
+		for (int index = 0; index < Houses.Count(); index++) {
+			HouseClass * other = Houses[index];
+			if (!DiscoveredBy[other]) continue;
+			if (other->Is_Player_View() == human) {
+				first_of_kind = false;
+			}
+			if (other != House && other->Is_Player_View()) {
+				found_by_stranger = true;
+			}
+		}
+		DiscoveredBy.Set(house);
 
 		/*
 		**	An enemy object that is discovered will go into hunt mode if
 		**	its current mission is to ambush.
 		*/
-		if (!House->Is_Human_Player() && Mission == MISSION_AMBUSH) {
+		if (first_of_kind && !House->Is_Human_Player() && Mission == MISSION_AMBUSH) {
 			Assign_Mission(MISSION_HUNT);
 		}
 
-		if (house == PlayerPtr) {
-			IsDiscoveredByPlayer = true;
+		if (human) {
 			House->RecalcPower = true;
 			House->RecalcRadar = true;
 
-			if (!IsOwnedByPlayer) {
+			if (house != House && !found_by_stranger) {
 
 				/*
 				**	If there is a trigger event associated with this object, then process
@@ -927,11 +943,9 @@ bool TechnoClass::Revealed(HouseClass * house)
 			// lifts, so an ally's placed structure reveals for the player; a campaign keeps
 			// the look to the player's own objects so discovery does not chain through an
 			// allied base.
-			if (IsOwnedByPlayer || Session.Type != GAME_NORMAL) {
+			if (house == House || Session.Type != GAME_NORMAL) {
 				Look();
 			}
-		} else {
-			IsDiscoveredByComputer = true;
 		}
 		return(true);
 	}
@@ -957,9 +971,21 @@ bool TechnoClass::Revealed(HouseClass * house)
  *=============================================================================================*/
 void TechnoClass::Hidden(void)
 {
-	if (!IsDiscoveredByPlayer) return;
 	if (!House->Is_Human_Player()) {
-		IsDiscoveredByPlayer = false;
+		Forget_Human_Discovery();
+	}
+}
+
+
+/// <summary>
+/// Makes every house that is a player's view discover this object again.
+/// </summary>
+void TechnoClass::Forget_Human_Discovery(void)
+{
+	for (int index = 0; index < Houses.Count(); index++) {
+		if (Houses[index]->Is_Player_View()) {
+			DiscoveredBy.Clear(Houses[index]);
+		}
 	}
 }
 
@@ -1096,7 +1122,7 @@ RadioMessageType TechnoClass::Receive_Message(RadioClass * from, RadioMessageTyp
 		**	Handle repair of this unit.
 		*/
 		case RADIO_REPAIR:
-			LimpetType = 0;
+			LimpetType.Clear();
 			LimpetSpeedFactor = 0;
 
 			PrimaryFacing.Set_ROT(TClass->ROT);
@@ -1171,12 +1197,12 @@ void TechnoClass::Try_To_Cloak(void)
 	int i;
 
 	CellClass & cell = Map[Center_Coord().As_Cell()];
-	if (cell.Is_Cloaked(House->HeapID) && Is_Ready_To_Cloak()) {
+	if (cell.Is_Cloaked(House) && Is_Ready_To_Cloak()) {
 		DynamicVectorClass<TechnoClass *> targeting_me;
 		for (i = Technos.Count() - 1; i >= 0; i--) {
 			TechnoClass * tech = Technos[i];
 			if (tech->TarCom == this) {
-				if (Map[Center_Coord()].Is_Sensed(tech->House->HeapID) || tech->House == House) {
+				if (Map[Center_Coord()].Is_Sensed(tech->House) || tech->House == House) {
 					targeting_me.Add(tech);
 				}
 			}
@@ -1231,8 +1257,11 @@ void TechnoClass::Per_Cell_Process(PCPType why)
 		**	If this object somehow moves into mapped terrain, but is not yet
 		**	discovered, then flag it to be discovered.
 		*/
-		if (!IsDiscoveredByPlayer && Map[cell].IsVisible) {
-			Revealed(PlayerPtr);
+		for (int index = 0; index < Houses.Count(); index++) {
+			HouseClass * house = Houses[index];
+			if (house->Is_Player_View() && !DiscoveredBy[house] && Map[cell].IsVisible[house]) {
+				Revealed(house);
+			}
 		}
 
 		Map[cell].Trigger_Veins();
@@ -1254,12 +1283,12 @@ void TechnoClass::Draw_Post_Render(Point2D const & point, Rect const & cliprect)
 	bool sensed_underground = false;
 	if (!IsSelected) {
 		CellClass * cell = Get_Cell_Ptr();
-		if (HeightAGL < -20 && cell->Is_Sensed(PlayerPtr->HeapID)) {
+		if (HeightAGL < -20 && cell->Is_Sensed(PlayerPtr)) {
 			sensed_underground = true;
 		}
 	}
 
-	bool allied = House->Shares_View_With(PlayerPtr) || (SpiedBy & (1<<(PlayerPtr->Class->House)));
+	bool allied = House->Shares_View_With(PlayerPtr) || SpiedBy[PlayerPtr];
 
 	if (IsSelected || sensed_underground) {
 
@@ -1267,7 +1296,7 @@ void TechnoClass::Draw_Post_Render(Point2D const & point, Rect const & cliprect)
 		if (RTTI == RTTI_BUILDING || (unit != NULL && unit->Class->IsCoreDefender)) {
 
 			int color = WHITE;
-			if (LimpetType > 0) {
+			if (LimpetType.Any()) {
 				color = YELLOW;
 			}
 			if (HeightAGL < -4) {
@@ -1393,7 +1422,7 @@ void TechnoClass::Draw_Pre_Render(Point2D const & point, Rect const & cliprect) 
 {
 	if (RTTI == RTTI_BUILDING && IsSelected && RTTI != RTTI_INFANTRY) {
 		int color = WHITE;
-		if (LimpetType > 0) {
+		if (LimpetType.Any()) {
 			color = YELLOW;
 		}
 		if (HeightAGL < -4) {
@@ -1572,7 +1601,7 @@ void TechnoClass::Draw_Health_Bar(Point2D const & xpoint, Rect const & cliprect)
 			health_bar_count = 8;
 		} else {
 			if (IsSelected) {
-				Draw_Shape(*LogicalSurface, *NormalDrawer, (ShapeSet const *)ObjectTypeClass::SelectShapes, (LimpetType != 0 ? 8 : 0) + (powerup ? 4 : 0) + 3, xpoint, cliprect, ShapeFlags_Type(SHAPE_ALPHA|SHAPE_WIN_REL|SHAPE_CENTER));
+				Draw_Shape(*LogicalSurface, *NormalDrawer, (ShapeSet const *)ObjectTypeClass::SelectShapes, (LimpetType.Any() ? 8 : 0) + (powerup ? 4 : 0) + 3, xpoint, cliprect, ShapeFlags_Type(SHAPE_ALPHA|SHAPE_WIN_REL|SHAPE_CENTER));
 			}
 			offset = Point2D(-15, -25);
 			health_bar_count = 17;
@@ -1720,7 +1749,7 @@ void TechnoClass::Draw_It(int x, int y, int /*WindowNumberType*/ window) const
 			// Lower left corner.
 			draw_window.Draw_Line(x-lx, y+ly, x-lx+dx, y+ly, WHITE);
 			draw_window.Draw_Line(x-lx, y+ly, x-lx, y+ly-dy, WHITE);
-			if (House->Is_Ally(PlayerPtr) || (SpiedBy & (1<<(PlayerPtr->Class->House)))) {
+			if (House->Is_Ally(PlayerPtr) || SpiedBy[PlayerPtr]) {
 				Draw_Pips((x-lx)+5, y+ly-3, window);
 			}
 		}
@@ -1814,7 +1843,7 @@ bool TechnoClass::Unlimbo(Coord const & coord, Dir256 dir)
 		SightIncrease = Get_Sight_Bonus(coord);
 
 		if (!Map.In_Local_Radar(coord.As_Cell())) {
-			IsDiscoveredByPlayer = false;
+			Forget_Human_Discovery();
 		}
 
 		int risk = Risk();
@@ -2048,7 +2077,7 @@ bool TechnoClass::Evaluate_Object(ThreatType method, int mask, int range, Techno
 	**	If the object is cloaked, then it isn't a legal target.
 	*/
 	if (object->Cloak == CLOAKED) {
-		if (!Map[object->Center_Coord()].Is_Sensed(House->HeapID) && House != object->House) {
+		if (!Map[object->Center_Coord()].Is_Sensed(House) && House != object->House) {
 			BEnd(BENCH_EVAL_OBJECT);
 			return(false);
 		}
@@ -2150,7 +2179,7 @@ bool TechnoClass::Evaluate_Object(ThreatType method, int mask, int range, Techno
 	**	If the object is not visible, then bail. Human controlled units
 	**	are always considered to be visible.
 	*/
-	if (House->Is_Player_Control() && !object->IsOwnedByPlayer && !object->IsDiscoveredByPlayer && Session.Type == GAME_NORMAL && object->RTTI != RTTI_AIRCRAFT) {
+	if (House->Is_Player_Control() && !object->IsOwnedByPlayer && !object->DiscoveredBy[PlayerPtr] && Session.Type == GAME_NORMAL && object->RTTI != RTTI_AIRCRAFT) {
 		BEnd(BENCH_EVAL_OBJECT);
 		return(false);
 	}
@@ -3077,13 +3106,13 @@ void TechnoClass::AI(void)
 	Cloaking_AI();
 
 	if (Cloak == UNCLOAKED) {
-		if (Map[Center_Coord()].Is_Cloaked(House->HeapID)) {
+		if (Map[Center_Coord()].Is_Cloaked(House)) {
 			Try_To_Cloak();
 		}
 	}
 
 	if (Cloak == CLOAKED) {
-		if (!Map[Center_Coord()].Is_Cloaked(House->HeapID)) {
+		if (!Map[Center_Coord()].Is_Cloaked(House)) {
 			Try_To_Cloak();
 		}
 	}
@@ -3329,7 +3358,7 @@ void TechnoClass::Cloaking_AI(bool)
 							for (i = Technos.Count() - 1; i >= 0; i--) {
 								TechnoClass * tech = Technos[i];
 								if (tech->TarCom == this) {
-									if (Map[Center_Coord()].Is_Sensed(tech->House->HeapID) || tech->House == House) {
+									if (Map[Center_Coord()].Is_Sensed(tech->House) || tech->House == House) {
 										targeting_me.Add(tech);
 									}
 								}
@@ -3372,7 +3401,7 @@ void TechnoClass::Cloaking_AI(bool)
 /// <returns>bool; Should the object uncloak now?</returns>
 bool TechnoClass::Should_Uncloak(void) const
 {
-	bool cloaked = Map[Center_Coord().As_Cell()].Is_Cloaked(House->HeapID);
+	bool cloaked = Map[Center_Coord().As_Cell()].Is_Cloaked(House);
 	if (!(Is_Allowed_To_Recloak() || IsCloakable) || Is_Immobilized()) {
 		if (Has_Ability(ABILITY_CLOAK)) return(false);
 		if (!cloaked) return(true);
@@ -3403,7 +3432,7 @@ bool TechnoClass::Is_Ready_To_Cloak(void) const
 	**	If the object cannot recloak, then it certainly is not allowed to start.
 	*/
 	if (!Is_Allowed_To_Recloak() && !Has_Ability(ABILITY_CLOAK)) {
-		if (!Map[Center_Coord().As_Cell()].Is_Cloaked(House->HeapID) && !IsCloakable) {
+		if (!Map[Center_Coord().As_Cell()].Is_Cloaked(House) && !IsCloakable) {
 			return(false);
 		}
 	}
@@ -3469,7 +3498,7 @@ bool TechnoClass::Is_Ready_To_Cloak(void) const
  *=============================================================================================*/
 bool TechnoClass::Select(void)
 {
-	if (!IsDiscoveredByPlayer && !House->Is_Player_Control() && MainWindow) {
+	if (!DiscoveredBy[PlayerPtr] && !House->Is_Player_Control() && MainWindow) {
 		return(false);
 	}
 
@@ -3524,7 +3553,7 @@ FireErrorType TechnoClass::Can_Fire(AbstractClass * target, int which) const
 	**	If the object is completely cloaked, then you can't fire on it.
 	*/
 	if (techno != NULL && techno->Visual_Character(true, House) == VISUAL_HIDDEN
-		&& !cellptr->Is_Sensed(House->HeapID) && techno->House != House
+		&& !cellptr->Is_Sensed(House) && techno->House != House
 		&& (Combat_Damage() > 0 || !techno->House->Is_Ally(House)))	{
 
 		goto CANT_FIRE;
@@ -3990,8 +4019,8 @@ BulletClass * TechnoClass::Fire_At(AbstractClass * target, int which)
 
 	if (weapon->WarheadPtr != NULL && weapon->WarheadPtr->LimpetFactor > 0 && target->Is_Techno() == true) {
 		TechnoClass * techno = (TechnoClass *)target;
-		if ((techno->LimpetType & 1 << House->HeapID) == 0) {
-			techno->LimpetType |= 1 << House->HeapID;
+		if (!techno->LimpetType[House]) {
+			techno->LimpetType.Set(House);
 			techno->LimpetSpeedFactor = (double)(100 - weapon->WarheadPtr->LimpetFactor) / 100.0;
 			PrimaryFacing.Set_ROT((int)((double)TClass->ROT * techno->LimpetSpeedFactor));
 			SecondaryFacing.Set_ROT((int)((double)TClass->ROT * techno->LimpetSpeedFactor));
@@ -4254,17 +4283,16 @@ BulletClass * TechnoClass::Fire_At(AbstractClass * target, int which)
 				/*
 				**	If a projectile was fired from a unit that is hidden in the darkness,
 				**	reveal that unit and a little area around it.
-				**	For multiplayer games, only reveal the unit if the target is the
-				**	local player.
+				**	Only reveal the unit if the target belongs to a human player.
 				*/
-				if ((!IsOwnedByPlayer && !IsDiscoveredByPlayer) || ((Map.Is_Shrouded(Center_Coord()) || Map.Is_Fogged(Center_Coord())) && (RTTI != RTTI_AIRCRAFT || !IsOwnedByPlayer))) {
-					ObjectClass * obj = target->As_ObjectClass();
-					if (obj != NULL) {
-						HouseClass * tgt_owner = obj->Owner_HouseClass();
-
-						if (tgt_owner != NULL && tgt_owner->Is_Player_Control()) {
-							Map.Sight_From(Center_Coord(), 2, tgt_owner);
-						}
+				ObjectClass * obj = target->As_ObjectClass();
+				HouseClass * tgt_owner = (obj != NULL) ? obj->Owner_HouseClass() : NULL;
+				HouseClass * viewer = (tgt_owner != NULL) ? tgt_owner->Player_View() : NULL;
+				if (viewer != NULL) {
+					bool owned = (House == viewer);
+					bool hidden = Map.Is_Shrouded(Center_Coord(), viewer) || Map.Is_Fogged(Center_Coord(), viewer);
+					if ((!owned && !DiscoveredBy[viewer]) || (hidden && (RTTI != RTTI_AIRCRAFT || !owned))) {
+						Map.Sight_From(Center_Coord(), 2, tgt_owner);
 					}
 				}
 			}
@@ -4565,7 +4593,9 @@ ActionType TechnoClass::What_Action(Cell const & cell, bool check_fog, bool disa
 		}
 
 		if (Is_Move_Override()) {
-			if (altdown) {
+
+			// AltToRally swaps the plain click and the force-move key.
+			if (!disallow_force && altdown == Options.AltToRally) {
 				return(ACTION_RALLY_TO_POINT);
 			}
 			if (!Can_Player_Move()) {
@@ -4778,7 +4808,7 @@ bool TechnoClass::Can_Repair(void) const
 	if (RTTI != RTTI_BUILDING) {
 		return(false);
 	}
-	return(TClass->IsRepairable && Strength != Class_Of()->MaxStrength || LimpetType);
+	return(TClass->IsRepairable && Strength != Class_Of()->MaxStrength || LimpetType.Any());
 }
 
 
@@ -5057,7 +5087,7 @@ ResultType TechnoClass::Take_Damage(int & damage, int distance, WarheadTypeClass
 	 * normal rate of turn for the turret and body.
 	 */
 	if (negative == true) {
-		LimpetType = 0;
+		LimpetType.Clear();
 		LimpetSpeedFactor = 0.0;
 		PrimaryFacing.Set_ROT(TClass->ROT);
 		SecondaryFacing.Set_ROT(TClass->ROT);
@@ -5621,7 +5651,7 @@ VisualType TechnoClass::Visual_Character(bool raw, HouseClass const * house) con
 	**	by the player.
 	*/
 	if (Cloak == CLOAKED) {
-		if (raw && house != NULL && Map[Get_Coord().As_Cell()].Is_Sensed(house->HeapID)) return(VISUAL_SHADOWY);
+		if (raw && house != NULL && Map[Get_Coord().As_Cell()].Is_Sensed(house)) return(VISUAL_SHADOWY);
 		if (!raw && !MainWindow) return(VISUAL_SHADOWY);
 		if (!raw && IsOwnedByPlayer) return(VISUAL_SHADOWY);
 		if (!raw && Is_Sensed_By_Player()) return(VISUAL_SHADOWY);
@@ -6514,7 +6544,7 @@ void TechnoClass::Detach(AbstractClass const * target, bool all)
 
 	if (!all && target->Is_Techno()) {
 		CellClass * cptr = &Map[target->Center_Coord()];
-		if (cptr->Is_Sensed(House->HeapID)) {
+		if (cptr->Is_Sensed(House)) {
 			clear_target = false;
 		}
 	}
@@ -7824,7 +7854,7 @@ void TechnoClass::Draw_Text_Overlay(Point2D const & point1, Point2D const & poin
  *   07/18/1995 JLB : Created.                                                                 *
  *   08/13/1995 JLB : Recognizes the "IsLeader" method of building preference.                 *
  *=============================================================================================*/
-BuildingClass * TechnoClass::Find_Docking_Bay(BuildingTypeClass const * b, bool friendly, bool evenoccupied) const
+BuildingClass * TechnoClass::Find_Docking_Bay(BuildingTypeClass const * b, bool friendly, bool unoccupied) const
 {
 	BuildingClass * best = 0;
 
@@ -7834,7 +7864,7 @@ BuildingClass * TechnoClass::Find_Docking_Bay(BuildingTypeClass const * b, bool 
 	**	for one.
 	*/
 	if (House->BQuantity.Value(b->HeapID) != 0) {
-		int bestval = -1;
+		long long bestval = -1;
 
 		/*
 		**	Loop through all the buildings and find the one that matches the specification
@@ -7850,7 +7880,7 @@ BuildingClass * TechnoClass::Find_Docking_Bay(BuildingTypeClass const * b, bool 
 				(friendly ? building->House->Is_Ally(this) : building->House == House) &&
 				!building->IsInLimbo &&
 				building->Class == b &&
-				(!evenoccupied || !building->In_Radio_Contact()) &&
+				(!unoccupied || !building->In_Radio_Contact()) &&
 				(RTTI == RTTI_AIRCRAFT || Map.Is_Same_Cell_Zone(Destination_Coord().As_Cell(), building->Center_Coord().As_Cell(), TClass->MZone, Is_Moving_Onto_Bridge(), false, false)) &&
 				((TechnoClass *)this)->Transmit_Message(RADIO_CAN_LOAD, building) == RADIO_ROGER) {
 
@@ -7859,13 +7889,49 @@ BuildingClass * TechnoClass::Find_Docking_Bay(BuildingTypeClass const * b, bool 
 				**	last qualifying building (as rated by distance), then record
 				**	this building and keep scanning.
 				*/
-				int dist = Relative_Distance(building);
+				// Squared lepton distance overflows an int past about 181 cells.
+				Coord here = Center_Coord();
+				Coord there = building->Center_Coord();
+				long long dx = here.X - there.X;
+				long long dy = here.Y - there.Y;
+				long long dist = (dx * dx) + (dy * dy);
 				if (bestval == -1 || dist < bestval || building->IsLeader) {
 					best = building;
 					bestval = dist;
 				}
 			}
 		}
+	}
+	return(best);
+}
+
+
+/// <summary>
+/// Finds the nearest building of any type in the list that will take this object; a tie keeps
+/// the earlier type.
+/// </summary>
+/// <param name="friendly">Allow an allied house's buildings too.</param>
+/// <param name="unoccupied">Refuse a building that is already in radio contact.</param>
+/// <param name="distance">Optional; receives the distance in leptons when a building is found.</param>
+/// <returns>The building, or NULL.</returns>
+BuildingClass * TechnoClass::Find_Docking_Bay(TypeList<BuildingTypeClass const *> const & list, bool friendly, bool unoccupied, int * distance) const
+{
+	BuildingClass * best = NULL;
+	int bestval = -1;
+
+	for (int index = 0; index < list.Count(); index++) {
+		BuildingClass * building = Find_Docking_Bay(list[index], friendly, unoccupied);
+		if (building != NULL) {
+			int dist = Distance(building);
+			if (bestval == -1 || dist < bestval) {
+				best = building;
+				bestval = dist;
+			}
+		}
+	}
+
+	if (best != NULL && distance != NULL) {
+		*distance = bestval;
 	}
 	return(best);
 }
@@ -8070,11 +8136,14 @@ void TechnoClass::Look(bool incremental, bool dontmap)
 		}
 
 		if (sight_range) {
-			HouseClass * house = House;
-			if (((1 << PlayerPtr->HeapID) & LimpetType) != 0) {
-				house = PlayerPtr;
+			Map.Sight_From(PositionCoord, sight_range, House, incremental, dontmap);
+
+			for (int index = 0; index < Houses.Count(); index++) {
+				HouseClass * limpet_owner = Houses[index];
+				if (limpet_owner != House && LimpetType[limpet_owner]) {
+					Map.Sight_From(PositionCoord, sight_range, limpet_owner, incremental, dontmap);
+				}
 			}
-			Map.Sight_From(PositionCoord, sight_range, house, incremental, dontmap);
 		}
 	}
 }
@@ -8374,8 +8443,7 @@ void TechnoClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(IsInRecoilState);
 	stream.Serialize(IsTethered);
 	stream.Serialize(IsOwnedByPlayer);
-	stream.Serialize(IsDiscoveredByPlayer);
-	stream.Serialize(IsDiscoveredByComputer);
+	stream.Serialize(DiscoveredBy);
 	stream.Serialize(IsALemon);
 	stream.Serialize(UnusedCooldown);
 	stream.Serialize(Unused1);
@@ -8414,7 +8482,7 @@ void TechnoClass::Compute_CRC(CRCEngine & crc) const
 	crc(ArmorBias);
 	crc(FirepowerBias);
 	crc((int)IdleTimer);
-	crc((int)SpiedBy);
+	SpiedBy.Compute_CRC(crc);
 	crc(Cloak);
 	crc((int)CloakDelay);
 	crc(PredatorOffset);
@@ -8442,15 +8510,14 @@ void TechnoClass::Compute_CRC(CRCEngine & crc) const
 	crc(IsTethered);
 	if (Session.Type == GAME_NORMAL || Session.Type == GAME_SKIRMISH) {
 		crc(IsOwnedByPlayer);
-		crc(IsDiscoveredByPlayer);
-		crc(IsDiscoveredByComputer);
 	}
+	DiscoveredBy.Compute_CRC(crc);
 	crc(IsALemon);
 	crc(StunDuration);
 	crc(UnusedCooldown);
 	crc(Unused1);
 	crc(SightIncrease);
-	crc((int)LimpetType);
+	LimpetType.Compute_CRC(crc);
 }
 
 
@@ -8821,7 +8888,7 @@ bool TechnoClass::Is_Radar_Visible(DetectedType & detected) const
 		}
 
 		if (House->Is_Player_Control()) {
-			return(IsDiscoveredByPlayer ? true : false);
+			return(DiscoveredBy[PlayerPtr]);
 		}
 
 		int height = HeightAGL;
@@ -8858,7 +8925,7 @@ bool TechnoClass::Is_Sensed_By_Player(void) const
 			return(true);
 		}
 		CellClass * cptr = &Map[Center_Coord()];
-		return(cptr->Is_Sensed(PlayerPtr->HeapID));
+		return(cptr->Is_Sensed(PlayerPtr));
 	}
 	return(false);
 }
@@ -8873,7 +8940,7 @@ bool TechnoClass::Is_Sensed_By_House(HouseClass const * house) const
 {
 	if (house != NULL) {
 		CellClass * cptr = &Map[Center_Coord()];
-		return(cptr->Is_Sensed(house->HeapID));
+		return(cptr->Is_Sensed(house));
 	}
 	return(false);
 }
@@ -9070,8 +9137,8 @@ void TechnoClass::Update_Radar_Position(bool force_update)
 		return;
 	}
 
-	if (!IsDiscoveredByPlayer && Session.Type == GAME_NORMAL) {
-		IsDiscoveredByPlayer = !Map.Is_Shrouded(Center_Coord());
+	if (!DiscoveredBy[PlayerPtr] && Session.Type == GAME_NORMAL && !Map.Is_Shrouded(Center_Coord())) {
+		DiscoveredBy.Set(PlayerPtr);
 	}
 
 	Point2D point;
@@ -9154,7 +9221,11 @@ void TechnoClass::Set_Talker(TechnoClass * techno, TalkType bubble)
 		TalkBubbleType = bubble;
 		TalkBubbleOwner = techno;
 		TalkBubbleTimer = Rule->TalkBubbleTime;
-		Map.Sight_From(techno->Center_Coord(), 2, PlayerPtr);
+		for (int index = 0; index < Houses.Count(); index++) {
+			if (Houses[index]->Is_Player_View()) {
+				Map.Sight_From(techno->Center_Coord(), 2, Houses[index]);
+			}
+		}
 	} else {
 		TalkBubbleType = TALK_NONE;
 		TalkBubbleOwner = NULL;

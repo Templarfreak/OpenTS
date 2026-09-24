@@ -24,7 +24,9 @@
 #include "_surface.h"
 #include "_tactica.h"
 #include "_timer.h"
+#include "_ui.h"
 #include "_xmouse.h"
+#include "audio/audioengine.h"
 #include "bench.h"
 #include "chat.h"
 #include "command.h"
@@ -32,7 +34,6 @@
 #include "data.h"
 #include "debug.h"
 #include "dialog.h"
-#include "audio/audioengine.h"
 #include "dsurface.h"
 #include "fog.h"
 #include "globals.h"
@@ -46,6 +47,7 @@
 #include "msgloop.h"
 #include "mstimer.h"
 #include "netdlg.h"
+#include "nettiming.h"
 #include "pcx.h"
 #include "queue.h"
 #include "rules.h"
@@ -60,6 +62,9 @@
 #include "theme.h"
 #include "timer.h"
 #include "tracker.h"
+#include "ui/uienginehost.h"
+#include "ui/uishell.h"
+#include "video.h"
 
 #include "bench.hh"
 #include "special.hh"
@@ -154,24 +159,64 @@ void Motion_Capture(void)
 /// Handles the game losing the input focus.
 /// This routine parks the main loop while another application holds the focus, pumping
 /// the Windows message queue so that the game can be restored. A network game cannot
-/// afford to stall, so it pumps the queue once and lets play carry on regardless.
+/// afford to stall, so it pumps the queue once and lets play carry on regardless, and
+/// the SimulateWhileUnfocused option asks for the same of a solo or skirmish game.
 /// </summary>
 static void Check_For_Focus_Loss(void)
 {
+	bool parks = (Session.Type == GAME_NORMAL || Session.Type == GAME_SKIRMISH) && !Options.SimulateWhileUnfocused;
+
 	while (!GameInFocus) {
-		if (Session.Type == GAME_NORMAL || Session.Type == GAME_SKIRMISH) {
-			Sleep(500);
-			Windows_Message_Handler();
-		} else {
-			Sleep(10);
+		// A running game already sleeps in Sync_Delay, so a pause here would only slow it.
+		if (!parks) {
 			Windows_Message_Handler();
 			break;
 		}
+		Sleep(10);
+		Windows_Message_Handler();
 	}
-	return;
 }
 
 bool InMainLoop = false;
+
+
+static void Finish_Decided_Game(void)
+{
+	Unlock_Scenario_Input();
+
+	if (Session.Type == GAME_INTERNET && !GameStatisticsPacketSent) {
+		if (WestwoodOnline_Tournament) {
+			Session.SawGameCompletion = true;
+		}
+		Register_Game_End_Time();
+		Send_Statistics_Packet();
+	}
+
+	bool const won = PlayerWins;
+	PlayerWins = false;
+	PlayerLoses = false;
+	PlayerRestarts = false;
+	PlayerAborts = false;
+	if (won) {
+		Do_Win();
+	} else {
+		Do_Lose();
+	}
+}
+
+
+/// <summary>
+/// The frame rate the loop is held to, or zero for no limit.
+/// </summary>
+static int Target_Frame_Rate(void)
+{
+	if (Session.Type == GAME_NORMAL || Session.Type == GAME_SKIRMISH) {
+		return((int)NetTiming::Solo_Game_Speed_Frame_Rate(Options.GameSpeed));
+	}
+
+	// A recording is played back as fast as possible.
+	return(Session.Play ? 0 : Session.DesiredFrameRate);
+}
 
 /***********************************************************************************************
  * Main_Loop -- This is the main game loop (as a single loop).                                 *
@@ -192,31 +237,25 @@ bool Main_Loop(void)
 	KeyNumType	input;					// Player input.
 	int x;
 	int y;
-	int framedelay;
 
 	//Mono_Set_Cursor(0,0);
 
 	if (!GameActive) {return(!GameActive);}
+
+	if (PlayerWins || PlayerLoses) {
+		if (UIShell.Screen_Shown()) {
+			return(true);
+		}
+		Finish_Decided_Game();
+		return(!GameActive);
+	}
 
 	InMainLoop = true;
 
 	/*
 	**	Call the focus loss handler
 	*/
-	#if 0
 	Check_For_Focus_Loss();
-	#else
-	while (!GameInFocus) {
-		if (Session.Type == GAME_NORMAL || Session.Type == GAME_SKIRMISH) {
-			Sleep(500);
-			Windows_Message_Handler();
-		} else {
-			Sleep(10);
-			Windows_Message_Handler();
-			break;
-		}
-	}
-	#endif
 
 	/*
 	**	Sync-bug trapping code
@@ -255,29 +294,15 @@ bool Main_Loop(void)
 	/*
 	**	Setup the timer so that the Main_Loop function processes at the correct rate.
 	*/
-	if (Session.Type != GAME_NORMAL && Session.Type != GAME_SKIRMISH &&
-		Session.CommProtocol == COMM_PROTOCOL_MULTI_E_COMP) {
-
-		//
-		// In playback mode, run as fast as possible.
-		//
-		if (Session.Play) {
-			FrameTimer = 0;
-		} else {
-			framedelay = TIMER_SECOND / Session.DesiredFrameRate;
-			FrameTimer = framedelay;
-			framedelay = 1000 / Session.DesiredFrameRate;
-			NetFrameTimer = framedelay;
-		}
-	} else {
-		FrameTimer = Options.GameSpeed;
-	}
+	static NetTiming::FramePacer pacer;
+	FrameTimer = pacer.Next_Wait(Target_Frame_Rate());
 
 	/*
 	**	Update the display, unless we're inside a dialog.
 	*/
 	if (!Session.Play) {
 		if (SpecialDialog == SDLG_NONE && GameInFocus) {
+			UIShell.Tick();
 			Map.Input(input, x, y);
 			if (input) {
 				Keyboard_Process(input);
@@ -334,39 +359,16 @@ bool Main_Loop(void)
 
 	bool done = false;
 	if (PlayerWins || PlayerLoses || PlayerRestarts || PlayerAborts) {
-		Unlock_Scenario_Input();
-
-		/*
-		**	Check for player wins or loses according to global event flag.
-		*/
-		if (PlayerWins) {
-			if (Session.Type == GAME_INTERNET && !GameStatisticsPacketSent) {
-				if (WestwoodOnline_Tournament) {
-					Session.SawGameCompletion = true;
-				}
-				Register_Game_End_Time();
-				Send_Statistics_Packet();		// Player just won.
+		if (PlayerWins || PlayerLoses) {
+			if (UIShell.Screen_Shown()) {
+				BEnd(BENCH_GAME_FRAME);
+				InMainLoop = false;
+				return(true);
 			}
-			PlayerLoses = false;
-			PlayerWins = false;
-			PlayerRestarts = false;
-			PlayerAborts = false;
-			Do_Win();
+			Finish_Decided_Game();
 			done = true;
-		} else if (PlayerLoses) {
-			if (Session.Type == GAME_INTERNET && !GameStatisticsPacketSent) {
-				if (WestwoodOnline_Tournament) {
-					Session.SawGameCompletion = true;
-				}
-				Register_Game_End_Time();
-				Send_Statistics_Packet();		// Player just lost.
-			}
-			PlayerWins = false;
-			PlayerLoses = false;
-			PlayerRestarts = false;
-			PlayerAborts = false;
-			Do_Lose();
-			done = true;
+		} else {
+			Unlock_Scenario_Input();
 		}
 	}
 
@@ -537,23 +539,10 @@ void Keyboard_Process(KeyNumType & input)
 }
 
 
-/***********************************************************************************************
- * Sync_Delay -- Forces the game into a 15 FPS rate.                                           *
- *                                                                                             *
- *    This routine will wait until the timer for the current frame has expired before          *
- *    returning. It is called at the end of every game loop in order to force the game loop    *
- *    to run at a fixed rate.                                                                  *
- *                                                                                             *
- * INPUT:   none                                                                               *
- *                                                                                             *
- * OUTPUT:  none                                                                               *
- *                                                                                             *
- * WARNINGS:   This routine will delay an amount of time according to the game speed setting.  *
- *                                                                                             *
- * HISTORY:                                                                                    *
- *   01/04/1995 JLB : Created.                                                                 *
- *   03/06/1995 JLB : Fixed.                                                                   *
- *=============================================================================================*/
+/// <summary>
+/// Waits out the rest of the frame the main loop armed, taking input and redrawing the view
+/// while there is time.
+/// </summary>
 void Sync_Delay(void)
 {
 	/*
@@ -561,49 +550,31 @@ void Sync_Delay(void)
 	*/
 	SpareTicks += FrameTimer;
 
-	if (Session.Type != GAME_NORMAL && Session.Type != GAME_SKIRMISH) {
-		while (NetFrameTimer) {
-			Call_Back();
-			if (SpecialDialog == SDLG_NONE && GameInFocus == true) {
-				KeyNumType input = KN_NONE;
-				int x, y;
-				if (NetFrameTimer > 10) {
-					Map.Input(input, x, y);
-					Keyboard_Process(input);
-					TacticalMap->AI();
-					Map.Render();
-				} else {
-					Sleep(0);
-				}
-				if (!NetFrameTimer()) {
-					break;
-				}
-			}
-			Sleep(0);
-		}
-	} else {
-		while (FrameTimer) {
-			Call_Back();
-			if (SpecialDialog == SDLG_NONE && GameInFocus == true) {
-				KeyNumType input = KN_NONE;
-				int x, y;
+	while (FrameTimer) {
+		Call_Back();
+		if (SpecialDialog == SDLG_NONE && GameInFocus == true) {
+			KeyNumType input = KN_NONE;
+			int x, y;
+			if (FrameTimer > 10) {
 				Map.Input(input, x, y);
 				Keyboard_Process(input);
 				TacticalMap->AI();
 				Map.Render();
-				if (!FrameTimer) {
-					break;
-				}
-			}
-			if (GameInFocus || (Session.Type != GAME_NORMAL && Session.Type != GAME_SKIRMISH)) {
-				Sleep(0);
 			} else {
-				Sleep(16 * FrameTimer);
+				Sleep(0);
 			}
+			if (!FrameTimer()) {
+				break;
+			}
+		} else {
+			UI_Serve_Screen();
 		}
+
+		// Out of focus nothing is drawn, so the wait gives the processor back.
+		Sleep(GameInFocus ? 0 : 1);
 	}
 
-	static CDTimerClass<SystemTimerClass> fps_timer;
+	static CDTimerClass<MillisecondSystemTimerClass> fps_timer;
 	if (!fps_timer) {
 		LastFramesPerSecond = FramesThisSecond;
 		FramesThisSecond = 0;
@@ -613,7 +584,7 @@ void Sync_Delay(void)
 			TotalFrames = 0;
 			SecondsPassed = 0;
 		}
-		fps_timer = TIMER_SECOND;
+		fps_timer = 1000;
 	}
 }
 
@@ -738,7 +709,7 @@ void Multiplayer_Debug_Print(void)
 	sprintf(buffer, "MaxAhead : %d", Session.MaxAhead);
 	Fancy_Text_Print(buffer, *LogicalSurface, LogicalSurface->Get_Rect(), Point2D(0, top + 18), Fetch_Scheme_By_Name("Grey"), 0, (TextPrintType)(TPF_EFNT | TPF_NOSHADOW));
 
-	sprintf(buffer, "Resp Time : %d ms", (int)(Ipx.Response_Time() * 1000) / TIMER_SECOND);
+	sprintf(buffer, "Resp Time : %d ms", (int)(Ipx.Response_Time() * TIMER_TICK_MILLISECONDS));
 	Fancy_Text_Print(buffer, *LogicalSurface, LogicalSurface->Get_Rect(), Point2D(0, top + 26), Fetch_Scheme_By_Name("Grey"), 0, (TextPrintType)(TPF_EFNT | TPF_NOSHADOW));
 
 	sprintf(buffer, "Req fps : %d", Session.DesiredFrameRate);

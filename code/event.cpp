@@ -100,6 +100,7 @@ namespace {
 		InvalidTimingValues,
 		UnschedulableTiming,
 		InvalidNetworkReport,
+		InvalidAbandonCount,
 		Count,
 	};
 
@@ -122,6 +123,7 @@ namespace {
 		"invalid timing values",
 		"unschedulable timing",
 		"invalid network report",
+		"invalid abandon count",
 	};
 
 	static_assert(ARRAY_SIZE(EventRejectReasonNames) == (int)EventRejectReason::Count);
@@ -552,6 +554,28 @@ EventClass::EventClass(int index, unsigned char type, RTTIType object, int id)
 }
 
 
+/// <summary>
+/// Builds an event that abandons count items of one type, the queued copies first.
+/// </summary>
+EventClass::EventClass(int index, unsigned char type, RTTIType object, int id, int count)
+{
+	DebugString("Adding event %s\n", EventNames[type]);
+
+	if (index >= 0) {
+		ID = index;
+		Type = type;
+		Data.AbandonCount.Type = object;
+		Data.AbandonCount.ID = id;
+		Data.AbandonCount.Count = count;
+		Frame = ::Frame;
+	} else {
+		ID = -1;
+		Type = EMPTY;
+		Frame = ::Frame;
+	}
+}
+
+
 /***********************************************************************************************
  * EventClass::EventClass -- Constructor for object types affecting cells event.               *
  *                                                                                             *
@@ -783,7 +807,7 @@ void EventClass::Execute(void)
 				Special = Data.Options.Data;
 				Scen->Special = Data.Options.Data;
 
-				sprintf(txt, Fetch_String(TXT_SPECIAL_WARNING), (char const *)house->IniName);
+				sprintf(txt, Fetch_String(TXT_SPECIAL_WARNING), Session.Shown_Name(house).c_str());
 				Session.Messages.Add_Message(NULL, 0, txt,
 					house->Scheme,
 					TextPrintType(TPF_6PT_GRAD|TPF_USE_GRAD_PAL|TPF_FULLSHADOW), 1200);
@@ -905,6 +929,21 @@ void EventClass::Execute(void)
 				break;
 			}
 			house->Abandon_Production(Data.Specific.Type, Data.Specific.ID);
+			break;
+
+		// A count no factory could hold is refused rather than run.
+		case ABANDON_COUNT:
+			if (!Production_Selector_Is_Valid(Data.AbandonCount.Type, Data.AbandonCount.ID, true)) {
+				Log_Event_Rejection(EventRejectReason::InvalidProductionSelector, Type, ID, Data.AbandonCount.ID);
+				break;
+			}
+			if (Data.AbandonCount.Count < 1 || Data.AbandonCount.Count > Rule->MaximumQueuedObjects + 1) {
+				Log_Event_Rejection(EventRejectReason::InvalidAbandonCount, Type, ID, Data.AbandonCount.Count);
+				break;
+			}
+			for (int abandoned = 0; abandoned < Data.AbandonCount.Count; abandoned++) {
+				house->Abandon_Production(Data.AbandonCount.Type, Data.AbandonCount.ID);
+			}
 			break;
 
 		/*
@@ -1094,7 +1133,7 @@ void EventClass::Execute(void)
 				techno->Transmit_Message(RADIO_OVER_OUT);
 				techno->Assign_Destination(NULL);
 				techno->Assign_Target(NULL);
-				if (techno->RTTI == RTTI_UNIT && ((UnitClass *)techno)->Class->IsToHarvest && techno->CurrentMission == MISSION_HARVEST) {
+				if (techno->RTTI != RTTI_AIRCRAFT) {
 					techno->Assign_Mission(MISSION_GUARD);
 					techno->Commence();
 				}
@@ -1196,7 +1235,7 @@ void EventClass::Execute(void)
 			if (house != PlayerPtr && house != NULL) {
 				str = Fetch_String(TXT_PLAYER_CHANGED_SPEED);
 				if (str != NULL && strlen(str) != 0) {
-					sprintf(msg, str, house->IniName.c_str());
+					sprintf(msg, str, Session.Shown_Name(house).c_str());
 					Session.Messages.Add_Message(NULL, 0, msg, house->Scheme, TextPrintType(TPF_6PT_GRAD|TPF_USE_GRAD_PAL|TPF_FULLSHADOW), Rule->MessageDelay * TICKS_PER_MINUTE);
 				}
 			}
@@ -1286,7 +1325,7 @@ void EventClass::Execute(void)
 			if (house != PlayerPtr && house != NULL) {
 				str = Fetch_String(TXT_PLAYER_CHANGED_LATENCY);
 				if (str != NULL && strlen(str) != 0) {
-					sprintf(msg, str, house->IniName.c_str());
+					sprintf(msg, str, Session.Shown_Name(house).c_str());
 					Session.Messages.Add_Message(NULL, 0, msg, house->Scheme, TextPrintType(TPF_6PT_GRAD|TPF_USE_GRAD_PAL|TPF_FULLSHADOW), Rule->MessageDelay * TICKS_PER_MINUTE);
 				}
 			}

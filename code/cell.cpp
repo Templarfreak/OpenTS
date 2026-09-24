@@ -140,6 +140,9 @@
 #include <algorithm>
 
 
+static OverlayType Tiberium_Overlay_Here(CellClass const & cell, TiberiumClass const & tiberium);
+
+
 /// <summary>
 /// Fetches the ground height at a point within this cell.
 /// A ramp cell slopes across its own width, so a single height for the whole cell will not
@@ -246,15 +249,15 @@ CellClass::CellClass(void) :
 	CellID(CELL_NONE),
 	IsPlot(false),
 	IsCursorHere(false),
-	IsMapped(false),
-	IsVisible(false),
-	IsFogMapped(false),
-	IsFogVisible(false),
+	IsMapped(),
+	IsVisible(),
+	IsFogMapped(),
+	IsFogVisible(),
 	IsWaypoint(false),
 	IsRadarCursor(false),
 	IsFlagged(false),
-	IsToShroud(false),
-	IsToFog(false),
+	IsToShroud(),
+	IsToFog(),
 	IsBridgeDeck(false),
 	IsUnderBridge(false),
 	IsBridgeTraversable(false),
@@ -295,9 +298,9 @@ CellClass::CellClass(void) :
 	Tube(-1),
 	ShadowFrame(-2),
 	FogFrame(-2),
-	CloakedBy(0),
-	SensedBy(0),
-	OccupiedBy(0),
+	CloakCount(),
+	SensorCount(),
+	OccupiedBy(),
 	Intensity(0x10000),
 	Ambient(0),
 	Brightness(NORMAL_LIGHT),
@@ -447,23 +450,24 @@ void CellClass::Cell_Color(RGBClass & lowcolor, RGBClass & highcolor) const
 		if (tib != TIBERIUM_NONE) {
 			TiberiumClass * tiberium = Tiberiums[tib];
 
-			int index;
-			if (Ramp != 0) {
-				index = tiberium->Variety + tiberium->Overlay->HeapID + tiberium->RampVariety / 4 * (Ramp - 1) + CellID.X * CellID.Y % (tiberium->RampVariety / 4);
-			} else {
-				index = tiberium->Overlay->HeapID + CellID.X * CellID.Y % tiberium->Variety;
+			// A slope the set draws nothing on still takes the color of one of its flat overlays.
+			OverlayType index = Tiberium_Overlay_Here(*this, *tiberium);
+			if (index == OVERLAY_NONE) {
+				index = OverlayType(tiberium->Overlay->HeapID + CellID.X * CellID.Y % tiberium->Variety);
 			}
 
 			ShapeSet * shape = (ShapeSet *)OverlayTypes[index]->Get_Image_Data();
-			RGBClass color = shape->Get_Color(OverlayData);
+			if (shape != NULL) {
+				RGBClass color = shape->Get_Color(OverlayData);
 
-			if ((Overlay >= OVERLAY_TIBERIUM2_01 && Overlay <= OVERLAY_TIBERIUM2_12) ||
-				(Overlay >= OVERLAY_TIBERIUM3_01 && Overlay <= OVERLAY_TIBERIUM3_12)) {
-				color = RGBClass(color.Get_Red(), color.Get_Blue(), color.Get_Green());
+				if ((Overlay >= OVERLAY_TIBERIUM2_01 && Overlay <= OVERLAY_TIBERIUM2_12) ||
+					(Overlay >= OVERLAY_TIBERIUM3_01 && Overlay <= OVERLAY_TIBERIUM3_12)) {
+					color = RGBClass(color.Get_Red(), color.Get_Blue(), color.Get_Green());
+				}
+
+				highcolor = lowcolor = color;
+				return;
 			}
-
-			highcolor = lowcolor = color;
-			return;
 		}
 	}
 
@@ -781,7 +785,7 @@ bool CellClass::Is_Clear_To_Build(SpeedType loco, BuildingTypeClass * what, Hous
 
 	/*
 	**	Walls are always considered to block the terrain for general passability
-	**	purposes. In normal game mode, all overlays are not buildable.
+	**	purposes. In normal game mode, an overlay blocks building unless it is buildable over.
 	*/
 	if (Overlay != OVERLAY_NONE) {
 		HouseClass * owner = NULL;
@@ -818,7 +822,7 @@ bool CellClass::Is_Clear_To_Build(SpeedType loco, BuildingTypeClass * what, Hous
 			}
 		}
 
-		if (!Debug_Map || OverlayTypes[Overlay]->IsWall) {
+		if (OverlayTypes[Overlay]->IsWall || (!Debug_Map && !OverlayTypes[Overlay]->Can_Build_Over())) {
 			return(false);
 		}
 	}
@@ -1198,6 +1202,20 @@ void CellClass::Set_Wall_Owner(void)
 			}
 		}
 		Owner = owner;
+	}
+}
+
+
+/// <summary>
+/// Removes Tiberium a map placed on a corner, steep or double slope. Call it after the overlays
+/// are read and before the Tiberium growth and spread lists are built.
+/// </summary>
+void CellClass::Remove_Steep_Slope_Tiberium(void)
+{
+	if (Overlay != OVERLAY_NONE && OverlayTypes[Overlay]->IsTiberium && ITType != ISOTILE_NONE && ITType < IsometricTileTypes.Count()
+		&& IsometricTileTypes[ITType]->Ramp_Type(SubTile) > RAMP_SOUTH) {
+		Overlay = OVERLAY_NONE;
+		OverlayData = 0;
 	}
 }
 
@@ -1755,10 +1773,13 @@ void CellClass::Occupy_Down(ObjectClass * object, bool bridge)
 
 	/*
 	**	If being placed down on a visible square, then flag this
-	**	techno object as being revealed to the player.
+	**	techno object as being revealed to each player who sees it.
 	*/
-	if (!Map.Is_Shrouded(Cell_Coord()) && !Map.Is_Fogged(Cell_Coord()) || Session.Type != GAME_NORMAL) {
-		object->Revealed(PlayerPtr);
+	for (int index = 0; index < Houses.Count(); index++) {
+		HouseClass * house = Houses[index];
+		if (house->Is_Player_View() && (Session.Type != GAME_NORMAL || (!Map.Is_Shrouded(Cell_Coord(), house) && !Map.Is_Fogged(Cell_Coord(), house)))) {
+			object->Revealed(house);
+		}
 	}
 
 	/*
@@ -2159,15 +2180,33 @@ void CellClass::Draw_Fog_Shape(Point2D const & drawpoint, Rect const & cliprect,
 }
 
 
-static ShapeSet const * Tiberium_Overlay_Image(CellClass const & cell, TiberiumClass const & tiberium)
+/// <summary>
+/// The overlay that draws this type's Tiberium in the cell, or OVERLAY_NONE where its set has
+/// no artwork for the cell's slope.
+/// </summary>
+static OverlayType Tiberium_Overlay_Here(CellClass const & cell, TiberiumClass const & tiberium)
 {
 	int overlay = tiberium.Overlay->HeapID;
 	if (cell.Ramp != RAMP_NONE) {
+		if (cell.Ramp > RAMP_SOUTH || tiberium.RampVariety < 4) {
+			return(OVERLAY_NONE);
+		}
+
 		overlay += tiberium.Variety
 			+ tiberium.RampVariety / 4 * (cell.Ramp - 1)
 			+ cell.CellID.X * cell.CellID.Y % (tiberium.RampVariety / 4);
 	} else {
 		overlay += cell.CellID.X * cell.CellID.Y % tiberium.Variety;
+	}
+	return(OverlayType(overlay));
+}
+
+
+static ShapeSet const * Tiberium_Overlay_Image(CellClass const & cell, TiberiumClass const & tiberium)
+{
+	OverlayType const overlay = Tiberium_Overlay_Here(cell, tiberium);
+	if (overlay == OVERLAY_NONE) {
+		return(NULL);
 	}
 	return((ShapeSet const *)OverlayTypes[overlay]->Get_Image_Data());
 }
@@ -2492,7 +2531,7 @@ void CellClass::Wipe_Depth(Point2D const & point, Rect const & cliprect)
 /// <param name="cliprect">The clipping rectangle to draw within.</param>
 void CellClass::Draw_Shroud_And_Fog(Point2D const & point, Rect const & cliprect)
 {
-	ShadowFrame = TacticalMap->Cell_Shadow(CellID, false);
+	ShadowFrame = TacticalMap->Cell_Shadow(CellID, false, PlayerPtr);
 
 	int shadow_frame = ShadowFrame;
 	if (shadow_frame == -2) {
@@ -2503,7 +2542,7 @@ void CellClass::Draw_Shroud_And_Fog(Point2D const & point, Rect const & cliprect
 
 	Draw_Shroud_Or_Fog_Shape(point, cliprect, shadow_frame);
 
-	FogFrame = TacticalMap->Cell_Shadow(CellID, true);
+	FogFrame = TacticalMap->Cell_Shadow(CellID, true, PlayerPtr);
 
 	if (!Scen->Special.IsFogOfWar || Session.ObiWan) {
 		return;
@@ -3532,7 +3571,7 @@ bool CellClass::Goodie_Check(FootClass * object)
 					break;
 
 				case CRATE_ARMOR:
-					if (object->ArmorBias != 1) powerup = CRATE_MONEY;
+					if (!Rule->IsArmorCrateStacking && object->ArmorBias != 1) powerup = CRATE_MONEY;
 					break;
 
 				case CRATE_SPEED:
@@ -3540,7 +3579,7 @@ bool CellClass::Goodie_Check(FootClass * object)
 					break;
 
 				case CRATE_FIREPOWER:
-					if (object->FirepowerBias != 1 || !object->Is_Weapon_Equipped()) powerup = CRATE_MONEY;
+					if ((!Rule->IsFirepowerCrateStacking && object->FirepowerBias != 1) || !object->Is_Weapon_Equipped()) powerup = CRATE_MONEY;
 					break;
 
 				case CRATE_REVEAL:
@@ -3665,8 +3704,8 @@ bool CellClass::Goodie_Check(FootClass * object)
 			*/
 			case CRATE_DARKNESS:
 				DebugString("Crate at %d,%d contains 'shroud'\n", CellID.X, CellID.Y);
-				if (object->House->Is_Player_Control()) {
-					Map.Shroud_The_Map();
+				if (object->House->Player_View() != NULL) {
+					Map.Shroud_The_Map(object->House->Player_View());
 				}
 				break;
 
@@ -3675,8 +3714,8 @@ bool CellClass::Goodie_Check(FootClass * object)
 			*/
 			case CRATE_REVEAL:
 				DebugString("Crate at %d,%d contains 'reveal'\n", CellID.X, CellID.Y);
-				if (object->House->Is_Player_Control()) {
-					Map.Reveal_The_Map();
+				if (object->House->Player_View() != NULL) {
+					Map.Reveal_The_Map(object->House->Player_View());
 				}
 				break;
 
@@ -3782,7 +3821,7 @@ bool CellClass::Goodie_Check(FootClass * object)
 crate_money:
 				DebugString("Crate at %d,%d contains money\n", CellID.X, CellID.Y);
 				if (!force_money) {
-					force_money = Random_Pick((int)data, (int)data+900);
+					force_money = Random_Pick((int)data, (int)data + std::max(Rule->CrateMoneyBonus, 0));
 				}
 				if (!object->House->Is_Player_Control() || Session.Type != GAME_NORMAL) {
 					object->House->Refund_Money(force_money);
@@ -3899,7 +3938,7 @@ crate_money:
 				for (index = 0; index < DisplayClass::Layer[LAYER_GROUND].Count(); index++) {
 					ObjectClass * obj = DisplayClass::Layer[LAYER_GROUND][index];
 
-					if (obj != NULL && obj->Is_Techno() && Distance(Cell_Coord(), obj->Center_Coord()) < Rule->CrateRadius && ((TechnoClass *)obj)->ArmorBias == 1) {
+					if (obj != NULL && obj->Is_Techno() && Distance(Cell_Coord(), obj->Center_Coord()) < Rule->CrateRadius && (Rule->IsArmorCrateStacking || ((TechnoClass *)obj)->ArmorBias == 1)) {
 						double val = ((TechnoClass *)obj)->ArmorBias * data;
 						((TechnoClass *)obj)->ArmorBias = val;
 						if (obj->Owner_HouseClass()->Is_Player_Control()) tospeak = true;
@@ -3927,7 +3966,7 @@ crate_money:
 				for (index = 0; index < DisplayClass::Layer[LAYER_GROUND].Count(); index++) {
 					ObjectClass * obj = DisplayClass::Layer[LAYER_GROUND][index];
 
-					if (obj && obj->Is_Techno() && Distance(Cell_Coord(), obj->Center_Coord()) < Rule->CrateRadius && ((TechnoClass *)obj)->FirepowerBias == 1) {
+					if (obj && obj->Is_Techno() && Distance(Cell_Coord(), obj->Center_Coord()) < Rule->CrateRadius && (Rule->IsFirepowerCrateStacking || ((TechnoClass *)obj)->FirepowerBias == 1)) {
 
 						double val = ((TechnoClass *)obj)->FirepowerBias * data;
 						((TechnoClass *)obj)->FirepowerBias = val;
@@ -4401,8 +4440,8 @@ void CellClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(LastUnknownDrawFrame);
 	stream.Serialize(LastBridgeDrawFrame);
 	stream.Serialize(LastBridgeDrawRect);
-	stream.Serialize(CloakedBy);
-	stream.Serialize(SensedBy);
+	stream.Serialize(CloakCount);
+	stream.Serialize(SensorCount);
 	stream.Serialize(OccupiedBy);
 	stream.Serialize(OccupierPtr);
 	stream.Serialize(BridgeOccupierPtr);
@@ -4437,15 +4476,13 @@ void CellClass::Serialize(SaveStreamClass & stream)
 
 	SERIALIZE_BIT(stream, IsPlot);
 	SERIALIZE_BIT(stream, IsCursorHere);
-	SERIALIZE_BIT(stream, IsMapped);
-	SERIALIZE_BIT(stream, IsVisible);
-	SERIALIZE_BIT(stream, IsFogVisible);
-	SERIALIZE_BIT(stream, IsFogMapped);
+	stream.Serialize(IsMapped);
+	stream.Serialize(IsVisible);
+	stream.Serialize(IsFogVisible);
+	stream.Serialize(IsFogMapped);
 	SERIALIZE_BIT(stream, IsWaypoint);
 	SERIALIZE_BIT(stream, IsRadarCursor);
 	SERIALIZE_BIT(stream, IsFlagged);
-	SERIALIZE_BIT(stream, IsToShroud);
-	SERIALIZE_BIT(stream, IsToFog);
 	SERIALIZE_BIT(stream, IsBridgeDeck);
 	SERIALIZE_BIT(stream, IsUnderBridge);
 	SERIALIZE_BIT(stream, IsBridgeTraversable);
@@ -5751,14 +5788,14 @@ bool CellClass::Is_Tile_Clear_To_Green_LAT(void) const
 /// </summary>
 /// <param name="house">The house whose cloaking is to be considered.</param>
 /// <returns>bool; Should the cell be drawn cloaked?</returns>
-bool CellClass::Should_Draw_As_Cloaked(HousesType house) const
+bool CellClass::Should_Draw_As_Cloaked(HouseClass const * house) const
 {
 	if (PlayerPtr != NULL) {
 		if (Is_Cloaked(house)) {
-			if (house == PlayerPtr->HeapID){
+			if (house == PlayerPtr){
 				return(true);
 			}
-			if (!Is_Sensed(PlayerPtr->HeapID)) {
+			if (!Is_Sensed(PlayerPtr)) {
 				return(true);
 			}
 		}
@@ -5954,16 +5991,16 @@ void CellClass::Remove_Fogged_Objects(void)
 /// </summary>
 /// <returns>Returns with a facing bit mask of the adjacent cells that house occupies. If
 /// the house does not occupy this cell at all, -1 is returned.</returns>
-int CellClass::Occupation_Mask(HousesType house) const
+int CellClass::Occupation_Mask(HouseClass const * house) const
 {
-	if (!(OccupiedBy & (1 << house))) {
+	if (!OccupiedBy[house]) {
 		return(-1);
 	}
 
 	int mask = 0;
 	for (int dir = 0; dir < FACING_COUNT; dir++) {
 		CellClass const & adjacent = Adjacent_Cell(FacingType(dir));
-		if (adjacent.OccupiedBy & (1 << house)) {
+		if (adjacent.OccupiedBy[house]) {
 			mask |= (1 << dir);
 		}
 	}
@@ -6032,9 +6069,9 @@ bool CellClass::Can_Burrow_Here(void) const
 /// Determines if the house specified has cloaked this cell.
 /// </summary>
 /// <returns>bool; Is the cell cloaked by that house?</returns>
-bool CellClass::Is_Cloaked(HousesType house) const
+bool CellClass::Is_Cloaked(HouseClass const * house) const
 {
-	return((CloakedBy & (1 << house)) != 0);
+	return(CloakCount[house] != 0);
 }
 
 
@@ -6042,50 +6079,58 @@ bool CellClass::Is_Cloaked(HousesType house) const
 /// Determines if the house specified has a sensor covering this cell.
 /// </summary>
 /// <returns>bool; Is the cell sensed by that house?</returns>
-bool CellClass::Is_Sensed(HousesType house) const
+bool CellClass::Is_Sensed(HouseClass const * house) const
 {
-	return((SensedBy & (1 << house)) != 0);
+	return(SensorCount[house] != 0);
 }
 
 
 /// <summary>
-/// Marks this cell as cloaked by the house specified.
-/// This routine is called as a cloaking field is laid down over the cell.
+/// Counts one more cloak generator of the house specified over this cell.
 /// </summary>
-void CellClass::Cloaked_By(HousesType house)
+/// <returns>bool; Was the cell not cloaked by that house before?</returns>
+bool CellClass::Add_Cloak(HouseClass const * house)
 {
-	CloakedBy |= (1 << house);
+	return(++CloakCount[house] == 1);
 }
 
 
 /// <summary>
-/// Clears the cloak flag for the house specified.
-/// This routine is called as a cloaking field is lifted from this cell.
+/// Counts one cloak generator of the house specified off this cell.
 /// </summary>
-void CellClass::Uncloaked_By(HousesType house)
+/// <returns>bool; Is the cell no longer cloaked by that house?</returns>
+bool CellClass::Remove_Cloak(HouseClass const * house)
 {
-	CloakedBy &= ~(1 << house);
+	assert(CloakCount[house] > 0);
+	if (CloakCount[house] == 0) {
+		return(false);
+	}
+	return(--CloakCount[house] == 0);
 }
 
 
 /// <summary>
-/// Marks this cell as covered by a sensor of the house specified.
-/// A sensed cell gives away any cloaked object standing on it to that house.
+/// Counts one more sensor array of the house specified over this cell. A sensed cell gives
+/// away any cloaked object standing on it to that house.
 /// </summary>
-void CellClass::Sensed_By(HousesType house)
+/// <returns>bool; Was the cell not sensed by that house before?</returns>
+bool CellClass::Add_Sensor(HouseClass const * house)
 {
-	SensedBy |= (1 << house);
+	return(++SensorCount[house] == 1);
 }
 
 
 /// <summary>
-/// Clears the sensor flag for the house specified.
-/// This routine is called as a sensor field is lifted from this cell, letting cloaked
-/// objects standing here hide from that house once more.
+/// Counts one sensor array of the house specified off this cell.
 /// </summary>
-void CellClass::Unsensed_By(HousesType house)
+/// <returns>bool; Is the cell no longer sensed by that house?</returns>
+bool CellClass::Remove_Sensor(HouseClass const * house)
 {
-	SensedBy &= ~(1 << house);
+	assert(SensorCount[house] > 0);
+	if (SensorCount[house] == 0) {
+		return(false);
+	}
+	return(--SensorCount[house] == 0);
 }
 
 
@@ -6106,7 +6151,7 @@ bool CellClass::Place_Tiberium(TiberiumType tib, int data)
 			if (Ramp != RAMP_NONE) {
 				new OverlayClass(OverlayTypes[tiberium->Overlay->HeapID + tiberium->Variety + 2 * Ramp + (Random_Pick(0, 1) - 2)], Fetch_CellID());
 			} else {
-				new OverlayClass(OverlayTypes[tiberium->Overlay->HeapID + Random_Pick(0, 11)], Fetch_CellID());
+				new OverlayClass(OverlayTypes[tiberium->Overlay->HeapID + Random_Pick(0, tiberium->Variety - 1)], Fetch_CellID());
 			}
 			tiberium->Queue_Growth(CellID);
 			OverlayData = data;

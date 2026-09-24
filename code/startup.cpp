@@ -45,6 +45,7 @@
 #include "_rules.h"
 #include "_surface.h"
 #include "_tactica.h"
+#include "_ui.h"
 #include "_zbuffer.h"
 #include "aircraft.h"
 #include "airctype.h"
@@ -52,8 +53,10 @@
 #include "alphashp.h"
 #include "anim.h"
 #include "animtype.h"
+#include "audio/audioengine.h"
 #include "blight.h"
 #include "brain.h"
+#include "bsurface.h"
 #include "building.h"
 #include "builtype.h"
 #include "bullet.h"
@@ -68,7 +71,6 @@
 #include "deploymentconfig.h"
 #include "drive.h"
 #include "droppod.h"
-#include "audio/audioengine.h"
 #include "dsurface.h"
 #include "empulse.h"
 #include "except.h"
@@ -76,6 +78,7 @@
 #include "fly.h"
 #include "fog.h"
 #include "gamedirs.h"
+#include "globals.h"
 #include "goptions.h"
 #include "house.h"
 #include "houstype.h"
@@ -92,8 +95,8 @@
 #include "light.h"
 #include "lightcon.h"
 #include "mech.h"
-#include "mixfile.h"
 #include "misc.h"
+#include "mixfile.h"
 #include "movie.h"
 #include "msgloop.h"
 #include "netdlg.h" // for Shutdown_Network.
@@ -112,9 +115,9 @@
 #include "shapeset.h"
 #include "side.h"
 #include "sidebar.h"
-#include "spawner.h"
 #include "smudge.h"
 #include "smudtype.h"
+#include "spawner.h"
 #include "sun.h"
 #include "super.h"
 #include "suprtype.h"
@@ -138,6 +141,7 @@
 #include "tube.h"
 #include "tunnel.h"
 #include "tutorial.h"
+#include "ui/uishell.h"
 #include "unit.h"
 #include "unittype.h"
 #include "vanim.h"
@@ -155,13 +159,11 @@
 #include "wwmouse.h"
 #include "zbuffer.h"
 
-#include <lzo/lzoconf.h>
-
-#include <shellapi.h>
-
+#include <cfloat>
 #include <conio.h>
 #include <io.h>
-#include <cfloat>
+#include <lzo/lzoconf.h>
+#include <shellapi.h>
 #include <string>
 #include <vector>
 
@@ -213,6 +215,7 @@ void Reset_Surfaces(void)
 			VisibleSurface = NULL;
 		}
 
+		UIShell.Shutdown();
 		Video_Shutdown();
 
 		surfaces_reset = true;
@@ -340,6 +343,87 @@ static int Build_Arguments(char const * path_to_exe, char ** & argv)
 }
 
 
+/// <summary>
+/// Claims the mutexes that keep a second copy of the game from running.
+/// When another copy already holds them, its window is brought to the front instead.
+/// </summary>
+/// <returns>bool; Were the mutexes claimed? False means another copy is running.</returns>
+static bool Claim_Single_Instance(void)
+{
+	/*
+	 * Create a mutex with a unique name to TibSun in order to determine if
+	 * our app is already running.
+	 *
+	 * WARNING: DO NOT use this number for any other application except TibSun
+	 */
+	AppMutex = ::CreateMutex (NULL, FALSE, APP_GUID);
+
+	//
+	// Is there already an instance of this app somewhere?
+	//
+	if (::GetLastError () == ERROR_ALREADY_EXISTS) {
+		//
+		// Find the previous instance
+		//
+		HWND main_wnd = ::FindWindow (APP_GUID, NULL);
+		if (main_wnd != NULL) {
+			::SetForegroundWindow (main_wnd);
+			::ShowWindow (main_wnd, SW_RESTORE);
+		}
+		if (AppMutex != NULL) {
+			CloseHandle(AppMutex);
+			AppMutex = NULL;
+		}
+		DebugString("TibSun is already running...Bail!\n");
+		return(false);
+	} else {
+
+		DebugString("Create AppMutex okay.\n");
+
+		//
+		// Obtain the mutex unique to the Renegade AutoPlay application.
+		//
+		// WARNING: DO NOT use this number for any other application except Renegade AutoPlay
+		//
+		do
+		{
+			//
+			// Attempt to open the mutex
+			//
+			AutoPlayMutex = ::OpenMutex (MUTEX_ALL_ACCESS, FALSE, AUTOPLAY_GUID);
+			if (AutoPlayMutex != NULL) {
+				DebugString( "Waiting for Autoplay to quit!\n");
+				if (::WaitForSingleObject (AutoPlayMutex, 30000) == WAIT_FAILED) {
+					DebugString ("Failed waiting for AutoPlayMutex\n");
+					::CloseHandle (AutoPlayMutex);
+					AutoPlayMutex = NULL;
+				}
+			}
+
+			/*
+			 * Create a mutex with a name unique to the TibSun AutoPlay application.
+			 * This prevents the autoplay from running since it cannot get the mutex.
+			 * TibSun needs both of these mutexs before it is allowed to run.
+			 */
+			if (AutoPlayMutex == NULL) {
+				AutoPlayMutex = CreateMutex (NULL, FALSE, AUTOPLAY_GUID);
+				if (GetLastError () == ERROR_ALREADY_EXISTS) {
+					CloseHandle (AutoPlayMutex);
+					AutoPlayMutex = NULL;
+					Sleep (2500);
+				} else {
+					DebugString("Create AutoPlayMutex.\n");
+				}
+			}
+		} while (AutoPlayMutex == NULL);
+
+		DebugString ("Got AutoPlayMutex okay.\n");
+	}
+
+	return(true);
+}
+
+
 /***********************************************************************************************
  * main -- Initial startup routine (preps library systems).                                    *
  *                                                                                             *
@@ -385,76 +469,6 @@ int CALLBACK WinMain ( HINSTANCE instance , HINSTANCE , char * , int command_sho
 		return(EXIT_FAILURE);
 	}
 
-	/*
-	 * Create a mutex with a unique name to TibSun in order to determine if
-	 * our app is already running.
-	 *
-	 * WARNING: DO NOT use this number for any other application except TibSun
-	 */
-	AppMutex = ::CreateMutex (NULL, FALSE, APP_GUID);
-
-	//
-	// Is there already an instance of this app somewhere?
-	//
-	if (::GetLastError () == ERROR_ALREADY_EXISTS) {
-		//
-		// Find the previous instance
-		//
-		HWND main_wnd = ::FindWindow (APP_GUID, NULL);
-		if (main_wnd != NULL) {
-			::SetForegroundWindow (main_wnd);
-			::ShowWindow (main_wnd, SW_RESTORE);
-		}
-		if (AppMutex != NULL) {
-			CloseHandle(AppMutex);
-			AppMutex = NULL;
-		}
-		DebugString("TibSun is already running...Bail!\n");
-		return(EXIT_SUCCESS);
-	} else {
-
-		DebugString("Create AppMutex okay.\n");
-
-		//
-		// Obtain the mutex unique to the Renegade AutoPlay application.
-		//
-		// WARNING: DO NOT use this number for any other application except Renegade AutoPlay
-		//
-		do
-		{
-			//
-			// Attempt to open the mutex
-			//
-			AutoPlayMutex = ::OpenMutex (MUTEX_ALL_ACCESS, FALSE, AUTOPLAY_GUID);
-			if (AutoPlayMutex != NULL) {
-				DebugString( "Waiting for Autoplay to quit!\n");
-				if (::WaitForSingleObject (AutoPlayMutex, 30000) == WAIT_FAILED) {
-					DebugString ("Failed waiting for AutoPlayMutex\n");
-					::CloseHandle (AutoPlayMutex);
-					AutoPlayMutex = NULL;
-				}
-			}
-
-			/*
-			 * Create a mutex with a name unique to the TibSun AutoPlay application.
-			 * This prevents the autoplay from running since it cannot get the mutex.
-			 * TibSun needs both of these mutexs before it is allowed to run.
-			 */
-			if (AutoPlayMutex == NULL) {
-				AutoPlayMutex = CreateMutex (NULL, FALSE, AUTOPLAY_GUID);
-				if (GetLastError () == ERROR_ALREADY_EXISTS) {
-					CloseHandle (AutoPlayMutex);
-					AutoPlayMutex = NULL;
-					Sleep (2500);
-				} else {
-					DebugString("Create AutoPlayMutex.\n");
-				}
-			}
-		} while (AutoPlayMutex == NULL);
-
-		DebugString ("Got AutoPlayMutex okay.\n");
-	}
-
 	atexit(Prog_End);
 
 	if (!Init_Language_Resources(true)) {
@@ -489,6 +503,10 @@ int CALLBACK WinMain ( HINSTANCE instance , HINSTANCE , char * , int command_sho
 
 	if (Parse_Command_Line(argc, argv) && Apply_Game_Directories()) {
 
+		if (!Debug_MultipleInstances && !Claim_Single_Instance()) {
+			return(EXIT_SUCCESS);
+		}
+
 		Exception_Run_Immediate_Test();
 
 		/*
@@ -498,6 +516,13 @@ int CALLBACK WinMain ( HINSTANCE instance , HINSTANCE , char * , int command_sho
 		 */
 		DeploymentConfig.Read_File(Data_Directory().c_str());
 		Init_Search_Folders(DeploymentConfig.SearchPaths.c_str());
+
+		std::string uidirectory = path;
+		if (!uidirectory.empty() && uidirectory.back() != '\\' && uidirectory.back() != '/') {
+			uidirectory += '\\';
+		}
+		uidirectory += "ui\\";
+		CDFileClass::Add_Search_Drive(uidirectory.c_str());
 
 		// The recording's name was settled during static initialization, before there was
 		// anywhere for a player's files to go. Naming it again settles it where it belongs.
@@ -569,6 +594,8 @@ int CALLBACK WinMain ( HINSTANCE instance , HINSTANCE , char * , int command_sho
 			MessageBox(MainWindow, Fetch_String(TXT_VIDEO_ERROR), Fetch_String(TXT_SHORT_TITLE), MB_ICONWARNING);
 			exit(EXIT_FAILURE);
 		}
+
+		UIShell.Init();
 
 		do {
 			Windows_Message_Handler();
@@ -718,6 +745,8 @@ void __cdecl Prog_End(void)
 	ArtINI.Clear();
 	FSRuleINI.Clear();
 	FSAIINI.Clear();
+	MPRuleINI.Clear();
+	FSMPRuleINI.Clear();
 	EditorINI.Clear();
 	ConfigINI.Clear();
 	ConfigINI.Clear();
@@ -807,7 +836,7 @@ void __cdecl Prog_End(void)
 	}
 
 	if (CloakingSurface != NULL) {
-		delete (Surface *)CloakingSurface;
+		delete CloakingSurface;
 		CloakingSurface = NULL;
 	}
 

@@ -14,26 +14,27 @@
 #include "win.h"
 
 
-/// <summary>
-/// Asks Windows for one millisecond timer resolution.
-/// This routine is called when the timer is created so that the readings it hands out
-/// are fine grained enough for the game to pace itself by.
-/// </summary>
-MillisecondSystemTimerClass::MillisecondSystemTimerClass(void)
-{
-	timeBeginPeriod(1);
-}
+// Windows 10 SDKs such as 10.0.19041 lack this Windows 11 flag.
+#ifndef PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION
+#define PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION 0x4
+#endif
 
 
-/// <summary>
-/// Returns the system timer to its normal resolution.
-/// This routine undoes the resolution request made when the timer was created, so that
-/// the rest of the system is not left paying for the finer granularity.
-/// </summary>
-MillisecondSystemTimerClass::~MillisecondSystemTimerClass(void)
+// One request for the life of the process gives every timer millisecond resolution. Without
+// the opt-out, Windows 11 drops it while the window is minimized and each sleep lasts about 16 ms.
+static struct MillisecondResolutionClass
 {
-	timeEndPeriod(1);
-}
+	MillisecondResolutionClass(void)
+	{
+		PROCESS_POWER_THROTTLING_STATE state = {};
+		state.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+		state.ControlMask = PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
+		state.StateMask = 0;
+		SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &state, sizeof(state));
+		timeBeginPeriod(1);
+	}
+	~MillisecondResolutionClass(void) { timeEndPeriod(1); }
+} MillisecondResolution;
 
 
 /// <summary>

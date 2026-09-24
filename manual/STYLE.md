@@ -1,8 +1,14 @@
 # Manual style
 
-Write for readers making configuration or maintenance decisions. Keep prose
-short, literal, and focused on behavior that catalogs and frontmatter do not
-already show.
+Write for readers making configuration or maintenance decisions. Keep the page
+to behavior that catalogs and frontmatter do not already show, and write it so
+each sentence lands in one pass. A sentence that must be read twice is a
+defect, however short it is. This guide adds to the repository
+[writing rules](../AGENTS.md#writing-prose), which apply here in full.
+
+[Veterancy and promotion](content/systems/veterancy.md) is the current model
+for a system page: the result first, one job to a paragraph, and the mechanism
+left on the page that owns it.
 
 ## Audience and voice
 
@@ -25,8 +31,17 @@ the [glossary](site/src/content/docs/glossary.md).
 
 Use present-tense, declarative sentences. Lead with the result, then give its
 condition. Replace vague words such as "safe," "normal," "available," and
-"works" with the exact condition or result. Avoid marketing, personification,
-and editorial status.
+"works" with the exact condition or result. Where a setting can be written
+wrongly, give the instruction rather than the diagnosis: "keep `VeteranRatio`
+above `0`" serves the reader better than an account of the missing guard.
+Avoid marketing, personification, and editorial status.
+
+Name an operation with the word the engine and the page already use for it.
+Mounting, caching, loading, reading, and writing are distinct operations, and a
+verb chosen for tone in place of one of them hides which one ran. Reuse an
+established verb's grammar as well as the verb: "answers for a name" does not
+license a bare "answers." Where no engine term applies, a plain "is" beats an
+elevated substitute.
 
 Describe the engine and its inputs, not how the manual was produced. Do not
 label public material as generated, extracted, authored, or contract-backed.
@@ -64,6 +79,19 @@ path; do not copy wording from a nearby page or make a global replacement.
 | Score | Points. Use "music" or "music track" for the other sense. |
 | Under way | A team has started. Use "moving" for motion. |
 | Converter, drawer | Do not use these C++ names as reader terms. Name the cell tint table, terrain tile renderer, or shape renderer meant by the code. For example, describe a cell's tint table as "the same tinted terrain palette as the ground beneath it." |
+
+### The key test for a reader term
+
+The bans above are instances of a general test. Before using an engine word in prose, ask whether
+an INI key a modder types carries it.
+
+"Door" passes for a structure: `DoorAnim`, `DoorStages` and `UnderDoorAnim` are art.ini keys, so a
+factory door is the reader's own word. It fails for a vehicle, where no key names one and the word
+is really a shared internal timer covering gates, factories, aircraft and vehicles alike. Where a
+mechanism needs a name and no key carries one, use a plain word the page defines.
+
+Apply the test to `Converter`, `drawer`, `Delay`, `Fuse`, `Flasher` and `Cargo` the same way: each
+is an engine helper whose name is a reader term only where a key uses it.
 
 ### Map regions
 
@@ -121,6 +149,18 @@ Use a structured list for a condition with three or more terms or any nesting.
 Label groups "All of," "Any of," or "None of," indent their terms, and keep the
 engine's test order.
 
+### Locatable is not writable
+
+A page can name exactly the right key, in the right file, in the right section, and still leave
+the reader unable to write it. Where a page names a key the reader sets, it states the accepted
+values, the file and section, and what the key does when absent — or links the page that renders
+them. Naming the key alone is not enough.
+
+The two halves belong to different owners. Values and defaults live on the key page, which renders
+them from structured fields. Prose states what the key does, including which direction a value
+moves the behavior, which no rendered field says. Do not copy the values into prose to save the
+reader a click; link them instead.
+
 ## Examples
 
 Use the smallest concrete input that clarifies a non-obvious syntax, scope,
@@ -133,6 +173,8 @@ interaction, unit, or outcome.
 - Say when an example omits required surrounding configuration.
 - Explain only fields and results that the reference does not already make
   clear.
+- State what the example produces. Label a value as an example where it could
+  pass for a default.
 - Call a value a default, recommendation, or canonical choice only when the
   evidence supports that claim.
 
@@ -146,6 +188,27 @@ An example shows input shape; it does not prove that a runtime result was
 observed. Examples must not require proprietary assets or original executables
 to understand.
 
+### Composition is not restatement
+
+A page documenting several settings that are written together — a system rather than a single
+key — may show them in one fence beside each other:
+
+```ini title="rules.ini"
+[GAPOWR]
+BaseNormal=no  ; this structure cannot anchor later placements
+Adjacent=5     ; how far a pending structure of this type searches for one
+```
+
+No key page can show this, because each owns one key and its rendered specification block names
+only its own file, section and type. The fence is the composition.
+
+It is not a place to repeat what those key pages render. Leave out accepted values, defaults,
+omission records, and any per-key list of files or sections; link the key instead. `Keep one
+source of truth` below still governs.
+
+Without such a fence, a reader finishes a page about a system holding a settings table and no
+way to write the file. That is the failure this section exists to prevent.
+
 ## Markdown vocabulary
 
 Prefer ordinary Markdown:
@@ -158,7 +221,9 @@ Prefer ordinary Markdown:
 Use `note` for necessary context, `tip` for a source-supported or tested recipe,
 `caution` for an easy misconfiguration or surprising exception, and `danger`
 for a demonstrated crash, corruption, desynchronization, or compatibility
-risk. A danger aside states the input and the outcome.
+risk. A danger aside states the input and the outcome. Title an aside with its
+topic or the action it asks for rather than a verdict on the engine, and do not
+raise a severity for emphasis.
 
 Avoid raw HTML, MDX-only widgets, one-off components, empty paragraphs, and
 callouts used only for visual hierarchy. Put recurring presentation in shared
@@ -178,3 +243,149 @@ fact matters, but it must not maintain another copy of the same data.
 State current behavior without routine verification hedges or compatibility
 promises. If the evidence is incomplete, narrow or omit the claim. Add a local
 qualification only when the uncertainty changes the reader's decision.
+
+## Worked examples
+
+These pairs show how much a hard passage usually has to change. Their facts
+were checked against the source when they were written; check your own page's
+facts rather than copying these.
+
+### Explain the outcome of an operation
+
+Before:
+
+> The chosen vehicle is created for the collector's house in limbo and taken
+> out of it onto the crate cell, or onto a nearby cell its speed type can
+> occupy. Once the vehicle is placed, on either cell, the collector is refused
+> the crate cell for that move and stops short of it. If neither placement
+> succeeds the vehicle is deleted and money is paid instead; outside a
+> campaign that payout uses the Unit row's third field, not the Money row's.
+
+Splitting this into shorter sentences, such as "The vehicle is created in
+limbo. The engine then places it," still walks the reader through the engine's
+sequence. After:
+
+> The reward vehicle appears on the crate's cell or a nearby cell it can
+> occupy. The collector stops short of the crate's cell when the reward
+> vehicle is placed.
+>
+> If the vehicle cannot be placed in either location, the player receives
+> money instead. Outside campaigns, this payout uses the third field of the
+> `Unit` entry in `[Powerups]`.
+
+The result, the effect on the collector, and the fallback remain; creation and
+deletion go. A separate failure needs its own check: when no vehicle type is
+eligible, the crate gives neither a vehicle nor money, so "if the unit reward
+fails, you get money" would be false.
+
+### Turn a crash diagnosis into an instruction
+
+Before:
+
+> The attack animation must resolve and declare itself. VeinAttack has no
+> built-in value. With the setting unresolved, the first time a vulnerable
+> object and mature flat vein meet in the same cell, the cell builds an
+> animation from a null type and faults. That happens whether the object
+> arrives or the vein ripens under it. The animation type must also set
+> IsVeins=yes in art.ini. Without it the animation plays as ordinary art and
+> deals nothing, and it never releases the cell's attack slot, so that cell
+> can never be triggered again.
+
+After:
+
+> Set `VeinAttack` to a valid animation type. If it is missing, the game
+> crashes when veins first attack, including when veins mature beneath an
+> object.
+>
+> Set `IsVeins=yes` in that animation's `art.ini` section. Otherwise the
+> animation deals no vein damage and prevents further vein attacks in that
+> cell.
+
+Title such a warning with its topic or action, such as "Configure the vein
+attack animation," and keep the links to the keys that give their file,
+section, and values. The reader needs the missing setting and the crash, not
+the null pointer.
+
+### Give separate rules separate paragraphs
+
+A long warning about `[Powerups]` can mix four facts: omitted results get zero
+weight, a four-entry example therefore disables every other result, the entry
+names live on another page, and an all-zero table can crash the game. Put the
+configuration rule beside the example:
+
+> Include every result you want to keep in `[Powerups]`. Results omitted from
+> the section receive zero weight, so this example disables all results
+> except the four shown. See the crate-result reference for the entry names.
+
+Give the crash its own warning:
+
+> Keep the total result weight above zero. If all weights are zero,
+> collecting a crate outside a campaign can crash the game.
+
+### Replace figurative wording with the consequence
+
+- "The field takes nothing off anything" becomes "The attack animation plays,
+  but deals no vein damage."
+- "The queue of cells waiting for its attention" becomes "The queue of cells
+  to process." Keep the queue only when the reader needs its order or limit.
+- "The capacity is the engine's own figure rather than an artifact of any
+  shipped file" becomes "Set `WeedCapacity` above `0`; otherwise unloaded
+  weeds are discarded."
+
+Use the same clear term each time. Do not swap a technical term for a metaphor
+or a longer synonym.
+
+### Keep the qualification that makes a formula true
+
+Before:
+
+> Both figures in the fraction are priced through the house that lost the
+> object. The victim's value is its own type's price scaled by that house's
+> multipliers, and the killer's cost is its type's price scaled by those same
+> multipliers. The killer's own house is never asked.
+
+After:
+
+> Both costs use the defeated owner's cost multipliers. Applying the same
+> multiplier to both costs leaves their ratio unchanged, except that each
+> cost is rounded down to whole credits. The attacker's own cost multipliers
+> are ignored.
+
+The rewrite keeps whose multipliers apply and the rounding, and drops the
+account of how the calculation gets its inputs. Shortening it further to
+"price multipliers never affect experience" would be false.
+
+### Keep the condition when simplifying an outcome
+
+Too broad:
+
+> A harvested cell owned by a live monster rejoins that monster's growth
+> queue.
+
+Only a cell that keeps thin vein can be queued again. Clear:
+
+> If harvesting leaves thin vein, the live monster can queue the cell to grow
+> again, subject to its growth limits. Harvesting that removes the vein
+> clears ownership and does not requeue the cell.
+
+The missing condition is the defect even though the sentence has no "always."
+Do not replace it with a vague "usually" or "may."
+
+A promise that something survives must hold through cleanup as well. Too
+broad:
+
+> Veins that another monster owns stay on the map.
+
+Clear:
+
+> When the monster is removed, cleanup clears vein overlays throughout its
+> central five-by-five block. This includes veins owned by another monster.
+
+### Separate the cases in a dense paragraph
+
+A chemical missile explanation can hold three separate facts: with
+`ManualControl=yes`, filling the weed pool starts the countdown; another full
+pool restarts an unfinished countdown; and a ready weapon leaves the full pool
+waiting. Give the trigger and what it consumes first, the restart in the next
+paragraph, and the ready weapon separately, or compare the cases in a small
+table. Keep each case's condition with it.

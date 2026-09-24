@@ -836,7 +836,8 @@ void InfantryClass::Per_Cell_Process(PCPType why)
 							iscapturable = ((BuildingClass *)tech)->Class->IsCaptureable;
 						}
 
-						if (Session.Type != GAME_NORMAL && Session.Options.CrapEngineers && tech->HealthRatio > Rule->ConditionRed) {
+						if (Session.Type != GAME_NORMAL && Session.Options.CrapEngineers && tech->HealthRatio > Rule->ConditionRed
+							&& tech->House->Class->HeapID != HouseTypeClass::From_Name("Neutral")) {
 							int maxdamage = tech->Strength - int(tech->TClass->MaxStrength * Rule->ConditionRed / 2);
 							int damage = std::min<double>((tech->TClass->MaxStrength) * ((1 - Rule->ConditionRed / 2) / 2), maxdamage);
 							tech->Take_Damage(damage, 0, Rule->C4Warhead, this, true);
@@ -1458,7 +1459,7 @@ void InfantryClass::AI(void)
 		}
 	}
 
-	if (Locomotion->Is_Moving_Now() && HeightAGL > 0 && IsOwnedByPlayer && Class->SightRange > 0) {
+	if (Locomotion->Is_Moving_Now() && HeightAGL > 0 && Class->SightRange > 0) {
 		if (!LookTimer) {
 			Look();
 			LookTimer = TICKS_PER_SECOND;
@@ -2280,9 +2281,7 @@ void InfantryClass::Scatter(Coord const & threat, bool forced, bool nokidding)
 
 		CellClass *cellptr = &Map[_cell];
 
-		/// The parentheses are missing on purpose: the whole sum is the ternary
-		/// condition, not just the bridge term.
-		int z = cellptr->Height + Is_Moving_Onto_Bridge() ? BRIDGE_CELL_HEIGHT : 0;
+		int z = cellptr->Height + (Is_Moving_Onto_Bridge() ? BRIDGE_CELL_HEIGHT : 0);
 		Coord destcoord = Destination_Coord();
 		destcoord.Z = z * LEVEL_LEPTON_H;
 
@@ -2585,7 +2584,7 @@ bool InfantryClass::Unlimbo(Coord const & xcoord, Dir256 facing)
 		**	it actually appears in a cell mapped by the player.
 		*/
 		if (Class->SightRange == 0) {
-			IsDiscoveredByPlayer = false;
+			Forget_Human_Discovery();
 		}
 
 		if (coord.Z <= height + BRIDGE_LEPTON_HEIGHT) {

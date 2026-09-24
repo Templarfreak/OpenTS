@@ -380,6 +380,58 @@ namespace NetTiming
 	}
 
 
+	/// <summary>The network frame rate for a game speed, 0 fastest to 6 slowest; others get 60.</summary>
+	unsigned int Game_Speed_Frame_Rate(int game_speed)
+	{
+		switch (game_speed) {
+			case 0: return(60);
+			case 1: return(45);
+			case 2: return(30);
+			case 3: return(20);
+			case 4: return(15);
+			case 5: return(12);
+			case 6: return(10);
+			default: return(60);
+		}
+	}
+
+
+	/// <summary>The solo frame rate for a game speed, 0 fastest to 6 slowest, or zero for no limit.</summary>
+	unsigned int Solo_Game_Speed_Frame_Rate(int game_speed)
+	{
+		switch (game_speed) {
+			case 1: return(60);
+			case 2: return(45);
+			case 3: return(30);
+			case 4: return(20);
+			case 5: return(15);
+			case 6: return(10);
+			default: return(0);
+		}
+	}
+
+
+	/// <summary>The whole milliseconds the next frame lasts so frames average the rate exactly.</summary>
+	Milliseconds FramePacer::Next_Wait(unsigned int rate)
+	{
+		if (rate != Rate) {
+			Rate = rate;
+			Leftover = 0;
+		}
+		if (rate == 0) {
+			return(0);
+		}
+
+		Milliseconds wait = 1000 / rate;
+		Leftover += 1000 % rate;
+		if (Leftover >= rate) {
+			Leftover -= rate;
+			wait++;
+		}
+		return(wait);
+	}
+
+
 	/// <summary>Uses fresh process reports without discarding the synchronized frame rate.</summary>
 	unsigned int Select_Desired_Frame_Rate(TimingCensus const & census, unsigned int synchronized_fps, unsigned int game_speed_fps)
 	{
