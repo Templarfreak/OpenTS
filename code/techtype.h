@@ -828,6 +828,9 @@ class TechnoTypeClass : public ObjectTypeClass
 		AnimTypeClass const * TeleportOutEffect;
 		AnimTypeClass const * TeleportSparks;
 
+		bool TeleportDocking;
+		ClassID TeleportDockingLocomotor;
+
 		/*
 		 * These are the amounts to bias this object's draw depth by while it is passing the
 		 * terrain feature each one names, expressed in depth buffer units. Only the largest

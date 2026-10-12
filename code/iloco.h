@@ -20,6 +20,7 @@
 #include "visual.hh"
 #include "zgrad.hh"
 
+class SaveStreamClass;
 
 
 /*
@@ -34,6 +35,13 @@ struct ILocomotion
 	 */
 	virtual void Link_To_Object(void *pointer) = 0;
 	virtual void Object_Linked(void) = 0;
+
+	/*
+	* Lists this locomotor's members for the save game. An implementation serializes
+	* its base class first and then names every member it owns in the order the header
+	* declares them, so that the same description serves saving and loading.
+	*/
+	virtual void Serialize(SaveStreamClass & stream) = 0;
 
 	/*
 	 * Sees if object is moving.

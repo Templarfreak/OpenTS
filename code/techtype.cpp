@@ -226,7 +226,9 @@ TechnoTypeClass::TechnoTypeClass(char const * ininame, SpeedType speed) :
 	TeleportOutSound(VOC_NONE),
 	TeleportInEffect(NULL),
 	TeleportOutEffect(NULL),
-	TeleportSparks(NULL)
+	TeleportSparks(NULL),
+	TeleportDocking(false),
+	TeleportDockingLocomotor(ClassID_DriveLocomotion)
 {
 	IsSentient = true;
 
@@ -778,6 +780,9 @@ bool TechnoTypeClass::Read_INI(CCINIClass const & ini)
 		TeleportOutEffect = TGet_Class(ini, Name(), "TeleportOutEffect", TeleportOutEffect);
 		TeleportSparks = TGet_Class(ini, Name(), "TeleportSparks", TeleportSparks);
 
+		TeleportDocking = ini.Get_Bool(Name(), "TeleportDocking", TeleportDocking);
+		TeleportDockingLocomotor = ini.Get_ClassID(IniName, "TeleportDockingLocomotor", TeleportDockingLocomotor);
+
 		IsLeader = false;
 		if (Weapons[0].Weapon != NULL && Weapons[0].Weapon->Attack > 0) {
 			IsLeader = true;
@@ -1219,6 +1224,8 @@ void TechnoTypeClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(TeleportInSound);
 	stream.Serialize(TeleportOutSound);
 	stream.Serialize(TeleportSparks);
+	stream.Serialize(TeleportDocking);
+	stream.Serialize_Bytes(&TeleportDockingLocomotor, sizeof(TeleportDockingLocomotor));
 }
 
 
@@ -1351,6 +1358,8 @@ void TechnoTypeClass::Compute_CRC(class CRCEngine & crc) const
 	crc(TeleportInEffect);
 	crc(TeleportOutEffect);
 	crc(TeleportSparks);
+	crc(TeleportDocking);
+	crc((char*)&TeleportDockingLocomotor, sizeof(TeleportDockingLocomotor));
 }
 
 

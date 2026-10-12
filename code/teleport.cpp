@@ -25,11 +25,216 @@
 #include "anim.h"
 #include "rules.h"
 #include "ccrand.h"
+#include "unit.h"
+#include "unittype.h"
 
 #include "_rules.h"
 
 #include <algorithm>
 
+bool TeleportLocomotionClass::Should_Act_Normal(void) const
+{
+	if (LinkedTo->RTTI != RTTI_UNIT) {
+		return(false);
+	}
+
+	if (GroundLocomotion->Is_Moving() || GroundLocomotion->Is_Moving_Now() || GroundLocomotion->Is_Surfacing()) {
+		return(true);
+	}
+
+	if (LinkedTo->IsInLimbo) {
+		return(true);
+	}
+
+	UnitClass const * unit = (UnitClass const *)LinkedTo;
+
+	if (!unit->Class->TeleportDocking) {
+		return(false);
+	}
+	if (LinkedTo->CurrentMission != MISSION_ENTER) {
+		return(true);
+	}
+	TechnoClass * contact = LinkedTo->Contact_With_Whom();
+	if (contact == NULL) {
+		contact = dynamic_cast<TechnoClass *>(LinkedTo->ArchiveTarget);
+	}
+	BuildingClass * dock = NULL;
+	if (contact != NULL && contact->RTTI == RTTI_BUILDING) {
+		dock = (BuildingClass *)contact;
+	}
+	if (dock != NULL && dock->Class->IsDockUnload) {
+		return(false);
+	}
+	return(true);
+}
+
+void TeleportLocomotionClass::Ensure_Ground_Locomotion(ClassID const loco)
+{
+	if (GroundLocomotion == nullptr) {
+		GroundLocomotion = Create_Locomotor(loco);
+		GroundLocomotion->Link_To_Object(LinkedTo);
+	}
+}
+void TeleportLocomotionClass::Object_Linked(void)
+{
+	Ensure_Ground_Locomotion(LinkedTo->TClass->TeleportDockingLocomotor);
+}
+
+// forward to inner locomotor because we dont do anything in these functions but the inner locomotor may need to
+
+void TeleportLocomotionClass::Do_Turn(DirType coord)
+{
+	GroundLocomotion->Do_Turn(coord);
+}
+void TeleportLocomotionClass::Force_New_Slope(int ramp)
+{
+	GroundLocomotion->Force_New_Slope(ramp);
+}
+void TeleportLocomotionClass::Tilt_Pitch_AI(void)
+{
+	GroundLocomotion->Tilt_Pitch_AI();
+}
+Matrix3D TeleportLocomotionClass::Draw_Matrix(int *key)
+{
+	return GroundLocomotion->Draw_Matrix(key);
+}
+MoveType TeleportLocomotionClass::Can_Enter_Cell(Cell cell)
+{
+	return GroundLocomotion->Can_Enter_Cell(cell);
+}
+Coord TeleportLocomotionClass::Head_To_Coord(void)
+{
+	return GroundLocomotion->Head_To_Coord();
+}
+bool TeleportLocomotionClass::Is_Surfacing()
+{
+	return GroundLocomotion->Is_Surfacing();
+}
+bool TeleportLocomotionClass::Is_Powered(void)
+{
+	return GroundLocomotion->Is_Powered();
+}
+bool TeleportLocomotionClass::Is_Ion_Sensitive(void)
+{
+	return GroundLocomotion->Is_Ion_Sensitive();
+}
+bool TeleportLocomotionClass::Push(DirType dir)
+{
+	return GroundLocomotion->Push(dir);
+}
+bool TeleportLocomotionClass::Shove(DirType dir)
+{
+	return GroundLocomotion->Shove(dir);
+}
+bool TeleportLocomotionClass::Is_Moving_Now(void)
+{
+	return GroundLocomotion->Is_Really_Moving_Now();
+}
+void TeleportLocomotionClass::Mark_All_Occupation_Bits(int mark)
+{
+	return GroundLocomotion->Mark_All_Occupation_Bits(mark);
+}
+bool TeleportLocomotionClass::Is_Moving_Here(Coord to)
+{
+	return GroundLocomotion->Is_Moving_Here(to);
+}
+
+bool TeleportLocomotionClass::Is_To_Have_Shadow(void)
+{
+	return GroundLocomotion->Is_To_Have_Shadow();
+}
+Matrix3D TeleportLocomotionClass::Shadow_Matrix(int *key)
+{
+	return GroundLocomotion->Shadow_Matrix(key);
+}
+Point2D TeleportLocomotionClass::Draw_Point(void)
+{
+	return GroundLocomotion->Draw_Point();
+}
+Point2D TeleportLocomotionClass::Shadow_Point(void)
+{
+	return GroundLocomotion->Shadow_Point();
+}
+int TeleportLocomotionClass::Z_Adjust(void)
+{
+	return GroundLocomotion->Z_Adjust();
+}
+ZGradientType TeleportLocomotionClass::Z_Gradient(void)
+{
+	return GroundLocomotion->Z_Gradient();
+}
+void TeleportLocomotionClass::Unlimbo(void)
+{
+	return GroundLocomotion->Unlimbo();
+}
+bool TeleportLocomotionClass::Power_On(void)
+{
+	return GroundLocomotion->Power_On();
+}
+void TeleportLocomotionClass::Force_Track(int track, Coord coord)
+{
+	return GroundLocomotion->Force_Track(track, coord);
+}
+void TeleportLocomotionClass::Force_Immediate_Destination(Coord coord)
+{
+	return GroundLocomotion->Force_Immediate_Destination(coord);
+}
+int TeleportLocomotionClass::Apparent_Speed(void)
+{
+	return GroundLocomotion->Apparent_Speed();
+}
+int TeleportLocomotionClass::Drawing_Code(void)
+{
+	return GroundLocomotion->Drawing_Code();
+}
+FireErrorType TeleportLocomotionClass::Can_Fire(void)
+{
+	return GroundLocomotion->Can_Fire();
+}
+int TeleportLocomotionClass::Get_Status()
+{
+	return GroundLocomotion->Get_Status();
+}
+void TeleportLocomotionClass::Acquire_Hunter_Seeker_Target(void)
+{
+	return GroundLocomotion->Acquire_Hunter_Seeker_Target();
+}
+bool TeleportLocomotionClass::Will_Jump_Tracks(void)
+{
+	return GroundLocomotion->Will_Jump_Tracks();
+}
+bool TeleportLocomotionClass::Is_Really_Moving_Now(void)
+{
+	return GroundLocomotion->Is_Really_Moving_Now();
+}
+void TeleportLocomotionClass::Stop_Movement_Animation(void)
+{
+	return GroundLocomotion->Stop_Movement_Animation();
+}
+void TeleportLocomotionClass::Lock(void)
+{
+	return GroundLocomotion->Lock();
+}
+void TeleportLocomotionClass::Unlock(void)
+{
+	return GroundLocomotion->Unlock();
+}
+int TeleportLocomotionClass::Get_Track_Number(void)
+{
+	return GroundLocomotion->Get_Track_Number();
+}
+int TeleportLocomotionClass::Get_Track_Index(void)
+{
+	return GroundLocomotion->Get_Track_Index();
+}
+int TeleportLocomotionClass::Get_Speed_Accum(void)
+{
+	return GroundLocomotion->Get_Speed_Accum();
+}
+bool TeleportLocomotionClass::Power_Off(void)
+{
+	return GroundLocomotion->Power_Off();
+}
 
 /// <summary>
 /// Creates a teleport locomotor.
@@ -49,10 +254,14 @@ TeleportLocomotionClass::TeleportLocomotionClass(void) :
 /// </summary>
 bool TeleportLocomotionClass::Is_Moving(void)
 {
-	if (DestinationCoord != COORD_NONE && !teleported) {
-		return(true);
+	if (Should_Act_Normal()) {
+		return GroundLocomotion->Is_Moving();
+	} else {
+		if (DestinationCoord != COORD_NONE && !teleported) {
+			return(true);
+		}
+		return(false);
 	}
-	return(false);
 }
 
 
@@ -77,10 +286,15 @@ bool TeleportLocomotionClass::Is_Stationary(void)
 /// position if no teleport has been ordered.</returns>
 Coord TeleportLocomotionClass::Destination(void)
 {
-	if (Is_Moving()) {
-		return(DestinationCoord);
+	if (Should_Act_Normal()) {
+		return GroundLocomotion->Destination();
+	} else {
+		if (Is_Moving()) {
+			return(DestinationCoord);
+		}
+		return(LinkedTo->PositionCoord);
 	}
-	return(LinkedTo->PositionCoord);
+
 }
 
 
@@ -91,7 +305,11 @@ Coord TeleportLocomotionClass::Destination(void)
 /// <param name="to">The coordinate to teleport the object to.</param>
 void TeleportLocomotionClass::Move_To(Coord to)
 {
-	DestinationCoord = to;
+	if (Should_Act_Normal()) {
+		GroundLocomotion->Move_To(to);
+	} else {
+		DestinationCoord = to;
+	}
 }
 
 
@@ -102,9 +320,12 @@ void TeleportLocomotionClass::Move_To(Coord to)
 /// </summary>
 void TeleportLocomotionClass::Stop_Moving(void)
 {
-	DestinationCoord = COORD_NONE;
+	if (Should_Act_Normal()) {
+		GroundLocomotion->Stop_Moving();
+	} else {
+		DestinationCoord = COORD_NONE;
+	}
 }
-
 
 /// <summary>
 /// Performs any pending teleport.
@@ -115,92 +336,99 @@ void TeleportLocomotionClass::Stop_Moving(void)
 /// <returns>bool; Is there more movement still to process? A teleport never leaves any.</returns>
 bool TeleportLocomotionClass::Process(void)
 {
-	if (Is_Moving() && !LinkedTo->Is_Immobilized()) {
-		Coord spot = COORD_NONE;
+	if (Should_Act_Normal()) {
+		return GroundLocomotion->Process();
+	} else {
+		if (Is_Moving() && !LinkedTo->Is_Immobilized()) {
+			Coord spot = COORD_NONE;
 
-		if (LinkedTo->What_Am_I() == RTTI_INFANTRY) {
-			spot = Map[DestinationCoord].Closest_Free_Spot(DestinationCoord, false, Map[DestinationCoord].IsUnderBridge);
-			if (spot == COORD_NONE) {
-				Cell fallback = Map.Nearby_Location((Cell)DestinationCoord, LinkedTo->TClass->Speed);
-				if (fallback != CELL_NONE) {
-					spot = Map[fallback].Closest_Free_Spot(fallback.As_Coord(), false, Map[fallback].IsUnderBridge);
+			if (LinkedTo->What_Am_I() == RTTI_INFANTRY) {
+				spot = Map[DestinationCoord].Closest_Free_Spot(DestinationCoord, false, Map[DestinationCoord].IsUnderBridge);
+				if (spot == COORD_NONE) {
+					Cell fallback = Map.Nearby_Location((Cell)DestinationCoord, LinkedTo->TClass->Speed);
+					if (fallback != CELL_NONE) {
+						spot = Map[fallback].Closest_Free_Spot(fallback.As_Coord(), false, Map[fallback].IsUnderBridge);
+					}
 				}
 			}
+			else {
+				bool blocked = Map[DestinationCoord].Flag.Occupy.Vehicle
+				|| (Map[DestinationCoord].Flag.Occupy.Monolith
+					&& (!Map[DestinationCoord].Get_Gate() || !Map[DestinationCoord].Get_Gate()->Is_Gate_Open()));
+				if (blocked) {
+					Cell fallback = Map.Nearby_Location((Cell)DestinationCoord, LinkedTo->TClass->Speed);
+					if (fallback != CELL_NONE) {
+						spot = fallback.As_Coord();
+					}
+				} else {
+					spot = DestinationCoord;
+				}
+			}
+			if (spot == COORD_NONE) {
+				return(false);
+			}
+			if (LinkedTo->TClass->ChronoDistanceFactor > 0) {
+				int dist = Point2D(LinkedTo->PositionCoord).Distance_To(Point2D(spot));
+				int stun_duration = dist / LinkedTo->TClass->ChronoDistanceFactor;
+				stun_duration = std::max(LinkedTo->TClass->ChronoMinimumDelay, stun_duration);
+
+				if (LinkedTo->StunDuration < stun_duration) {
+					if (LinkedTo->RTTI == RTTI_UNIT) {
+						UnitClass const * unit = (UnitClass const *)LinkedTo;
+						if (!unit->Class->TeleportDocking) {
+							LinkedTo->StunDuration = stun_duration;
+						}
+					} else {
+						LinkedTo->StunDuration = stun_duration;
+					}
+				}
+			}
+			if (LinkedTo->TClass->TeleportInEffect != NULL) {
+				new AnimClass(LinkedTo->TClass->TeleportInEffect, LinkedTo->PositionCoord);
+			}
+			if (LinkedTo->TClass->TeleportOutEffect != NULL) {
+				new AnimClass(LinkedTo->TClass->TeleportInEffect, spot);
+			}
+			if (LinkedTo->TClass->TeleportInSound != VOC_NONE) {
+				Sound_Effect(LinkedTo->TClass->TeleportInSound, LinkedTo->PositionCoord);
+			}
+			if (LinkedTo->TClass->TeleportOutSound != VOC_NONE) {
+				Sound_Effect(LinkedTo->TClass->TeleportOutSound, spot);
+			}
+			if (LinkedTo->TClass->TeleportSparks != NULL && LinkedTo->StunDuration > 0) {
+				AnimClass * sparks = new AnimClass(LinkedTo->TClass->TeleportSparks, LinkedTo->Center_Coord(), LinkedTo->StunDuration);
+				if (sparks != NULL) {
+					sparks->Attach_To(LinkedTo);
+				}
+			}
+			LinkedTo->Clear_Occupy_Bit(LinkedTo->PositionCoord);
+			LinkedTo->Mark(MARK_UP);
+			LinkedTo->PositionCoord = spot;
+			LinkedTo->Set_Occupy_Bit(spot);
+			LinkedTo->Mark(MARK_DOWN);
+			Stop_Moving();
+			LinkedTo->Assign_Destination(NULL);
+			LinkedTo->Per_Cell_Process(PCP_END);
+			LinkedTo->Look();
+			teleported = true;
 		}
 		else {
-			bool blocked = Map[DestinationCoord].Flag.Occupy.Vehicle
-			|| (Map[DestinationCoord].Flag.Occupy.Monolith
-				&& (!Map[DestinationCoord].Get_Gate() || !Map[DestinationCoord].Get_Gate()->Is_Gate_Open()));
-			if (blocked) {
-				Cell fallback = Map.Nearby_Location((Cell)DestinationCoord, LinkedTo->TClass->Speed);
-				if (fallback != CELL_NONE) {
-					spot = fallback.As_Coord();
-				}
-			} else {
-				spot = DestinationCoord;
+			if (teleported && LinkedTo->StunDuration <= 0) {
+				teleported = false;
 			}
 		}
-		if (spot == COORD_NONE) {
-			return(false);
-		}
-		if (LinkedTo->TClass->ChronoDistanceFactor > 0) {
-			int dist = Point2D(LinkedTo->PositionCoord).Distance_To(Point2D(spot));
-			int stun_duration = dist / LinkedTo->TClass->ChronoDistanceFactor;
-			stun_duration = std::max(LinkedTo->TClass->ChronoMinimumDelay, stun_duration);
-
-			if (LinkedTo->StunDuration < stun_duration) {
-				LinkedTo->StunDuration = stun_duration;
-			}
-
-			DebugString("distance is: %d\n", dist);
-		}
-
-		if (LinkedTo->TClass->TeleportInEffect != NULL) {
-			new AnimClass(LinkedTo->TClass->TeleportInEffect, LinkedTo->PositionCoord);
-		}
-
-		if (LinkedTo->TClass->TeleportOutEffect != NULL) {
-			new AnimClass(LinkedTo->TClass->TeleportInEffect, spot);
-		}
-
-		if (LinkedTo->TClass->TeleportInSound != VOC_NONE) {
-			Sound_Effect(LinkedTo->TClass->TeleportInSound, LinkedTo->PositionCoord);
-		}
-
-		if (LinkedTo->TClass->TeleportOutSound != VOC_NONE) {
-			Sound_Effect(LinkedTo->TClass->TeleportOutSound, spot);
-		}
-
-		if (LinkedTo->TClass->TeleportSparks != NULL) {
-			AnimClass * sparks = new AnimClass(LinkedTo->TClass->TeleportSparks, LinkedTo->Center_Coord(), Random_Pick(0, 25));
-			if (sparks != NULL) {
-				sparks->Attach_To(LinkedTo);
-			}
-		}
-
-		LinkedTo->Clear_Occupy_Bit(LinkedTo->PositionCoord);
-		LinkedTo->Mark(MARK_UP);
-		LinkedTo->PositionCoord = spot;
-		LinkedTo->Set_Occupy_Bit(spot);
-		LinkedTo->Mark(MARK_DOWN);
-		Stop_Moving();
-		LinkedTo->Assign_Destination(NULL);
-		LinkedTo->Per_Cell_Process(PCP_END);
-		LinkedTo->Look();
-		teleported = true;
+		return(false);
 	}
-	else {
-		if (teleported && LinkedTo->StunDuration == 0) {
-			teleported = false;
-		}
-	}
-	return(false);
 }
 
 VisualType TeleportLocomotionClass::Visual_Character(bool raw)
 {
-	if (teleported) {
-		return(VISUAL_INDISTINCT);
+	if (Should_Act_Normal()) {
+		GroundLocomotion->Visual_Character(raw);
+	} else {
+		if (LinkedTo->StunDuration > 0) {
+			return(VISUAL_INDISTINCT);
+		}
 	}
 
 	return(VISUAL_NORMAL);
@@ -220,6 +448,7 @@ ClassID TeleportLocomotionClass::Class_ID(void) const
 void TeleportLocomotionClass::Serialize(SaveStreamClass & stream)
 {
 	BASECLASS::Serialize(stream);
+	GroundLocomotion->Serialize(stream);
 
 	stream.Serialize(DestinationCoord);
 }
@@ -233,5 +462,9 @@ void TeleportLocomotionClass::Serialize(SaveStreamClass & stream)
 /// <returns>Returns with the layer the object should be rendered in.</returns>
 LayerType TeleportLocomotionClass::In_Which_Layer(void)
 {
-	return(LAYER_GROUND);
+	if (Should_Act_Normal()) {
+		return GroundLocomotion->In_Which_Layer();
+	} else {
+		return(LAYER_GROUND);
+	}
 }
