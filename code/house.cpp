@@ -303,10 +303,6 @@ HouseClass::HouseClass(HouseTypeClass const * type) :
 	BuildingFactories(0),
 	Power(0),
 	Drain(0),
-	AircraftFactory(NULL),
-	InfantryFactory(NULL),
-	UnitFactory(NULL),
-	BuildingFactory(NULL),
 	FlagLocation(NULL),
 	FlagHome(0,0),
 	UnitsLost(0),
@@ -364,6 +360,10 @@ HouseClass::HouseClass(HouseTypeClass const * type) :
 	int index;
 
 	Create_ID();
+
+	for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+		ProductionFactories[index] = NULL;
+	}
 
 	if (Class) {
 		Scheme = Class->Scheme;
@@ -2422,6 +2422,12 @@ ProdFailType HouseClass::Begin_Production(RTTIType type, int id, bool resume)
 		return(PROD_CANT);
 	}
 
+	ProductionQueueID const queue = tech->ProducedIn;
+	if (ProductionQueueClass::From_ID(queue) == NULL) {
+		DebugString("Request to Begin_Production of '%s' was rejected. It has no valid production queue.\n", (const char *)tech->GivenName);
+		return(PROD_CANT);
+	}
+
 	BuildingClass *who = tech->Who_Can_Build_Me(false, true, true, this);
 	bool onhold = false;
 
@@ -2437,7 +2443,7 @@ ProdFailType HouseClass::Begin_Production(RTTIType type, int id, bool resume)
 		}
 	}
 
-	fptr = Fetch_Factory(type);
+	fptr = Fetch_Factory(queue);
 
 	if (fptr == NULL) {
 		fptr = new FactoryClass;
@@ -2459,7 +2465,7 @@ ProdFailType HouseClass::Begin_Production(RTTIType type, int id, bool resume)
 		}
 	}
 
-	Set_Factory(type, fptr);
+	Set_Factory(queue, fptr);
 
 	bool has_suspended = false;
 	if (fptr->IsSuspended) {
@@ -2504,7 +2510,7 @@ ProdFailType HouseClass::Begin_Production(RTTIType type, int id, bool resume)
 		DebugString("IsSuspended\t= %d\n", fptr->IsSuspended);
 
 		delete fptr;
-		Set_Factory(type, NULL);
+		Set_Factory(queue, NULL);
 	}
 
 	return(PROD_CANT);
@@ -2527,20 +2533,18 @@ ProdFailType HouseClass::Begin_Production(RTTIType type, int id, bool resume)
  * HISTORY:                                                                                    *
  *   05/08/1995 JLB : Created.                                                                 *
  *=============================================================================================*/
-ProdFailType HouseClass::Suspend_Production(RTTIType type)
+ProdFailType HouseClass::Suspend_Production(RTTIType type, int id)
 {
-	FactoryClass * fptr = Fetch_Factory(type);
+	TechnoTypeClass const * tech = Fetch_Techno_Type(type, id);
+	if (tech == NULL || ProductionQueueClass::From_ID(tech->ProducedIn) == NULL) {
+		return(PROD_CANT);
+	}
 
-	/*
-	**	If the house is already busy producing the requested object, then
-	**	return with this failure code.
-	*/
-	if (fptr == NULL) return(PROD_CANT);
-
-	/*
-	**	Actually suspend the production.
-	*/
-	fptr->Suspend();
+	FactoryClass * factory = Fetch_Factory(tech->ProducedIn);
+	if (factory == NULL) {
+		return(PROD_CANT);
+	}
+	factory->Suspend();
 
 	/*
 	**	Tell the sidebar that it needs to be redrawn because of this.
@@ -2575,7 +2579,29 @@ ProdFailType HouseClass::Suspend_Production(RTTIType type)
  *=============================================================================================*/
 ProdFailType HouseClass::Abandon_Production(RTTIType type, int id)
 {
-	FactoryClass * fptr = Fetch_Factory(type);
+	if (id >= 0) {
+		TechnoTypeClass const * tech = Fetch_Techno_Type(type, id);
+		if (tech == NULL || tech->ProducedIn == PRODUCTION_QUEUE_NONE) {
+			return(PROD_CANT);
+		}
+		return(Abandon_Production(tech->ProducedIn, type, id));
+	}
+
+	bool abandoned = false;
+	for (ProductionQueueID queue = 0; queue < ProductionQueueClass::Count(); queue++) {
+		if (ProductionQueueClass::Queue_Supports_RTTI(queue, type)
+			&& Abandon_Production(queue, type, -1) == PROD_OK) {
+			abandoned = true;
+		}
+	}
+
+	return(abandoned ? PROD_OK : PROD_CANT);
+}
+
+
+ProdFailType HouseClass::Abandon_Production(ProductionQueueID queue, RTTIType type, int id)
+{
+	FactoryClass * fptr = Fetch_Factory(queue);
 
 	/*
 	**	If there is no factory to abandon, then return with a failure code.
@@ -2586,7 +2612,7 @@ ProdFailType HouseClass::Abandon_Production(RTTIType type, int id)
 
 	if (fptr->QueuedObjects.Count() > 0 && id >= 0) {
 		TechnoTypeClass const * tech = Fetch_Techno_Type(type, id);
-		if (fptr->Remove_From_Queue(tech)) {
+		if (tech != NULL && tech->ProducedIn == queue && fptr->Remove_From_Queue(tech)) {
 			Map.Column[1].Flag_To_Redraw();
 			return(PROD_OK);
 		}
@@ -2597,8 +2623,9 @@ ProdFailType HouseClass::Abandon_Production(RTTIType type, int id)
 		abandon = true;
 	}
 	if (!abandon) {
+		TechnoTypeClass const * tech = Fetch_Techno_Type(type, id);
 		TechnoClass *obj = fptr->Object;
-		if (obj != NULL && id == obj->Class_Of()->Fetch_Heap_ID()) {
+		if (obj != NULL && tech != NULL && obj->TClass == tech) {
 			abandon = true;
 		}
 	}
@@ -2610,10 +2637,19 @@ ProdFailType HouseClass::Abandon_Production(RTTIType type, int id)
 	/*
 	**	Tell the sidebar that it needs to be redrawn because of this.
 	*/
-	if (PlayerPtr == this) {
-		Map.Abandon_Production(type, fptr);
+	RTTIType display_type = type;
+	if (fptr->Object != NULL) {
+		display_type = fptr->Object->TClass->RTTI;
+	} else if (fptr->QueuedObjects.Count() > 0) {
+		display_type = fptr->QueuedObjects[0]->RTTI;
+	}
 
-		if (type == RTTI_BUILDINGTYPE || type == RTTI_BUILDING) {
+	if (PlayerPtr == this) {
+		if (display_type != RTTI_NONE) {
+			Map.Abandon_Production(display_type, fptr);
+		}
+
+		if (display_type == RTTI_BUILDINGTYPE) {
 			Map.PendingObjectPtr = 0;
 			Map.PendingObject = 0;
 			Map.PendingHouse = HOUSE_NONE;
@@ -2626,7 +2662,7 @@ ProdFailType HouseClass::Abandon_Production(RTTIType type, int id)
 	*/
 	fptr->Abandon();
 	if (fptr->QueuedObjects.Count() == 0) {
-		Set_Factory(type, NULL);
+		Set_Factory(queue, NULL);
 		delete fptr;
 	} else {
 		fptr->Resume_Queue();
@@ -2727,11 +2763,11 @@ bool HouseClass::Place_Special_Blast(SuperWeaponType id, Cell const & cell)
  * HISTORY:                                                                                    *
  *   05/18/1995 JLB : Created.                                                                 *
  *=============================================================================================*/
-bool HouseClass::Place_Object(RTTIType type, Cell const & cell)
+bool HouseClass::Place_Object(ProductionQueueID queue, Cell const & cell)
 {
 	bool placed = false;
 	TechnoClass * tech = 0;
-	FactoryClass * factory = Fetch_Factory(type);
+	FactoryClass * factory = Fetch_Factory(queue);
 
 	/*
 	**	Only if there is a factory active for this type, can it be "placed".
@@ -2759,7 +2795,9 @@ bool HouseClass::Place_Object(RTTIType type, Cell const & cell)
 
 				if (builder != NULL) {
 					int exit = builder->Exit_Object(tech);
-					if (exit == 2 || (exit == 1 && builder->RTTI == RTTI_BUILDING && ((BuildingClass *)builder)->Factory != NULL)) {
+					if (exit == 2 || (exit == 1 && builder->RTTI == RTTI_BUILDING
+						&& queue >= 0 && queue < PRODUCTION_QUEUE_COUNT
+						&& ((BuildingClass *)builder)->Factories[queue] != NULL)) {
 
 						/*
 						**	Since the object has left the factory under its own power, delete
@@ -2767,7 +2805,7 @@ bool HouseClass::Place_Object(RTTIType type, Cell const & cell)
 						**	has been completed.
 						*/
 						factory->Completed();
-						Abandon_Production(type, -1);
+						Abandon_Production(queue, tech->TClass->RTTI, -1);
 						placed = true;
 					} else {
 						/*
@@ -2776,7 +2814,7 @@ bool HouseClass::Place_Object(RTTIType type, Cell const & cell)
 						*/
 						if (tech->RTTI != RTTI_BUILDING) {
 							DebugString("Failed to exit object from factory - refunding money\n");
-							Abandon_Production(type, -1);
+							Abandon_Production(queue, tech->TClass->RTTI, -1);
 						}
 						return(placed);
 					}
@@ -2801,7 +2839,7 @@ bool HouseClass::Place_Object(RTTIType type, Cell const & cell)
 						}
 						factory->Completed();
 						tech->Transmit_Message(RADIO_COMPLETE, builder);
-						Abandon_Production(type, -1);
+						Abandon_Production(queue, tech->TClass->RTTI, -1);
 						placed = true;
 
 						if (tech->IsActive && !tech->DiscoveredBy[this]) {
@@ -2997,20 +3035,10 @@ void HouseClass::Detach(AbstractClass const * target, bool all)
 		}
 	}
 
-	if (AircraftFactory == target) {
-		AircraftFactory = NULL;
-	}
-
-	if (InfantryFactory == target) {
-		InfantryFactory = NULL;
-	}
-
-	if (UnitFactory == target) {
-		UnitFactory = NULL;
-	}
-
-	if (BuildingFactory == target) {
-		BuildingFactory = NULL;
+	for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+		if (ProductionFactories[index] == target) {
+			ProductionFactories[index] = NULL;
+		}
 	}
 }
 
@@ -3108,6 +3136,39 @@ TechnoTypeClass const * HouseClass::Suggest_New_Object(RTTIType objecttype, bool
 			return(NULL);
 	}
 	return(techno);
+}
+
+
+TechnoTypeClass const * HouseClass::Suggest_New_Object(ProductionQueueID queue, bool kennel) const
+{
+	TechnoTypeClass const * preferred[] = {
+		BuildStructure != STRUCT_NONE ? BuildingTypes[BuildStructure] : NULL,
+		BuildUnit != UNIT_NONE ? UnitTypes[BuildUnit] : NULL,
+		BuildInfantry != INFANTRY_NONE ? InfantryTypes[BuildInfantry] : NULL,
+		BuildAircraft != AIRCRAFT_NONE ? AircraftTypes[BuildAircraft] : NULL
+	};
+
+	for (TechnoTypeClass const * type : preferred) {
+		if (type != NULL && type->ProducedIn == queue) {
+			return(type);
+		}
+	}
+
+	ProductionQueueClass const * queue_class = ProductionQueueClass::From_ID(queue);
+	if (queue_class == NULL) {
+		return(NULL);
+	}
+
+	for (int index = 0; index < queue_class->ProductTypes.Count(); index++) {
+		TechnoTypeClass const * type = queue_class->ProductTypes[index];
+		if ((kennel && type->RTTI == RTTI_INFANTRYTYPE && !((InfantryTypeClass const *)type)->IsDoggie)
+			|| Can_Build(type, false, true) == 0) {
+			continue;
+		}
+		return(type);
+	}
+
+	return(NULL);
 }
 
 
@@ -4221,7 +4282,7 @@ UrgencyType HouseClass::Check_Fire_Sale(void)
 	if (State != STATE_ATTACKED && CurBuildings > 0) {
 		for (int i = 0; i < Buildings.Count(); i++) {
 			BuildingClass * bptr = Buildings[i];
-			if (bptr != NULL && bptr->IsActive && !bptr->IsInLimbo && this == bptr->House && bptr->Class->ToBuild != RTTI_NONE) {
+			if (bptr != NULL && bptr->IsActive && !bptr->IsInLimbo && this == bptr->House && bptr->Class->Is_Factory()) {
 				return(URGENCY_NONE);
 			}
 		}
@@ -5161,9 +5222,15 @@ int * HouseClass::Factory_Counter(RTTIType rtti)
 void HouseClass::Active_Remove(TechnoClass const * techno)
 {
 	if (techno->RTTI == RTTI_BUILDING) {
-		int * fptr = Factory_Counter(((BuildingClass *)techno)->Class->ToBuild);
-		if (fptr != NULL) {
-			*fptr = *fptr - 1;
+		BuildingTypeClass const * type = ((BuildingClass *)techno)->Class;
+		RTTIType const product_types[] = {RTTI_AIRCRAFTTYPE, RTTI_INFANTRYTYPE, RTTI_UNITTYPE, RTTI_BUILDINGTYPE};
+		for (RTTIType product_type : product_types) {
+			if (type->Produces_RTTI(product_type)) {
+				int * counter = Factory_Counter(product_type);
+				if (counter != NULL) {
+					*counter -= 1;
+				}
+			}
 		}
 	}
 }
@@ -5187,9 +5254,15 @@ void HouseClass::Active_Remove(TechnoClass const * techno)
 void HouseClass::Active_Add(TechnoClass const * techno)
 {
 	if (techno->RTTI == RTTI_BUILDING) {
-		int * fptr = Factory_Counter(((BuildingClass *)techno)->Class->ToBuild);
-		if (fptr != NULL) {
-			*fptr = *fptr + 1;
+		BuildingTypeClass const * type = ((BuildingClass *)techno)->Class;
+		RTTIType const product_types[] = {RTTI_AIRCRAFTTYPE, RTTI_INFANTRYTYPE, RTTI_UNITTYPE, RTTI_BUILDINGTYPE};
+		for (RTTIType product_type : product_types) {
+			if (type->Produces_RTTI(product_type)) {
+				int * counter = Factory_Counter(product_type);
+				if (counter != NULL) {
+					*counter += 1;
+				}
+			}
 		}
 	}
 }
@@ -5409,34 +5482,17 @@ AbstractClass * HouseClass::Find_Juicy_Target(Coord const & coord) const
  *=============================================================================================*/
 FactoryClass * HouseClass::Fetch_Factory(RTTIType rtti) const
 {
-	FactoryClass * factory;
+	return(Fetch_Factory(ProductionQueueClass::From_RTTI(rtti)));
+}
 
-	switch (rtti) {
-		case RTTI_INFANTRY:
-		case RTTI_INFANTRYTYPE:
-			factory = InfantryFactory;
-			break;
 
-		case RTTI_UNIT:
-		case RTTI_UNITTYPE:
-			factory = UnitFactory;
-			break;
-
-		case RTTI_BUILDING:
-		case RTTI_BUILDINGTYPE:
-			factory = BuildingFactory;
-			break;
-
-		case RTTI_AIRCRAFT:
-		case RTTI_AIRCRAFTTYPE:
-			factory = AircraftFactory;
-			break;
-
-		default:
-			factory = NULL;
-			break;
+FactoryClass * HouseClass::Fetch_Factory(ProductionQueueID queue) const
+{
+	if (queue < 0 || queue >= PRODUCTION_QUEUE_COUNT) {
+		return(NULL);
 	}
-	return(factory);
+
+	return(ProductionFactories[queue]);
 }
 
 
@@ -5461,28 +5517,24 @@ FactoryClass * HouseClass::Fetch_Factory(RTTIType rtti) const
 void HouseClass::Set_Factory(RTTIType rtti, FactoryClass * factory)
 {
 	assert(rtti != RTTI_NONE);
+	Set_Factory(ProductionQueueClass::From_RTTI(rtti), factory);
+}
 
-	switch (rtti) {
-		case RTTI_UNIT:
-		case RTTI_UNITTYPE:
-			UnitFactory = factory;
-			break;
 
-		case RTTI_INFANTRY:
-		case RTTI_INFANTRYTYPE:
-			InfantryFactory = factory;
-			break;
-
-		case RTTI_BUILDING:
-		case RTTI_BUILDINGTYPE:
-			BuildingFactory = factory;
-			break;
-
-		case RTTI_AIRCRAFT:
-		case RTTI_AIRCRAFTTYPE:
-			AircraftFactory = factory;
-			break;
+void HouseClass::Set_Factory(ProductionQueueID queue, FactoryClass * factory)
+{
+	assert(queue != PRODUCTION_QUEUE_NONE);
+	if (queue == PRODUCTION_QUEUE_NONE || queue < 0 || queue >= PRODUCTION_QUEUE_COUNT) {
+		DebugString("Unable to set factory for invalid production queue ID %d.\n", queue);
+		return;
 	}
+
+	if (ProductionQueueClass::From_ID(queue) == nullptr) {
+		DebugString("Unable to set factory for unregistered production queue ID %d.\n", queue);
+		return;
+	}
+
+	ProductionFactories[queue] = factory;
 }
 
 
@@ -6538,6 +6590,11 @@ void HouseClass::Compute_CRC(CRCEngine & crc) const
 	for (int i = 0; i < FactoryPlants.Length(); i++) {
 		crc(FactoryPlants[i]->TClass->Name());
 	}
+
+	for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+		crc(ProductionQueueCounts[index]);
+	}
+
 	Base.Compute_CRC(crc);
 }
 
@@ -6656,10 +6713,10 @@ void HouseClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(BuildingFactories);
 	stream.Serialize(Power);
 	stream.Serialize(Drain);
-	stream.Serialize(AircraftFactory);
-	stream.Serialize(InfantryFactory);
-	stream.Serialize(UnitFactory);
-	stream.Serialize(BuildingFactory);
+	for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+		stream.Serialize(ProductionFactories[index]);
+		stream.Serialize(ProductionQueueCounts[index]);
+	}
 	stream.Serialize(FlagLocation);
 	stream.Serialize(FlagHome);
 	stream.Serialize(UnitsKilled);
@@ -8281,25 +8338,13 @@ void HouseClass::Activate_Threat_Node(void)
 /// <param name="rtti">Which of the house's factories to bring up to date.</param>
 void HouseClass::Update_Factories(RTTIType rtti)
 {
-	FactoryClass * factory = NULL;
+	Update_Factories(ProductionQueueClass::From_RTTI(rtti));
+}
 
-	switch (rtti) {
-		case RTTI_BUILDINGTYPE:
-			factory = BuildingFactory;
-			break;
 
-		case RTTI_UNITTYPE:
-			factory = UnitFactory;
-			break;
-
-		case RTTI_INFANTRYTYPE:
-			factory = InfantryFactory;
-			break;
-
-		case RTTI_AIRCRAFTTYPE:
-			factory = AircraftFactory;
-			break;
-	}
+void HouseClass::Update_Factories(ProductionQueueID queue)
+{
+	FactoryClass * factory = Fetch_Factory(queue);
 
 	if (factory != NULL) {
 		for (int i = factory->QueuedObjects.Count() - 1; i >= 0; i--) {
@@ -8611,9 +8656,9 @@ void HouseClass::AI_Ion_Cannon(SuperClass * super)
 					value = 3;
 					if (techno->Strength <= Rule->IonCannonDamage) {
 						BuildingTypeClass const * builtype = ((BuildingClass *)techno)->Class;
-						if (builtype->ToBuild == RTTI_BUILDINGTYPE) {
+						if (builtype->Produces_RTTI(RTTI_BUILDINGTYPE)) {
 							value = Rule->AIIonCannonConYardValue[Difficulty];
-						} else if (builtype->ToBuild == RTTI_UNITTYPE) {
+						} else if (builtype->Produces_RTTI(RTTI_UNITTYPE)) {
 							value = Rule->AIIonCannonWarFactoryValue[Difficulty];
 						} else if (builtype->Power > builtype->Drain) {
 							value = Rule->AIIonCannonPowerValue[Difficulty];
@@ -9148,7 +9193,7 @@ bool HouseClass::Is_Build_Limited(TechnoTypeClass const * type) const
 		return(true);
 	} else {
 		int queued = 0;
-		FactoryClass * factory = Fetch_Factory(type->RTTI);
+		FactoryClass * factory = Fetch_Factory(type->ProducedIn);
 		if (factory != NULL) {
 			queued = factory->Total(type);
 

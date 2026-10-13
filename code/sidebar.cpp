@@ -1779,7 +1779,7 @@ bool SidebarClass::StripClass::AI(KeyNumType & input, Point2D const & xy)
 						switch ((RTTIType)pending->RTTI) {
 							case RTTI_UNIT:
 							case RTTI_AIRCRAFT:
-								OutList.push_back(EventClass(pending->Owner(), EventClass::PLACE, pending->RTTI, CELL_NONE));
+								OutList.push_back(EventClass::Create_Place(pending->Owner(), pending->TClass->ProducedIn, CELL_NONE));
 								Speak(VOX_UNIT_READY);
 								break;
 
@@ -1788,7 +1788,7 @@ bool SidebarClass::StripClass::AI(KeyNumType & input, Point2D const & xy)
 								break;
 
 							case RTTI_INFANTRY:
-								OutList.push_back(EventClass(pending->Owner(), EventClass::PLACE, pending->RTTI, CELL_NONE));
+								OutList.push_back(EventClass::Create_Place(pending->Owner(), pending->TClass->ProducedIn, CELL_NONE));
 								Speak(VOX_UNIT_READY);
 								break;
 						}
@@ -1931,7 +1931,7 @@ void SidebarClass::StripClass::Draw_It(bool complete)
 						*/
 						bool isbusy = false;
 						if (obj->RTTI == RTTI_BUILDINGTYPE) {
-							isbusy = (PlayerPtr->Fetch_Factory(Buildables[index].BuildableType) != NULL);
+							isbusy = (PlayerPtr->Fetch_Factory(obj->ProducedIn) != NULL);
 						}
 
 						if (obj->Who_Can_Build_Me(true, true, true, PlayerPtr) == NULL) {
@@ -2025,7 +2025,7 @@ void SidebarClass::StripClass::Draw_It(bool complete)
 
 			bool hasqueuecount = false;
 			if (obj != NULL) {
-				FactoryClass * factory = PlayerPtr->Fetch_Factory(obj->RTTI);
+				FactoryClass * factory = PlayerPtr->Fetch_Factory(obj->ProducedIn);
 
 				if (factory != NULL) {
 					int total = factory->Total(obj);
@@ -2147,7 +2147,7 @@ bool SidebarClass::StripClass::Recalc(void)
 		if (!ok) {
 			// This sweep runs for the local player alone, so the abandon travels as an event.
 			if (Rule->IsRecheckPrerequisites && tech != NULL) {
-				FactoryClass * fptr = PlayerPtr->Fetch_Factory(Buildables[index].BuildableType);
+				FactoryClass * fptr = PlayerPtr->Fetch_Factory(tech->ProducedIn);
 				int pending = (fptr != NULL) ? fptr->Total(tech) : 0;
 				if (pending > 0) {
 					OutList.push_back(EventClass(PlayerPtr->HeapID, EventClass::ABANDON_COUNT,
@@ -2446,7 +2446,7 @@ int SidebarClass::StripClass::SelectClass::Action(unsigned flags, KeyNumType & k
 					/*
 					 * Cancel a queued production.
 					 */
-					FactoryClass * fptr = PlayerPtr->Fetch_Factory(otype);
+					FactoryClass * fptr = PlayerPtr->Fetch_Factory(choice->ProducedIn);
 					if (fptr != NULL && fptr->Is_Queued(choice)) {
 						OutList.push_back(EventClass(PlayerPtr->HeapID, EventClass::ABANDON, otype, oid));
 					}
@@ -2490,7 +2490,7 @@ int SidebarClass::StripClass::SelectClass::Action(unsigned flags, KeyNumType & k
 									**	power, queue this event and process through normal house
 									**	production channels.
 									*/
-									OutList.push_back(EventClass(pending->Owner(), EventClass::PLACE, otype, CELL_NONE));
+									OutList.push_back(EventClass::Create_Place(pending->Owner(), pending->TClass->ProducedIn, CELL_NONE));
 								}
 							}
 						}
@@ -2515,7 +2515,7 @@ int SidebarClass::StripClass::SelectClass::Action(unsigned flags, KeyNumType & k
 					**	on the icon that has the attached factory, then say that the factory is busy and
 					**	ignore the click.
 					*/
-					factory = PlayerPtr->Fetch_Factory(otype);
+					factory = PlayerPtr->Fetch_Factory(choice->ProducedIn);
 					bool produce = false;
 					if (factory != NULL && (factory->Is_Building() || factory->Has_Production_Target())) {
 						if (otype == RTTI_BUILDINGTYPE) {

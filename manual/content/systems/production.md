@@ -1,6 +1,6 @@
 ---
 title: Production and factories
-summary: "How houses order, build, pay for and release objects, and which rules limit what they can build."
+summary: "How production queues connect object types to factories and control what houses build."
 category: buildings-economy
 keys:
   - AltToRally
@@ -33,6 +33,8 @@ keys:
   - PrerequisitePower
   - PrerequisiteRadar
   - PrerequisiteTech
+  - ProducedIn
+  - Produces
   - ScoldSound
   - SeparateAircraft
   - TechLevel
@@ -46,21 +48,29 @@ related:
     id: power
 ---
 
-Players and computer houses produce objects in two different ways.
+Each object type belongs to one production queue. [`ProducedIn=`](/keys/producedin/) assigns the queue; when it is omitted, the type uses the built-in queue matching its category. A BuildingType's [`Produces=`](/keys/produces/) lists the queues its structures can serve, and [`Factory=`](/keys/factory/) remains an alias for one built-in queue. A queue can contain products of different kinds.
 
-A player's house has four production slots: one each for infantry, vehicles, aircraft and structures. Each slot builds one object at a time, with a queue behind it, however many factories the house owns. Six war factories do not build six vehicles at once. They only change how long the one vehicle in the slot takes, as [More than one factory](#more-than-one-factory) explains.
+A player's house has one production slot for each queue. Objects assigned to the same queue share its active build and waiting orders, even when their kinds differ. Separate queues build independently. Extra factories still shorten build time by the product's category, as [More than one factory](#more-than-one-factory) explains.
 
-A computer house has no production slots. Each of its factory structures builds an object of its own, so six war factories build six vehicles at a time. Every idle factory takes the type its house currently wants for that category, so factories that start together build the same type. The house chooses again each time an object of that category leaves a factory.
+A computer house keeps one production process per factory and queue. A structure that produces several queues can build one object from each at the same time. Each idle queue uses the house's preferred type when that type belongs to the queue; otherwise it takes the first buildable type assigned to the queue.
+
+Four built-in queues cover aircraft, infantry, vehicles and structures. Rules can add up to 64 custom queues. Queue names match without regard to case. After that limit, a new name is not registered, so a type assigned that name has no production queue and a factory listing it does not serve it.
 
 In both cases an object takes 54 production steps, and part of its price is charged as the steps advance. The finished object then waits out of play until a factory lets it out.
 
 ## What counts as a factory
 
-A BuildingType is a factory when its [`Factory=`](/keys/factory/) names the kind of object it produces.
+A BuildingType is a factory when `Produces=` or the legacy `Factory=` assigns it at least one production queue. The queue name, rather than the product's kind, determines which player slot receives an order.
 
 ```ini title="rules.ini"
-[MYWEAP] ; example war factory BuildingType
-Factory=UnitType
+[MEDIC] ; example InfantryType
+ProducedIn=Army
+
+[HMMWV] ; example UnitType
+ProducedIn=Army
+
+[MYFAC] ; example BuildingType
+Produces=Army,AircraftType
 WeaponsFactory=yes
 Owner=GDI,Nod
 ```
@@ -69,7 +79,7 @@ When a player orders an object, the house looks for a structure that passes all 
 
 - it is on the map;
 - it is owned by this house;
-- its [`Factory=`](/keys/factory/) names the kind of object being ordered;
+- its [`Produces=`](/keys/produces/) includes the product's [`ProducedIn=`](/keys/producedin/) queue;
 - it is switched on;
 - it is neither being sold nor queued to be sold;
 - the product has not reached its [build limit](#build-limits);
@@ -83,35 +93,24 @@ A structure keeps the country it acts for when it changes hands, so the last tes
 
 The search takes the first [primary factory](#the-primary-factory) it finds that passes. Without one, it takes the last passing structure. For an aircraft, a pad already in radio contact with an aircraft, such as one parked on it, is used only when no free pad passes.
 
-A computer house does not search. Each of its factories builds whatever the house has chosen next for its category.
+A computer house does not search for a player slot. Each factory-and-queue pair builds the house's next eligible product for that queue.
 
-:::caution[Use the long names in Factory=]
-Write `UnitType`, `InfantryType`, `AircraftType` or `BuildingType`. `Factory=` also accepts the short names `Unit`, `Infantry`, `Aircraft` and `Building`, but a player's factory search never matches them, so such a structure never produces for a player. It still counts toward the [multiple-factory adjustment](#more-than-one-factory) for its category. A computer house's factories accept the short names and produce normally.
-
-Names are matched without regard to case. A name the engine does not recognize leaves the type a non-factory.
-:::
+Use `Produces=` for named or multiple queues. `Factory=` accepts the built-in names `UnitType`, `InfantryType`, `AircraftType` and `BuildingType`, as well as their short spellings. The short spellings now map to the same built-in queues for player and computer houses. If `Produces=` is present, it takes precedence over `Factory=`.
 
 ### The primary factory
 
-A player's finished objects leave from the primary factory of their kind whenever it passes the factory search.
+A player's finished objects leave from the primary factory for their queue whenever it passes the factory search.
 
-Toggling the flag on a structure clears it from every other structure of the house on the map whose `Factory=` names the same kind, then sets it on the chosen one. Toggling the current primary clears its flag and leaves the house with no primary. EVA announces a newly set primary to a player-controlled house.
+Toggling a structure that is primary for all its queues clears those flags. Otherwise, it becomes primary for every queue it produces and clears those queue flags on competing structures of the same house. EVA announces a newly set primary to a player-controlled house.
 
 A structure loses the flag when it is captured. An [`IsMobileWar=yes`](/keys/ismobilewar/) structure toggles the flag on itself when it opens.
 
 The cursor that offers the toggle appears only over a structure that passes all of these, in this order:
 
 - it is not stunned by an [EM pulse](/systems/emp-pulse/);
-- its `Factory=` names a kind of object;
+- it produces at least one queue;
 - it belongs to the local player;
-- its house owns more than one factory of that kind;
-- for an infantry factory, another structure of the house has `Factory=InfantryType`.
-
-The last test checks only the long name. A second barracks written `Factory=Infantry` counts toward the test above it but not toward this one, so the cursor is not offered.
-
-:::caution[Placing a factory can flag it primary]
-A newly placed factory is flagged primary when its house owns more than one structure of the BuildingType listed eighth in `[BuildingTypes]`, whatever that type is. The number of factories does not matter, and no other structure loses its flag, so a house can end up with several primaries of one kind. Use the toggle above to choose the primary deliberately.
-:::
+- another structure of the house produces at least one of the same queues.
 
 ## What a house may build
 
@@ -210,7 +209,7 @@ The 1-to-255 range on the step sets the shortest build at 54 frames (3.6 seconds
 
 ### More than one factory
 
-Extra factories of a category can shorten its build times, depending on [`MultipleFactory`](/keys/multiplefactory/). The house counts its structures whose `Factory=` names the product's category, including ones switched off or still in buildup. The build time is multiplied by `MultipleFactory` once for each factory past the first and truncated after each multiplication. [`MultipleFactoryCap`](/keys/multiplefactorycap/) limits how many factories count; at `0` every factory counts.
+Extra factories can shorten build times, depending on [`MultipleFactory`](/keys/multiplefactory/). The house counts each structure once for every kind it can produce—aircraft, infantry, vehicles or structures—including structures switched off or still in buildup. A queue name does not affect this count. The build time is multiplied by `MultipleFactory` once for each factory past the first in the product's kind and truncated after each multiplication. [`MultipleFactoryCap`](/keys/multiplefactorycap/) limits how many factories count; at `0` every factory counts.
 
 | Factories | Multiplier at `MultipleFactory=0.8` | With `MultipleFactoryCap=3` as well |
 | ---: | --- | --- |
@@ -245,23 +244,23 @@ Canceling a build refunds what has been paid so far: the price minus the unpaid 
 
 ## The queue
 
-Only a player's production slots have queues. A computer house's factory holds one object with nothing behind it.
+Only a player's production slots have waiting queues. A computer house holds one object per factory and queue, with nothing behind each object.
 
-An order placed while its slot is busy joins that slot's queue. The queue holds up to [`MaximumQueuedObjects`](/keys/maximumqueuedobjects/) entries, so at most one more than that number of objects of one category can be on order. An order is dropped if the queue is full or the type has reached its build limit, and a player-controlled house then hears [`ScoldSound`](/keys/scoldsound/).
+An order placed while its queue is busy joins that queue, regardless of the product's kind. The queue holds up to [`MaximumQueuedObjects`](/keys/maximumqueuedobjects/) waiting entries, plus the object in progress. An order is dropped if the queue is full or the type has reached its build limit, and a player-controlled house then hears [`ScoldSound`](/keys/scoldsound/).
 
-A slot on hold also queues new orders. The exception is the type on hold: ordering it again resumes the held build instead of queuing a second one.
+A queue on hold also accepts orders. Ordering its held type resumes the held build instead of queuing a second copy.
 
-When the object in progress leaves the factory, is canceled, or becomes unbuildable, the first queued type starts as if it had just been ordered.
+When the object in progress leaves its factory, is canceled, or becomes unbuildable, the first queued type starts as if it had just been ordered.
 
-Structures never queue. The [sidebar](/systems/sidebar/#clicking-a-build-cameo) refuses a second structure order while another is outstanding, whether it is building, on hold, or finished and waiting to be placed. While a structure is on order, every other structure cameo on the sidebar is drawn darkened.
+Structures do not join a waiting queue. A second structure order is refused while a structure in that same queue is building, on hold, or waiting to be placed. Structures assigned to different queues can be on order at the same time. The [sidebar](/systems/sidebar/#clicking-a-build-cameo) draws other structure cameos for a busy queue darkened.
 
 ## Leaving the factory
 
-After the last step the finished object waits in its slot. How it leaves depends on whether a player or a computer house built it.
+After the last step the finished object waits in its queue's production slot. How it leaves depends on whether a player or a computer house built it.
 
 A player's finished vehicle, aircraft or infantryman is announced and immediately tries to leave through a factory. A finished structure is announced and waits; clicking its cameo enters placement mode.
 
-While every factory of its kind is switched off, a finished vehicle, aircraft or infantryman keeps waiting. Clicking its cameo then only repeats the exit attempt, which fails the same way.
+While every factory that produces its queue is switched off, a finished vehicle, aircraft or infantryman keeps waiting. Clicking its cameo then only repeats the exit attempt, which fails the same way.
 
 If no factory of the house could build the object any more, even a switched-off one, clicking its cameo cancels and refunds the order, and EVA reports that there is no factory.
 
@@ -288,7 +287,7 @@ A computer house's factories retry exits on their own and treat the outcomes dif
 
 A computer factory never keeps a build on hold. If its build is put on hold or suspended, the factory cancels and refunds it.
 
-An idle computer factory starts the house's next choice for its category once the house has more than 10 credits, counting stored Tiberium.
+An idle computer factory-and-queue pair starts the house's next eligible product for that queue once the house has more than 10 credits, counting stored Tiberium.
 
 ### Buildup
 
@@ -304,18 +303,18 @@ A [`HoverPad=yes`](/keys/hoverpad/) structure also receives the first [`PadAircr
 
 ## Rally points
 
-A structure whose [`Factory=`](/keys/factory/) is `UnitType`, `InfantryType` or `AircraftType` can hold a rally point. Select it and click the ground to set one. Holding the force-move key instead gives the structure a move order, which packs up a structure that names an [`UndeploysInto`](/keys/undeploysinto/) type. [`AltToRally=yes`](/keys/alttorally/) swaps the two.
+A structure that produces vehicles, infantry or aircraft can hold a rally point. Select it and click the ground to set one. Holding the force-move key instead gives the structure a move order, which packs up a structure that names an [`UndeploysInto`](/keys/undeploysinto/) type. [`AltToRally=yes`](/keys/alttorally/) swaps the two.
 
-The rally point is not always the clicked cell. The engine records the nearest cell to it where infantry could stand, or where an aircraft could fly for an aircraft factory, searched within the structure's movement zone. If there is no such cell, no rally point is set.
+The rally point is not always the clicked cell. The engine records the nearest cell to it where infantry could stand, or where an aircraft could fly for a factory that produces only aircraft among its mobile products. A factory that also produces vehicles or infantry uses ground movement rules. If there is no suitable cell, no rally point is set.
 
-The cursor refuses some cells outright: any cell outside the playable area and, except for an aircraft factory, a cell in another movement zone or on ground that is not passable land.
+The cursor refuses cells outside the playable area. It also refuses a cell in another movement zone or on ground that is not passable land, except for an aircraft-only factory.
 
 What the departing object does with the rally point depends on the factory:
 
 - An aircraft heads for it as soon as it appears, whether on its pad or at the edge of the playable area. During an ion storm the aircraft appears on a nearby cell and ignores the rally point.
 - A [`WeaponsFactory=yes`](/keys/weaponsfactory/) structure passes it to the vehicle, which heads for it once it has cleared the building. A harvester or weeder then starts harvesting from there.
 - A barracks, [`Hospital=yes`](/keys/hospital/) or [`Armory=yes`](/keys/armory/) structure passes it to the infantryman, who walks to the exit cell first and heads for the rally point the next time he is idle.
-- Every other factory ignores it. A `Factory=UnitType` structure with [`WeaponsFactory=no`](/keys/weaponsfactory/) accepts a rally point, but the vehicles it releases stop on the exit cell.
+- Every other factory ignores it. A vehicle factory with [`WeaponsFactory=no`](/keys/weaponsfactory/) accepts a rally point, but its vehicles stop on the exit cell.
 
 If a departing object belongs to a house a player controls and its type cannot be ordered into the shroud, the object ignores a rally point that is still shrouded for that player and leaves as if the factory had no rally point. That covers a type with [`MoveToShroud=no`](/keys/movetoshroud/), the default for aircraft types, and a subterranean type while [`AllowShroudedSubteranneanMoves=no`](/keys/allowshroudedsubteranneanmoves/). The check is made as each object leaves, so the rally point works again once the player uncovers that ground.
 
@@ -323,18 +322,18 @@ A structure stores its rally point as its move destination, so a structure that 
 
 ## When a factory is lost
 
-Destroying a computer house's factory cancels and refunds whatever that factory was building. For a player, the build in the matching slot is canceled and refunded only if no remaining structure of the house could build it.
+Destroying a computer house's factory cancels and refunds whatever that factory was building. For a player, the build in the matching queue is canceled and refunded only if no remaining structure of the house could build it.
 
 Capturing a factory cancels whatever it was building for a computer house before the transfer. The factory then moves from one house's factory count to the other's.
 
-A house re-examines its production slot for a category when a factory of that category is placed, leaves the map, is captured, or is switched on or off. A capture makes both houses re-examine the slot. Only a player's production slots are re-examined, and these rules apply in order:
+A house re-examines a production queue when a factory that produces from it is placed, leaves the map, is captured, or is switched on or off. A capture makes both houses re-examine the affected queues. Only a player's production queues are re-examined, and these rules apply in order:
 
 1. Queued types that nothing the house owns could build, even in theory, are dropped from the queue.
 2. An object in progress that nothing could build any more is canceled and refunded, and the queue advances.
 3. An object that could be built in theory but not now, because every factory that could build it is switched off, is suspended. It keeps its step and the credits already paid.
 4. An object that can be built again restarts, unless the player put it on hold.
 
-A slot left with nothing in progress and nothing queued is then discarded.
+A queue left with nothing in progress and nothing queued is then discarded.
 
 A computer house's factory production is not re-examined. It ends when the structure is destroyed or captured, or when the factory cancels a build that has stopped making progress.
 

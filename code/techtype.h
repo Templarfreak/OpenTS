@@ -16,6 +16,7 @@
 #include "_weapon.h"
 #include "classids.h"
 #include "objtype.h"
+#include "productionqueue.h"
 #include "typelist.h"
 
 #include <optional>
@@ -313,6 +314,10 @@ class TechnoTypeClass : public ObjectTypeClass
 		** Explicit override of build time in minutes. -1 means use normal build time calculation. Defaults to -1.
 		*/
 		float BuildTime;
+
+		ProductionQueueID ProducedIn;
+		bool IsProducedInConfigured;
+		ProductionQueueID RegisteredProducedIn;
 
 		/*
 		 * This is the height above ground that an object of this type cruises at, expressed

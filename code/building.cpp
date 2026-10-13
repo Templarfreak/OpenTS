@@ -222,7 +222,6 @@ enum SAMState {
 BuildingClass::BuildingClass(BuildingTypeClass const * type, HouseClass * house) :
 	BASECLASS(house),
 	Class((BuildingTypeClass* )type),
-	Factory(0),
 	IsToRebuild(false),
 	IsToRepair(false),
 	IsAllowedToSell(true),
@@ -242,7 +241,6 @@ BuildingClass::BuildingClass(BuildingTypeClass const * type, HouseClass * house)
 	WhomToRepay(NULL),
 	AnimToTrack(NULL),
 	LastStrength(0),
-	PlacementDelay(0),
 	IsOn(true),
 	IsNominal(false),
 	LastSuperWeaponIndex(-1),
@@ -272,6 +270,11 @@ BuildingClass::BuildingClass(BuildingTypeClass const * type, HouseClass * house)
 	IsProduceCashStartupPaid(false)
 {
 	Create_ID();
+
+	for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+		Factories[index] = NULL;
+		IsQueueLeader[index] = false;
+	}
 
 	for (int i = 0; i < BUILDING_UPGRADE_MAX; i++) {
 		Upgrades[i] = NULL;
@@ -349,8 +352,10 @@ BuildingClass::~BuildingClass(void)
 		}
 	}
 
-	delete Factory;
-	Factory = NULL;
+	for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+		delete Factories[index];
+		Factories[index] = NULL;
+	}
 
 	AnimPtrTracker.Delete(this);
 	FactoryPtrTracker.Delete(this);
@@ -667,8 +672,12 @@ void BuildingClass::Debug_Dump(MonoClass * mono) const
 	mono->Fill_Attrib(66, 17, 12, 1, IsCharged ? MonoClass::INVERSE : MonoClass::NORMAL);
 
 	mono->Set_Cursor(1, 11);
-	if (Factory != NULL) {
-		mono->Printf("%s %d%%", Factory->Get_Object()->Class_Of()->IniName.c_str(), (100*Factory->Completion())/FactoryClass::STEP_COUNT);
+	for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+		if (Factories[index] != NULL && Factories[index]->Get_Object() != NULL) {
+			mono->Printf("%s %d%%", Factories[index]->Get_Object()->Class_Of()->IniName.c_str(),
+				(100 * Factories[index]->Completion()) / FactoryClass::STEP_COUNT);
+			break;
+		}
 	}
 
 	BASECLASS::Debug_Dump(mono);
@@ -1176,9 +1185,20 @@ void BuildingClass::Draw_Overlays(Point2D const & point, Rect const & cliprect) 
 		*/
 		FactoryClass * factory = NULL;
 		if (House->Is_Human_Player()) {
-			factory = House->Fetch_Factory(Class->ToBuild);
+			for (int index = 0; index < Class->Produces.Count(); index++) {
+				factory = House->Fetch_Factory(Class->Produces[index]);
+				if (factory != NULL && factory->Get_Object() != NULL) {
+					break;
+				}
+				factory = NULL;
+			}
 		} else {
-			factory = Factory;
+			for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+				if (Factories[index] != NULL && Factories[index]->Get_Object() != NULL) {
+					factory = Factories[index];
+					break;
+				}
+			}
 		}
 
 		/*
@@ -1735,7 +1755,7 @@ void BuildingClass::AI(void)
 	**	For computer controlled buildings, determine what should be produced and start
 	**	production accordingly.
 	*/
-	if (Class->ToBuild != RTTI_NONE) {
+	if (Class->Is_Factory()) {
 		Factory_AI();
 	}
 
@@ -2060,16 +2080,19 @@ bool BuildingClass::Unlimbo(Coord const & coord, Dir256 dir)
 			BuildingLight = new BuildingLightClass(this);
 		}
 
-		if (Class->ToBuild != RTTI_NONE && House->ABQuantity.Value(Class->RTTI) > 1) {
+		if (Class->Is_Factory() && House->ABQuantity.Value(Class->RTTI) > 1) {
 			IsLeader = true;
+			for (int index = 0; index < Class->Produces.Count(); index++) {
+				IsQueueLeader[Class->Produces[index]] = true;
+			}
 		}
 
 		if (Rule->BuildConst.Is_In_List(Class)) {
 			House->ConYards.Add(this);
 		}
 
-		if (Class->ToBuild != RTTI_NONE) {
-			House->Update_Factories(Class->ToBuild);
+		if (Class->Is_Factory()) {
+			Update_Production_Queues();
 		}
 
 		return(true);
@@ -2701,7 +2724,7 @@ void BuildingClass::Assign_Rally_Point(Cell const & cell)
 
 	bool underbridge = Map[cell].IsUnderBridge;
 
-	if (Class->ToBuild == RTTI_AIRCRAFTTYPE) {
+	if (Produces_Aircraft_Only()) {
 		speed = SPEED_WINGED;
 		mzone = MZONE_FLYER;
 	}
@@ -2934,13 +2957,15 @@ int BuildingClass::Exit_Object(TechnoClass * base)
 					if (Mission == MISSION_UNLOAD) {
 						for (int index = 0; index < Buildings.Count(); index++) {
 							BuildingClass * bldg = Buildings[index];
-							if (bldg->House == House && bldg->Class == Class && bldg != this && bldg->Mission == MISSION_GUARD && !bldg->Factory) {
-								FactoryClass * temp = Factory;
-								bldg->Factory = Factory;
-								Factory = NULL;
+							ProductionQueueID const queue = base->TClass->ProducedIn;
+							if (queue >= 0 && queue < PRODUCTION_QUEUE_COUNT && bldg->House == House && bldg->Class == Class
+								&& bldg != this && bldg->Mission == MISSION_GUARD && !bldg->Factories[queue]) {
+								FactoryClass * temp = Factories[queue];
+								bldg->Factories[queue] = Factories[queue];
+								Factories[queue] = NULL;
 								int retval = (bldg->Exit_Object(base));
-								bldg->Factory = NULL;
-								Factory = temp;
+								bldg->Factories[queue] = NULL;
+								Factories[queue] = temp;
 								return(retval);
 							}
 						}
@@ -2958,7 +2983,7 @@ int BuildingClass::Exit_Object(TechnoClass * base)
 						return(2);
 					}
 
-				} else if (Class->ToBuild != RTTI_INFANTRYTYPE && !Class->IsHospital && !Class->IsArmory) {
+				} else if (base->Fetch_RTTI() != RTTI_INFANTRY && !Class->IsHospital && !Class->IsArmory) {
 
 					Cell exitcell = Find_Exit_Cell(base);
 					if (exitcell == CELL_NONE) {
@@ -3012,7 +3037,7 @@ int BuildingClass::Exit_Object(TechnoClass * base)
 							base->Assign_Mission(MISSION_GUARD_AREA);
 
 							cell = House->Where_To_Go((FootClass *)base);
-							if (cell != CELL_NONE && Class->ToBuild != RTTI_NONE) {
+							if (cell != CELL_NONE && Class->Is_Factory()) {
 								base->Assign_Archive_Target(&Map[cell]);
 								((FootClass *)base)->Queue_Navigation_List(&Map[cell]);
 							} else {
@@ -3070,7 +3095,7 @@ int BuildingClass::Exit_Object(TechnoClass * base)
 					if (base->Unlimbo(exitcoord, dir)) {
 
 						// A hospital or armory also exits its infantry here without having produced them.
-						if (Class->ToBuild == RTTI_INFANTRYTYPE) {
+						if (base->Fetch_RTTI() == RTTI_INFANTRY) {
 							Begin_Anim(BANIM_PRODUCTION, false);
 						}
 
@@ -3102,7 +3127,7 @@ int BuildingClass::Exit_Object(TechnoClass * base)
 							base->Assign_Mission(MISSION_GUARD_AREA);
 
 							cell = House->Where_To_Go((FootClass *)base);
-							if (cell != CELL_NONE && Class->ToBuild != RTTI_NONE) {
+							if (cell != CELL_NONE && Class->Is_Factory()) {
 								base->ArchiveTarget = &Map[cell];
 								((FootClass *)base)->Queue_Navigation_List(&Map[cell]);
 							} else {
@@ -3311,47 +3336,26 @@ void BuildingClass::Update_Buildables(void)
 				&& (type->Can_Be_Built_At(this, false, false, PlayerPtr) || type->Who_Can_Build_Me(true, false, false, PlayerPtr) != NULL));
 		};
 
-		switch (Class->ToBuild) {
-			StructType i;
-			UnitType u;
-			InfantryType f;
-			AircraftType a;
-
-			case RTTI_BUILDINGTYPE:
-				for (i = STRUCT_FIRST; i < BuildingTypes.Count(); i++) {
-					if (should_be_on_sidebar(BuildingTypes[i])) {
-						Map.Add(RTTI_BUILDINGTYPE, i);
-					}
+		for (int queue_index = 0; queue_index < Class->Produces.Count(); queue_index++) {
+			ProductionQueueClass const * queue = ProductionQueueClass::From_ID(Class->Produces[queue_index]);
+			if (queue == NULL) {
+				continue;
+			}
+			for (int type_index = 0; type_index < queue->ProductTypes.Count(); type_index++) {
+				TechnoTypeClass const * type = queue->ProductTypes[type_index];
+				if (should_be_on_sidebar(type)) {
+					Map.Add(type->RTTI, type->Fetch_Heap_ID());
 				}
-				break;
-
-			case RTTI_UNITTYPE:
-				for (u = UNIT_FIRST; u < UnitTypes.Count(); u++) {
-					if (should_be_on_sidebar(UnitTypes[u])) {
-						Map.Add(RTTI_UNITTYPE, u);
-					}
-				}
-				break;
-
-			case RTTI_INFANTRYTYPE:
-				for (f = INFANTRY_FIRST; f < InfantryTypes.Count(); f++) {
-					if (should_be_on_sidebar(InfantryTypes[f])) {
-						Map.Add(RTTI_INFANTRYTYPE, f);
-					}
-				}
-				break;
-
-			case RTTI_AIRCRAFTTYPE:
-				for (a = AIRCRAFT_FIRST; a < AircraftTypes.Count(); a++) {
-					if (should_be_on_sidebar(AircraftTypes[a])) {
-						Map.Add(RTTI_AIRCRAFTTYPE, a);
-					}
-				}
-				break;
-
-			default:
-				break;
+			}
 		}
+	}
+}
+
+
+void BuildingClass::Update_Production_Queues(void)
+{
+	for (int index = 0; index < Class->Produces.Count(); index++) {
+		House->Update_Factories(Class->Produces[index]);
 	}
 }
 
@@ -3496,8 +3500,8 @@ bool BuildingClass::Limbo(void)
 			}
 		}
 
-		if (Class->ToBuild != RTTI_NONE) {
-			House->Update_Factories(Class->ToBuild);
+		if (Class->Is_Factory()) {
+			Update_Production_Queues();
 		}
 
 		if (Class == Rule->GDIFirestormGenerator) {
@@ -3951,29 +3955,22 @@ ActionType BuildingClass::What_Action(ObjectClass const * object, bool disallow_
 	ActionType action = BASECLASS::What_Action(object, disallow_force);
 
 	if (action == ACTION_SELF) {
-		int index;
-		if (StunDuration == 0 && Class->Is_Factory() && PlayerPtr == House && *House->Factory_Counter(Class->ToBuild) > 1) {
-			switch (Class->ToBuild) {
-				case RTTI_INFANTRYTYPE:
-				case RTTI_INFANTRY:
-					action = ACTION_NONE;
-					for (index = 0; index < Buildings.Count(); index++) {
-						BuildingClass *bldg = Buildings[index];
-						if (bldg != this && bldg->House == House && bldg->Class->ToBuild == RTTI_INFANTRYTYPE) {
+		if (StunDuration == 0 && PlayerPtr == House && Class->Is_Factory()) {
+			action = ACTION_NONE;
+			for (int index = 0; index < Buildings.Count(); index++) {
+				BuildingClass *bldg = Buildings[index];
+				if (bldg != this && bldg != NULL && !bldg->IsInLimbo && bldg->House == House) {
+					for (int queue_index = 0; queue_index < Class->Produces.Count(); queue_index++) {
+						if (bldg->Class->Produces_Queue(Class->Produces[queue_index])) {
 							action = ACTION_SELF;
 							break;
 						}
 					}
-					break;
-
-				case RTTI_NONE:
-					action = ACTION_NONE;
-					break;
-
-				default:
-					break;
+					if (action == ACTION_SELF) {
+						break;
+					}
+				}
 			}
-
 		} else {
 			action = ACTION_NONE;
 		}
@@ -4003,7 +4000,7 @@ ActionType BuildingClass::What_Action(ObjectClass const * object, bool disallow_
 				action = ACTION_SELECT;
 			} else {
 				Cell cell = object->Center_Coord().As_Cell();
-				if (Class->ToBuild != RTTI_AIRCRAFTTYPE) {
+				if (!Produces_Aircraft_Only()) {
 					if (!Is_In_Same_Zone(cell)) {
 						action = ACTION_NOMOVE;
 					}
@@ -4050,7 +4047,7 @@ ActionType BuildingClass::What_Action(Cell const & cell, bool check_fog, bool di
 	}
 
 	if (action == ACTION_RALLY_TO_POINT) {
-		if (Class->ToBuild != RTTI_AIRCRAFTTYPE) {
+		if (!Produces_Aircraft_Only()) {
 			if (!Is_In_Same_Zone(cell)) {
 				action = ACTION_NOMOVE;
 			}
@@ -4294,25 +4291,53 @@ FireErrorType BuildingClass::Can_Fire(AbstractClass * target, int which) const
  *=============================================================================================*/
 bool BuildingClass::Toggle_Primary(void)
 {
-	if (Class->ToBuild == RTTI_NONE) {
+	if (!Class->Is_Factory()) {
 		return(IsLeader);
 	}
 
-	if (IsLeader) {
-		IsLeader = false;
+	bool is_primary_for_all = Class->Produces.Count() > 0;
+	for (int index = 0; index < Class->Produces.Count(); index++) {
+		if (!Is_Primary_For(Class->Produces[index])) {
+			is_primary_for_all = false;
+			break;
+		}
+	}
+
+	if (is_primary_for_all) {
+		for (int index = 0; index < Class->Produces.Count(); index++) {
+			IsQueueLeader[Class->Produces[index]] = false;
+		}
 	} else {
 		for (int index = 0; index < Buildings.Count(); index++) {
 			BuildingClass * building = Buildings[index];
-
-			if (!building->IsInLimbo && building->House == House && building->Class->ToBuild == Class->ToBuild) {
-				building->IsLeader = false;
+			for (int queue_index = 0; queue_index < Class->Produces.Count(); queue_index++) {
+				ProductionQueueID const queue = Class->Produces[queue_index];
+				if (building != this && building != NULL && !building->IsInLimbo
+					&& building->House == House && building->Class->Produces_Queue(queue)) {
+					if (building->IsQueueLeader[queue]) {
+						building->IsQueueLeader[queue] = false;
+						building->IsLeader = false;
+						for (int other_queue = 0; other_queue < PRODUCTION_QUEUE_COUNT; other_queue++) {
+							building->IsLeader = building->IsLeader || building->IsQueueLeader[other_queue];
+						}
+						building->Mark(MARK_CHANGE);
+					}
+				}
 			}
 		}
-		IsLeader = true;
+		for (int index = 0; index < Class->Produces.Count(); index++) {
+			IsQueueLeader[Class->Produces[index]] = true;
+		}
 		if (House->Is_Player_Control()) {
 			Speak(VOX_PRIMARY_SELECTED);
 		}
 	}
+
+	IsLeader = false;
+	for (int queue = 0; queue < PRODUCTION_QUEUE_COUNT; queue++) {
+		IsLeader = IsLeader || IsQueueLeader[queue];
+	}
+
 	Mark(MARK_CHANGE);
 	return(IsLeader);
 }
@@ -4356,6 +4381,9 @@ bool BuildingClass::Captured(HouseClass * newowner)
 		}
 
 		IsLeader = false;
+		for (int queue = 0; queue < PRODUCTION_QUEUE_COUNT; queue++) {
+			IsQueueLeader[queue] = false;
+		}
 
 		if (Class->IsLaserFencePost) {
 			Update_Laser_Fence_Connections(0);
@@ -4404,10 +4432,12 @@ bool BuildingClass::Captured(HouseClass * newowner)
 		/*
 		**	Abort any computer production in progress.
 		*/
-		if (Factory) {
-			Factory->Abandon();
-			delete (FactoryClass *)Factory;
-			Factory = NULL;
+		for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+			if (Factories[index] != NULL) {
+				Factories[index]->Abandon();
+				delete Factories[index];
+				Factories[index] = NULL;
+			}
 		}
 
 		/*
@@ -4498,9 +4528,9 @@ bool BuildingClass::Captured(HouseClass * newowner)
 			newowner->ConYards.Add(this);
 		}
 
-		if (Class->ToBuild != RTTI_NONE) {
-			oldowner->Update_Factories(Class->ToBuild);
-			newowner->Update_Factories(Class->ToBuild);
+		for (int index = 0; index < Class->Produces.Count(); index++) {
+			oldowner->Update_Factories(Class->Produces[index]);
+			newowner->Update_Factories(Class->Produces[index]);
 		}
 
 		if (was_in_radio_contact && tech != NULL) {
@@ -4512,7 +4542,7 @@ bool BuildingClass::Captured(HouseClass * newowner)
 		}
 
 		if (Session.Type != GAME_NORMAL && !newowner->Is_Human_Player()) {
-			if (newowner->ABQuantity.Value(Class->HeapID) > 1 || Class->ToBuild != RTTI_BUILDINGTYPE) {
+			if (newowner->ABQuantity.Value(Class->HeapID) > 1 || !Class->Produces_RTTI(RTTI_BUILDINGTYPE)) {
 				Sell_All_Upgrades();
 			}
 		}
@@ -6636,8 +6666,10 @@ void BuildingClass::Detach(AbstractClass const * target, bool all)
 	if (AnimToTrack == target) {
 		AnimToTrack = NULL;
 	}
-	if (Factory == target) {
-		Factory = NULL;
+	for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+		if (Factories[index] == target) {
+			Factories[index] = NULL;
+		}
 	}
 	if (BuildingLight == target) {
 		BuildingLight = NULL;
@@ -6677,7 +6709,7 @@ void BuildingClass::Detach(AbstractClass const * target, bool all)
  *=============================================================================================*/
 InfantryTypeClass const * BuildingClass::Crew_Type(void) const
 {
-	if (!IsCaptured && Percent_Chance(25) && Class->ToBuild == RTTI_BUILDINGTYPE) {
+	if (!IsCaptured && Percent_Chance(25) && Class->Produces_RTTI(RTTI_BUILDINGTYPE)) {
 		return(Rule->Engineer);
 	}
 	return(BASECLASS::Crew_Type());
@@ -6705,10 +6737,12 @@ void BuildingClass::Detach_All(bool all)
 		/*
 		**	If it is producing something, then it must be abandoned.
 		*/
-		if (Factory) {
-			Factory->Abandon();
-			delete (FactoryClass *)Factory;
-			Factory = 0;
+		for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+			if (Factories[index] != NULL) {
+				Factories[index]->Abandon();
+				delete Factories[index];
+				Factories[index] = NULL;
+			}
 		}
 
 		/*
@@ -6717,21 +6751,24 @@ void BuildingClass::Detach_All(bool all)
 		**	build that thing; if so, abandon production of it.
 		*/
 		if (House) {
-			FactoryClass * factory = House->Fetch_Factory(Class->ToBuild);
+			for (int index = 0; index < Class->Produces.Count(); index++) {
+				ProductionQueueID const queue = Class->Produces[index];
+				FactoryClass * factory = House->Fetch_Factory(queue);
 
-			/*
-			**	If a factory was found, then temporarily disable this building and then
-			**	determine if any object that is being produced can still be produced. If
-			**	not, then the object being produced must be abandoned.
-			*/
-			if (factory) {
-				TechnoClass * object = factory->Get_Object();
-				bool limbo = IsInLimbo;
-				IsInLimbo = true;
-				if (object && !object->TClass->Who_Can_Build_Me(true, false, false, House)) {
-					House->Abandon_Production(Class->ToBuild, -1);
+				/*
+				**	If a factory was found, then temporarily disable this building and then
+				**	determine if any object that is being produced can still be produced. If
+				**	not, then the object being produced must be abandoned.
+				*/
+				if (factory != NULL) {
+					TechnoClass * object = factory->Get_Object();
+					bool limbo = IsInLimbo;
+					IsInLimbo = true;
+					if (object && !object->TClass->Who_Can_Build_Me(true, false, false, House)) {
+						House->Abandon_Production(queue, object->TClass->RTTI, -1);
+					}
+					IsInLimbo = limbo;
 				}
-				IsInLimbo = limbo;
 			}
 		}
 	}
@@ -7317,100 +7354,65 @@ Coord BuildingClass::Target_Coord(void) const
  *=============================================================================================*/
 void BuildingClass::Factory_AI(void)
 {
-	/*
-	**	Handle any production tied to this building. Only computer controlled buildings have
-	**	production attached to the building itself. The player uses the sidebar interface for
-	**	all production control.
-	*/
-	if (Factory != NULL && Factory->Has_Completed() && PlacementDelay == 0) {
-		TechnoClass * product = Factory->Get_Object();
-//		FactoryClass * fact = Factory;
-
-		switch (Exit_Object(product)) {
-
-			/*
-			**	If the object could not leave the factory, then either request
-			**	a transport, place the (what must be a) building using another method, or
-			**	abort the production and refund money.
-			*/
-			case 0:
-				Factory->Abandon();
-				delete (FactoryClass *)Factory;
-				Factory = 0;
-				break;
-
-			/*
-			**	Exiting this building is prevented by some temporary blockage. Wait
-			**	a bit before trying again.
-			*/
-			case 1:
-				PlacementDelay = int(Rule->PlacementDelay * TICKS_PER_MINUTE);
-				break;
-
-			/*
-			**	The object was successfully sent from this factory. Inform the house
-			**	tracking logic that the requested object has been produced.
-			*/
-			case 2:
-				House->Just_Built(product);
-//				fact->Completed();
-				Factory->Completed();
-//				delete fact;
-				delete (FactoryClass *)Factory;
-				Factory = 0;
-				break;
-
-			default:
-				break;
+	for (int index = 0; index < Class->Produces.Count(); index++) {
+		ProductionQueueID const queue = Class->Produces[index];
+		if (queue < 0 || queue >= PRODUCTION_QUEUE_COUNT) {
+			continue;
 		}
-	}
 
-	/*
-	**	Pick something to create for this factory.
-	*/
-	if (House->IsStarted && Mission != MISSION_CONSTRUCTION && Mission != MISSION_DECONSTRUCTION) {
+		FactoryClass *& factory = Factories[queue];
 
 		/*
-		**	Buildings that produce other objects have special factory logic handled here.
+		**	Handle any production tied to this queue. Only computer controlled buildings have
+		**	production attached to the building itself. The player uses the sidebar interface.
 		*/
-		if (Class->ToBuild != RTTI_NONE) {
-			if (Factory != NULL) {
+		if (factory != NULL && factory->Has_Completed() && PlacementDelay[queue] == 0) {
+			TechnoClass * product = factory->Get_Object();
 
-				/*
-				**	If production has halted, then just abort production and make the
-				**	funds available for something else.
-				*/
-				if (PlacementDelay == 0 && !Factory->Is_Building()) {
-					Factory->Abandon();
-					delete (FactoryClass *)Factory;
-					Factory = 0;
-				}
+			switch (Exit_Object(product)) {
+				case 0:
+					factory->Abandon();
+					delete factory;
+					factory = NULL;
+					break;
 
-			} else {
+				case 1:
+					PlacementDelay[queue] = int(Rule->PlacementDelay * TICKS_PER_MINUTE);
+					break;
 
-				/*
-				**	Only look to start production if there is at least a small amount of
-				**	money available. In cases where there is no practical money left, then
-				**	production can never complete -- don't bother starting it.
-				*/
-				if (House->IsStarted && House->Available_Money() > 10) {
-					TechnoTypeClass const * techno = House->Suggest_New_Object(Class->ToBuild, false);
+				case 2:
+					House->Just_Built(product);
+					factory->Completed();
+					delete factory;
+					factory = NULL;
+					break;
 
-					/*
-					**	If a suitable object type was selected for production, then start
-					**	producing it now.
-					*/
-					if (techno != NULL) {
-						Factory = new FactoryClass;
-						if (Factory != NULL) {
-							if (!Factory->Set(*techno, *House, false)) {
-								delete (FactoryClass *)Factory;
-								Factory = 0;
-							} else {
-								House->Production_Begun(Factory->Get_Object());
-								Factory->Start(false);
-							}
-						}
+				default:
+					break;
+			}
+		}
+
+		if (!House->IsStarted || Mission == MISSION_CONSTRUCTION || Mission == MISSION_DECONSTRUCTION) {
+			continue;
+		}
+
+		if (factory != NULL) {
+			if (PlacementDelay[queue] == 0 && !factory->Is_Building()) {
+				factory->Abandon();
+				delete factory;
+				factory = NULL;
+			}
+		} else if (House->Available_Money() > 10) {
+			TechnoTypeClass const * techno = House->Suggest_New_Object(queue, false);
+			if (techno != NULL) {
+				factory = new FactoryClass;
+				if (factory != NULL) {
+					if (!factory->Set(*techno, *House, false)) {
+						delete factory;
+						factory = NULL;
+					} else {
+						House->Production_Begun(factory->Get_Object());
+						factory->Start(false);
 					}
 				}
 			}
@@ -7508,7 +7510,7 @@ void BuildingClass::Repair_AI(void)
 					(unsigned)House->Control.TechLevel >= (unsigned)Rule->IQSellBack &&
 					(unsigned)Random_Pick(0, 50) < (unsigned)House->Control.TechLevel &&
 					Tag == NULL &&
-					Class->ToBuild != RTTI_BUILDINGTYPE &&
+					!Class->Produces_RTTI(RTTI_BUILDINGTYPE) &&
 					HealthRatio < Rule->ConditionRed)
 				{
 					Sell_Back(1);
@@ -8143,8 +8145,8 @@ void BuildingClass::Turn_On(void)
 		House->IsRecalcNeeded = true;
 		Power_On();
 
-		if (Class->ToBuild != RTTI_NONE) {
-			House->Update_Factories(Class->ToBuild);
+		if (Class->Is_Factory()) {
+			Update_Production_Queues();
 		}
 
 		if (House->Is_Player_Control()) {
@@ -8174,8 +8176,8 @@ void BuildingClass::Turn_Off(void)
 			Speak(VOX_BUILDING_OFFLINE);
 		}
 
-		if (Class->ToBuild != RTTI_NONE) {
-			House->Update_Factories(Class->ToBuild);
+		if (Class->Is_Factory()) {
+			Update_Production_Queues();
 		}
 
 		if (Class == Rule->GDIFirestormGenerator) {
@@ -8975,7 +8977,8 @@ void BuildingClass::Serialize(SaveStreamClass & stream)
 	BASECLASS::Serialize(stream);
 
 	stream.Serialize(Class);
-	stream.Serialize(Factory);
+	stream.Serialize(Factories);
+	stream.Serialize(IsQueueLeader);
 	stream.Serialize(CountDown);
 	stream.Serialize(BState);
 	stream.Serialize(QueueBState);
@@ -9080,7 +9083,10 @@ void BuildingClass::Compute_CRC(CRCEngine & crc) const
 	if (AnimToTrack != NULL) {
 		crc(AnimToTrack->Fetch_ID());
 	}
-	crc((int)PlacementDelay);
+	for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+		crc((int)PlacementDelay[index]);
+		crc(IsQueueLeader[index]);
+	}
 	crc(TurretIndex);
 	crc(LaserFenceFrame);
 	crc(FirestormWallFrame);
@@ -9696,9 +9702,18 @@ void BuildingClass::Assign_Destination(AbstractClass * target, bool immediate)
 /// logic must offer the move action for it in spite of the building being rooted in place.
 /// </summary>
 /// <returns>bool; Does a movement order to this building mean a rally point?</returns>
+bool BuildingClass::Produces_Aircraft_Only(void) const
+{
+	return(Class->Produces_RTTI(RTTI_AIRCRAFTTYPE)
+		&& !Class->Produces_RTTI(RTTI_UNITTYPE)
+		&& !Class->Produces_RTTI(RTTI_INFANTRYTYPE));
+}
+
+
 bool BuildingClass::Is_Move_Override(void) const
 {
-	if (Class->ToBuild != RTTI_UNITTYPE && Class->ToBuild != RTTI_INFANTRYTYPE && Class->ToBuild != RTTI_AIRCRAFTTYPE) {
+	if (!Class->Produces_RTTI(RTTI_UNITTYPE) && !Class->Produces_RTTI(RTTI_INFANTRYTYPE)
+		&& !Class->Produces_RTTI(RTTI_AIRCRAFTTYPE)) {
 		return(false);
 	}
 	return(true);

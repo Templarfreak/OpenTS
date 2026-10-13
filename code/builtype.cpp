@@ -244,7 +244,7 @@ BuildingTypeClass::BuildingTypeClass(char const * ininame) :
 	FreeUnit(NULL),
 	FoundationFace(FACING_NONE),
 	Adjacent(3),
-	ToBuild(RTTI_NONE),
+	Produces(),
 	ExitCoordinate(0, 0, 0),
 	ExitList(NULL),
 	StartFace(DIR_N),
@@ -1219,7 +1219,24 @@ bool BuildingTypeClass::Read_INI(CCINIClass const & ini)
 
 		AuxSound1 = ini.Get_VocType(Name(), "DeploySound", AuxSound1);
 		AuxSound2 = ini.Get_VocType(Name(), "UndeploySound", AuxSound2);
-		ToBuild = ini.Get_RTTIType(Name(), "Factory", ToBuild);
+		if (ini.Is_Present(Name(), "Produces")) {
+			std::string queue_names = ini.Get_String(Name(), "Produces");
+			char * queue_name = strtok(queue_names.data(), ",");
+			while (queue_name != nullptr) {
+				ProductionQueueClass * queue = ProductionQueueClass::Find_Or_Make(queue_name);
+				if (queue != nullptr && Produces.ID(queue->ID) == -1) {
+					Produces.Add(queue->ID);
+				}
+				queue_name = strtok(nullptr, ",");
+			}
+		} else if (ini.Is_Present(Name(), "Factory")) {
+			RTTIType const factory_rtti = ini.Get_RTTIType(Name(), "Factory", RTTI_NONE);
+			ProductionQueueID const queue = ProductionQueueClass::From_RTTI(factory_rtti);
+			if (queue != PRODUCTION_QUEUE_NONE) {
+				Produces.Add(queue);
+			}
+		}
+
 		FreeUnit = ini.Get_Foot_Type(Name(), "FreeUnit", FreeUnit);
 		IsHoverPad = ini.Get_Bool(Name(), "HoverPad", IsHoverPad);
 		IsTemple = ini.Get_Bool(Name(), "IsTemple", IsTemple);
@@ -1707,7 +1724,10 @@ void BuildingTypeClass::Compute_CRC(CRCEngine & crc) const
 	crc((char const *)BuildupFilename);
 	crc((char const *)PowersUpBuilding);
 	crc(Adjacent);
-	crc(ToBuild);
+	crc(Produces.Count());
+	for (int index = 0; index < Produces.Count(); index++) {
+		crc(ProductionQueueClass::Name_From_ID(Produces[index]));
+	}
 	crc(Power);
 	crc(Drain);
 	crc(Size);
@@ -1833,7 +1853,7 @@ void BuildingTypeClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(FreeUnit);
 	stream.Serialize(FoundationFace);
 	stream.Serialize(Adjacent);
-	stream.Serialize(ToBuild);
+	stream.Serialize(Produces);
 	stream.Serialize(ExitCoordinate);
 	// ExitList -- a shared exit table, re-attached by size as this loads.
 	stream.Serialize(StartFace);

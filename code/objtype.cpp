@@ -301,7 +301,9 @@ void ObjectTypeClass::One_Time(void)
 /// <param name="legal">Must the house also meet the prerequisites and tech level?</param>
 bool ObjectTypeClass::Can_Be_Built_At(BuildingClass const * building, bool needsnopower, bool legal, HouseClass const * house) const
 {
-	if (building->IsInLimbo || building->House != house || building->Class->ToBuild != RTTI) {
+	TechnoTypeClass const * techno_type = dynamic_cast<TechnoTypeClass const *>(this);
+	if (techno_type == NULL || building->IsInLimbo || building->House != house
+		|| !building->Class->Produces_Queue(techno_type->ProducedIn)) {
 		return(false);
 	}
 	if ((needsnopower && !building->IsOn) || building->Mission == MISSION_DECONSTRUCTION || building->MissionQueue == MISSION_DECONSTRUCTION) {
@@ -360,7 +362,8 @@ BuildingClass * ObjectTypeClass::Who_Can_Build_Me(bool intheory, bool needsnopow
 			**	fixed wing craft only.
 			*/
 			if (intheory || !building->In_Radio_Contact() || RTTI != RTTI_AIRCRAFTTYPE) {
-				if (building->IsLeader) return(building);
+				TechnoTypeClass const * techno_type = dynamic_cast<TechnoTypeClass const *>(this);
+				if (techno_type != NULL && building->Is_Primary_For(techno_type->ProducedIn)) return(building);
 				freebuilding = building;
 			} else {
 				AircraftTypeClass * air = (AircraftTypeClass *)this;

@@ -14,6 +14,7 @@
 #pragma once
 
 #include "face.h"
+#include "productionqueue.h"
 #include "techtype.h"
 
 #include "banim.hh"
@@ -136,10 +137,9 @@ class BuildingTypeClass : public TechnoTypeClass
 		int Adjacent;
 
 		/*
-		**	This flag specifies the type of object this factory building can "produce". For non
-		**	factory buildings, this value will be RTTI_NONE.
-		*/
-		RTTIType ToBuild;
+		 * These are the queues this building produces for.
+		 */
+		DynamicVectorClass<ProductionQueueID> Produces;
 
 		/*
 		**	For building that produce ground units (infantry and vehicles), there is a default
@@ -892,7 +892,17 @@ class BuildingTypeClass : public TechnoTypeClass
 		void Free_Buildup_Data(void);
 		virtual bool Legal_Placement(Cell const & pos, HouseClass * house = NULL) const override;
 
-		bool Is_Factory(void) const {return(ToBuild != RTTI_NONE);}
+		bool Produces_Queue(ProductionQueueID queue) const {return(Produces.ID(queue) != -1);}
+		bool Produces_RTTI(RTTIType rtti) const
+		{
+			for (int index = 0; index < Produces.Count(); index++) {
+				if (ProductionQueueClass::Queue_Supports_RTTI(Produces[index], rtti)) {
+					return(true);
+				}
+			}
+			return(false);
+		}
+		bool Is_Factory(void) const {return(Produces.Count() != 0);}
 		virtual int Raw_Cost(void) const override;
 
 		Cell const * Exit_List(void) const;

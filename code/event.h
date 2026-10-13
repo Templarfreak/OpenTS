@@ -40,6 +40,7 @@
 #include "house.hh"
 #include "mission.hh"
 #include "mph.hh"
+#include "productionqueue.h"
 #include "speed.hh"
 
 #include <cstdint>
@@ -193,7 +194,7 @@ class EventClass
 				int			Count;	// How many to abandon, the one in progress last.
 			} AbandonCount;
 			struct {
-				RTTIType		Type;
+				int			QueueOrLegacyRTTI;
 				xCell			Where;
 			} Place;
 			struct {
@@ -269,6 +270,7 @@ class EventClass
 		EventClass(int index, unsigned char type, RTTIType object, int id);
 		EventClass(int index, unsigned char type, RTTIType object, int id, int count);
 		EventClass(int index, unsigned char type, RTTIType object, Cell const & cell);
+		static EventClass Create_Place(int index, ProductionQueueID queue, Cell const & cell);
 		EventClass(int index, unsigned char type, int id, Cell const & cell);
 		EventClass(int index, AnimType anim, HousesType owner, Coord const & coord);
 		EventClass(int index, unsigned char type, void *ptr, unsigned int size);

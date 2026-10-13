@@ -41,6 +41,7 @@
 #include "ftimer.h"
 #include "houseset.h"
 #include "object.h"
+#include "productionqueue.h"
 #include "region.h"
 #include "rgb.h"
 #include "storage.h"
@@ -530,14 +531,8 @@ class HouseClass : public AbstractClass
 		int Power;					// Current power output.
 		int Drain;					// Power consumption.
 
-		/*
-		**	For human controlled houses, only one type of unit can be produced
-		**	at any one instant. These factory objects control this production.
-		*/
-		FactoryClass * AircraftFactory;
-		FactoryClass * InfantryFactory;
-		FactoryClass * UnitFactory;
-		FactoryClass * BuildingFactory;
+		FactoryClass * ProductionFactories[PRODUCTION_QUEUE_COUNT];
+		int ProductionQueueCounts[PRODUCTION_QUEUE_COUNT];
 
 		/*
 		**	This target value specifies where the flag is located. It might be a cell
@@ -776,9 +771,10 @@ class HouseClass : public AbstractClass
 		ZoneType Which_Zone(Cell const & cell) const;
 		Cell Find_Cell_In_Zone(TechnoClass const * techno, ZoneType zone) const;
 		ProdFailType Begin_Production(RTTIType type, int id, bool resume=false);
-		ProdFailType Suspend_Production(RTTIType type);
+		ProdFailType Suspend_Production(RTTIType type, int id);
 		ProdFailType Abandon_Production(RTTIType type, int id);
-		bool Place_Object(RTTIType type, Cell const & cell);
+		ProdFailType Abandon_Production(ProductionQueueID queue, RTTIType type, int id);
+		bool Place_Object(ProductionQueueID queue, Cell const & cell);
 		bool Manual_Place(BuildingClass * builder, BuildingClass * object);
 		void Just_Built(TechnoClass * product);
 		void Special_Weapon_AI(SuperWeaponType id);
@@ -867,7 +863,9 @@ class HouseClass : public AbstractClass
 		bool Can_Add_Waypoint_To_Path(void) const;
 
 		// Factory controls.
+		FactoryClass * Fetch_Factory(ProductionQueueID queue) const;
 		FactoryClass * Fetch_Factory(RTTIType rtti) const;
+		void Set_Factory(ProductionQueueID queue, FactoryClass * factory);
 		void Set_Factory(RTTIType rtti, FactoryClass * factory);
 		void Update_Production_Mode(RTTIType type);
 		void Production_Status_Changed(void) {IsRecalcNeeded = true;}
@@ -876,6 +874,7 @@ class HouseClass : public AbstractClass
 		FactoryClass * Factory_Producing_This(ObjectTypeClass const * object) const;
 
 		TechnoTypeClass const * Suggest_New_Object(RTTIType objectype, bool kennel=false) const;
+		TechnoTypeClass const * Suggest_New_Object(ProductionQueueID queue, bool kennel=false) const;
 		BuildingTypeClass const * Suggest_New_Building(void) const;
 		void Recalc_Center(void);
 		bool Does_Enemy_Building_Exist(StructType) const;
@@ -889,6 +888,7 @@ class HouseClass : public AbstractClass
 		void Update_Spied_Radar(HouseClass * house);
 		void Update_Spied_Power_Plants(void);
 		void Update_Factories(RTTIType rtti);
+		void Update_Factories(ProductionQueueID queue);
 		double Power_Fraction(void) const;
 		double Tiberium_Fraction(void) const;
 		double Weed_Fraction(void) const;

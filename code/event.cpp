@@ -603,7 +603,7 @@ EventClass::EventClass(int index, unsigned char type, RTTIType object, Cell cons
 	if (index >= 0) {
 		ID = index;
 		Type = type;
-		Data.Place.Type = object;
+		Data.Place.QueueOrLegacyRTTI = object;
 		Data.Place.Where = cell;
 		Frame = ::Frame;
 	} else {
@@ -611,6 +611,25 @@ EventClass::EventClass(int index, unsigned char type, RTTIType object, Cell cons
 		Type = EMPTY;
 		Frame = ::Frame;
 	}
+}
+
+
+EventClass EventClass::Create_Place(int index, ProductionQueueID queue, Cell const & cell)
+{
+	EventClass event(index, PLACE, RTTI_NONE, cell);
+	if (index < 0) {
+		return(event);
+	}
+
+	if (queue < 0 || queue >= ProductionQueueClass::Count()) {
+		DebugString("Unable to create PLACE event for invalid production queue ID %d.\n", queue);
+		event.ID = -1;
+		event.Type = EMPTY;
+		return(event);
+	}
+
+	event.Data.Place.QueueOrLegacyRTTI = -queue - 1;
+	return(event);
 }
 
 
@@ -895,7 +914,16 @@ void EventClass::Execute(void)
 		**	exact factory and real object pointer to use.
 		*/
 		case PLACE:
-			house->Place_Object(Data.Place.Type, Cell(Data.Place.Where.X, Data.Place.Where.Y));
+			{
+				// Nonnegative payloads are legacy RTTI values from older recordings.
+				int const encoded_queue = Data.Place.QueueOrLegacyRTTI;
+				ProductionQueueID const queue = encoded_queue >= 0
+					? ProductionQueueClass::From_RTTI(static_cast<RTTIType>(encoded_queue))
+					: -encoded_queue - 1;
+				if (ProductionQueueClass::From_ID(queue) != nullptr) {
+					house->Place_Object(queue, Cell(Data.Place.Where.X, Data.Place.Where.Y));
+				}
+			}
 			break;
 
 		/*
@@ -916,7 +944,7 @@ void EventClass::Execute(void)
 		**	object type, the factory can be inferred.
 		*/
 		case SUSPEND:
-			house->Suspend_Production(Data.Specific.Type);
+			house->Suspend_Production(Data.Specific.Type, Data.Specific.ID);
 			break;
 
 		/*

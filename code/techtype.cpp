@@ -104,6 +104,9 @@ TechnoTypeClass::TechnoTypeClass(char const * ininame, SpeedType speed) :
 	Cost(0),
 	Soylent(-1),
 	BuildTime(-1),
+	ProducedIn(PRODUCTION_QUEUE_NONE),
+	IsProducedInConfigured(false),
+	RegisteredProducedIn(PRODUCTION_QUEUE_NONE),
 	Level(255),
 	Prerequisite(),
 	Risk(0),
@@ -598,7 +601,17 @@ static inline int _Scale_To_256(int val)
  *=============================================================================================*/
 bool TechnoTypeClass::Read_INI(CCINIClass const & ini)
 {
+	if (!IsProducedInConfigured && ProducedIn == PRODUCTION_QUEUE_NONE) {
+		ProducedIn = ProductionQueueClass::From_RTTI(RTTI);
+	}
+
 	if (BASECLASS::Read_INI(ini)) {
+		if (ini.Is_Present(Name(), "ProducedIn")) {
+			std::string queue_name = ini.Get_String(Name(), "ProducedIn");
+			ProductionQueueClass * queue = ProductionQueueClass::Find_Or_Make(queue_name.c_str());
+			ProducedIn = queue != nullptr ? queue->ID : PRODUCTION_QUEUE_NONE;
+			IsProducedInConfigured = true;
+		}
 
 		IsTypeImmune = ini.Get_Bool(Name(), "TypeImmune", IsTypeImmune);
 		IsDetectDisguise = ini.Get_Bool(Name(), "DetectDisguise", IsDetectDisguise);
@@ -840,6 +853,12 @@ bool TechnoTypeClass::Read_INI(CCINIClass const & ini)
 		if (Voxel.VoxLib != NULL && !Voxel.VoxLib->Load_Failed()) {
 			VoxelCenterY = Voxel.VoxLib->Get_Layer_Info(0, 0).YSize * 0.5f + 0.5;
 			VoxelCenterX = Voxel.VoxLib->Get_Layer_Info(0, 0).XSize * 0.5f;
+		}
+
+		if (RegisteredProducedIn != ProducedIn) {
+			ProductionQueueClass::Unregister_Product(RegisteredProducedIn, this);
+			ProductionQueueClass::Register_Product(ProducedIn, this);
+			RegisteredProducedIn = ProducedIn;
 		}
 
 		return(true);
@@ -1117,6 +1136,7 @@ void TechnoTypeClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(Cost);
 	stream.Serialize(Soylent);
 	stream.Serialize(BuildTime);
+	stream.Serialize(ProducedIn);
 	stream.Serialize(FlightLevel);
 	stream.Serialize(Level);
 	stream.Serialize(Prerequisite);
@@ -1250,6 +1270,7 @@ void TechnoTypeClass::Compute_CRC(class CRCEngine & crc) const
 	crc(Weight);
 	crc(PhysicalSize);
 	crc(InitialMission);
+	crc(ProductionQueueClass::Name_From_ID(ProducedIn));
 	crc(IsImmuneToVeins);
 	crc(Is_Immune_To_EMP());
 	crc(IsTiberiumHeal);

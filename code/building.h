@@ -76,7 +76,12 @@ class BuildingClass : public TechnoClass
 		**	If this building is in the process of producing something, then this
 		**	will point to the factory manager.
 		*/
-		FactoryClass * Factory;
+		FactoryClass * Factories[PRODUCTION_QUEUE_COUNT];
+
+		/*
+		**	This building may be the primary factory for some of its queues but not others.
+		*/
+		bool IsQueueLeader[PRODUCTION_QUEUE_COUNT];
 
 		/*
 		**	Special countdown to destruction value. If the building is destroyed,
@@ -122,7 +127,7 @@ class BuildingClass : public TechnoClass
 		**	This is the countdown timer that regulates placement retry logic
 		**	for factory type buildings.
 		*/
-		CDTimerClass<FrameTimerClass> PlacementDelay;
+		CDTimerClass<FrameTimerClass> PlacementDelay[PRODUCTION_QUEUE_COUNT];
 
 		/*
 		 * These are the animations this building currently has running, one slot per BAnimType.
@@ -405,6 +410,8 @@ class BuildingClass : public TechnoClass
 		virtual InfantryTypeClass const * Crew_Type(void) const override;
 		virtual int Pip_Count(void) const override;
 		virtual bool Can_Player_Move(void) const override;
+		bool Produces_Aircraft_Only(void) const;
+		bool Is_Primary_For(ProductionQueueID queue) const {return(queue >= 0 && queue < PRODUCTION_QUEUE_COUNT && IsQueueLeader[queue]);};
 		virtual ActionType What_Action(ObjectClass const * target, bool disallow_force = false) const override;
 		virtual ActionType What_Action(Cell const & cell, bool check_fog = false, bool disallow_force = false) const override;
 		virtual bool Can_Repair(void) const override;
@@ -563,6 +570,15 @@ class BuildingClass : public TechnoClass
 		virtual void Plot_On_Radar(void) const override;
 
 		bool Clear_Weapons_Factory_Bib(void);
+		bool Has_Factory(void) const
+		{
+			for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+				if (Factories[index] != NULL) {
+					return(true);
+				}
+			}
+			return(false);
+		}
 
 		void Init_Laser_Fence(void);
 		void Update_Laser_Fence_Connections(int explode);
@@ -602,6 +618,7 @@ class BuildingClass : public TechnoClass
 		void Write_INI(CCINIClass & ini);
 
 	private:
+		void Update_Production_Queues(void);
 		void Drop_Debris(AbstractClass * source = NULL);
 		AircraftClass * Place_Free_Aircraft(AircraftTypeClass const * type);
 		void Place_Free_Unit(void);

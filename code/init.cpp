@@ -68,6 +68,7 @@
 #include "_map.h"
 #include "_mixfile.h"
 #include "_mono.h"
+#include "productionqueue.h"
 #include "_palette.h"
 #include "_pk.h"
 #include "_rand.h"
@@ -4978,13 +4979,19 @@ class ManualPlaceCommandClass : public CommandClass
 		}
 
 		virtual void Execute(void) const {
-			FactoryClass * factory = PlayerPtr->Fetch_Factory(RTTI_BUILDING);
-			if (factory == NULL || !factory->Has_Completed()) {
-				return;
+			FactoryClass * factory = NULL;
+			TechnoClass * pending = NULL;
+			for (ProductionQueueID queue = 0; queue < ProductionQueueClass::Count(); queue++) {
+				FactoryClass * candidate = PlayerPtr->Fetch_Factory(queue);
+				TechnoClass * object = candidate != NULL ? candidate->Get_Object() : NULL;
+				if (candidate != NULL && candidate->Has_Completed() && object != NULL && object->RTTI == RTTI_BUILDING) {
+					factory = candidate;
+					pending = object;
+					break;
+				}
 			}
 
-			TechnoClass * pending = factory->Get_Object();
-			if (pending == NULL || pending->RTTI != RTTI_BUILDING) {
+			if (factory == NULL) {
 				return;
 			}
 
@@ -5016,7 +5023,8 @@ static void Repeat_Last_Production(RTTIType type, int id)
 	}
 
 	if (type == RTTI_BUILDINGTYPE) {
-		FactoryClass * factory = PlayerPtr->Fetch_Factory(type);
+		TechnoTypeClass const * techno = Fetch_Techno_Type(type, id);
+		FactoryClass * factory = techno != NULL ? PlayerPtr->Fetch_Factory(techno->ProducedIn) : NULL;
 		if (factory != NULL && factory->Get_Object() != NULL) {
 			if (factory->Is_Building() || factory->Has_Production_Target()) {
 				Speak(VOX_NO_FACTORY);

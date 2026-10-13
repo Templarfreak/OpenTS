@@ -352,7 +352,7 @@ bool TEventClass::operator () (TEventType event, HouseClass const * house, Objec
 				if (house->CurBuildings > 0) {
 					for (int index = 0; index < Buildings.Count(); index++) {
 						BuildingClass * ptr = Buildings[index];
-						if (ptr != NULL && !ptr->IsInLimbo && ptr->House == house && ptr->Class->ToBuild != RTTI_NONE) {
+						if (ptr != NULL && !ptr->IsInLimbo && ptr->House == house && ptr->Class->Is_Factory()) {
 							return(false);
 						}
 					}

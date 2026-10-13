@@ -2361,7 +2361,7 @@ bool TechnoClass::Evaluate_Object(ThreatType method, int mask, int range, Techno
 	**	consider any non-factory building.
 	*/
 	if ((method & THREAT_FACTORIES) && otype == RTTI_BUILDING) {
-		if (((BuildingTypeClass const *)tclass)->ToBuild == RTTI_NONE) {
+		if (!((BuildingTypeClass const *)tclass)->Is_Factory()) {
 			value = 0;
 		}
 	}
@@ -7899,7 +7899,7 @@ BuildingClass * TechnoClass::Find_Docking_Bay(BuildingTypeClass const * b, bool 
 				long long dx = here.X - there.X;
 				long long dy = here.Y - there.Y;
 				long long dist = (dx * dx) + (dy * dy);
-				if (bestval == -1 || dist < bestval || building->IsLeader) {
+				if (bestval == -1 || dist < bestval || building->Is_Primary_For(TClass->ProducedIn)) {
 					best = building;
 					bestval = dist;
 				}
