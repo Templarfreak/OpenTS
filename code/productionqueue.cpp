@@ -24,14 +24,10 @@ ProductionQueueClass::ProductionQueueClass(char const * name) :
 }
 
 
-void ProductionQueueClass::One_Time(void)
-{
-	static bool initialized = false;
-	if (initialized) {
-		return;
-	}
+static bool QueuesInitialized = false;
 
-	initialized = true;
+static void Register_Retail_Queues(void)
+{
 	assert(ProductionQueues.Count() == PRODUCTION_QUEUE_AIRCRAFT);
 	new ProductionQueueClass("AircraftType");
 	assert(ProductionQueues.Count() == PRODUCTION_QUEUE_INFANTRY);
@@ -40,6 +36,30 @@ void ProductionQueueClass::One_Time(void)
 	new ProductionQueueClass("UnitType");
 	assert(ProductionQueues.Count() == PRODUCTION_QUEUE_BUILDING);
 	new ProductionQueueClass("BuildingType");
+}
+
+
+void ProductionQueueClass::One_Time(void)
+{
+	if (QueuesInitialized) {
+		return;
+	}
+
+	QueuesInitialized = true;
+	Register_Retail_Queues();
+}
+
+
+// Drops every custom queue and every registered product so rules can be read again from
+// scratch. Call it before the type heaps are deleted, because the product lists point into them.
+void ProductionQueueClass::Reset(void)
+{
+	for (int index = 0; index < ProductionQueues.Count(); index++) {
+		delete ProductionQueues[index];
+	}
+	ProductionQueues.Clear();
+	QueuesInitialized = true;
+	Register_Retail_Queues();
 }
 
 

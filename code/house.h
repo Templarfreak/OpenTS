@@ -762,6 +762,7 @@ class HouseClass : public AbstractClass
 		void Super_Weapon_Handler(void);
 		int * Factory_Counter(RTTIType rtti);
 		int Factory_Count(RTTIType rtti) const;
+		int Queue_Factory_Count(ProductionQueueID queue) const;
 		DiffType Assign_Handicap(DiffType handicap);
 		AbstractClass * Find_Juicy_Target(Coord const & coord) const;
 		Cell Where_To_Go(FootClass const * object) const;

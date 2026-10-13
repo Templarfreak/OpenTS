@@ -1220,9 +1220,17 @@ bool BuildingTypeClass::Read_INI(CCINIClass const & ini)
 		AuxSound1 = ini.Get_VocType(Name(), "DeploySound", AuxSound1);
 		AuxSound2 = ini.Get_VocType(Name(), "UndeploySound", AuxSound2);
 		if (ini.Is_Present(Name(), "Produces")) {
+			Produces.Clear();
 			std::string queue_names = ini.Get_String(Name(), "Produces");
 			char * queue_name = strtok(queue_names.data(), ",");
 			while (queue_name != nullptr) {
+				while (*queue_name == ' ' || *queue_name == '\t') {
+					queue_name++;
+				}
+				char * name_end = queue_name + strlen(queue_name);
+				while (name_end > queue_name && (name_end[-1] == ' ' || name_end[-1] == '\t')) {
+					*--name_end = '\0';
+				}
 				ProductionQueueClass * queue = ProductionQueueClass::Find_Or_Make(queue_name);
 				if (queue != nullptr && Produces.ID(queue->ID) == -1) {
 					Produces.Add(queue->ID);
@@ -1230,6 +1238,7 @@ bool BuildingTypeClass::Read_INI(CCINIClass const & ini)
 				queue_name = strtok(nullptr, ",");
 			}
 		} else if (ini.Is_Present(Name(), "Factory")) {
+			Produces.Clear();
 			RTTIType const factory_rtti = ini.Get_RTTIType(Name(), "Factory", RTTI_NONE);
 			ProductionQueueID const queue = ProductionQueueClass::From_RTTI(factory_rtti);
 			if (queue != PRODUCTION_QUEUE_NONE) {

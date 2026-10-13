@@ -363,6 +363,7 @@ HouseClass::HouseClass(HouseTypeClass const * type) :
 
 	for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
 		ProductionFactories[index] = NULL;
+		ProductionQueueCounts[index] = 0;
 	}
 
 	if (Class) {
@@ -5232,6 +5233,12 @@ void HouseClass::Active_Remove(TechnoClass const * techno)
 				}
 			}
 		}
+		for (int index = 0; index < type->Produces.Count(); index++) {
+			ProductionQueueID const queue = type->Produces[index];
+			if (queue >= 0 && queue < PRODUCTION_QUEUE_COUNT) {
+				ProductionQueueCounts[queue] -= 1;
+			}
+		}
 	}
 }
 
@@ -5262,6 +5269,12 @@ void HouseClass::Active_Add(TechnoClass const * techno)
 				if (counter != NULL) {
 					*counter += 1;
 				}
+			}
+		}
+		for (int index = 0; index < type->Produces.Count(); index++) {
+			ProductionQueueID const queue = type->Produces[index];
+			if (queue >= 0 && queue < PRODUCTION_QUEUE_COUNT) {
+				ProductionQueueCounts[queue] += 1;
 			}
 		}
 	}
@@ -5560,6 +5573,19 @@ int HouseClass::Factory_Count(RTTIType rtti) const
 		return(*ptr);
 	}
 	return(0);
+}
+
+
+/// <summary>
+/// Counts the factories this house owns that produce into the specified queue.
+/// </summary>
+/// <returns>Returns the number of factories, or 0 for an invalid queue.</returns>
+int HouseClass::Queue_Factory_Count(ProductionQueueID queue) const
+{
+	if (queue < 0 || queue >= PRODUCTION_QUEUE_COUNT) {
+		return(0);
+	}
+	return(ProductionQueueCounts[queue]);
 }
 
 
@@ -6591,8 +6617,13 @@ void HouseClass::Compute_CRC(CRCEngine & crc) const
 		crc(FactoryPlants[i]->TClass->Name());
 	}
 
+	crc(ProductionQueueClass::Count());
 	for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+		if (index < ProductionQueueClass::Count()) {
+			crc(ProductionQueueClass::Name_From_ID(index));
+		}
 		crc(ProductionQueueCounts[index]);
+		crc(ProductionFactories[index] != NULL ? ProductionFactories[index]->Fetch_ID() : -1);
 	}
 
 	Base.Compute_CRC(crc);

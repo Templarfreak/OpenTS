@@ -71,6 +71,7 @@
 #include "findmake.h"
 #include "globals.h"
 #include "house.h"
+#include "productionqueue.h"
 #include "houstype.h"
 #include "infatype.h"
 #include "levitate.h"
@@ -638,6 +639,8 @@ RulesClass::~RulesClass(void)
 /// file names keeps the value the last game left it with.</remarks>
 void RulesClass::Initialize(CCINIClass const & ini)
 {
+	ProductionQueueClass::Reset();
+
 	while (ColorSchemes.Count()) {
 		delete ColorSchemes[0];
 	}

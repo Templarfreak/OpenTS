@@ -36,6 +36,7 @@ class ProductionQueueClass
 		DynamicVectorClass<TechnoTypeClass const *> ProductTypes;
 
 		static void One_Time(void);
+		static void Reset(void);
 		static ProductionQueueClass * Find_Or_Make(char const * name);
 		static int Count(void);
 		static ProductionQueueClass * From_ID(ProductionQueueID id);
