@@ -99,6 +99,7 @@
 #include "rules.h"
 #include "savefile.h"
 #include "savemgr.h"
+#include "productionqueue.h"
 #include "savestream.h"
 #include "savever.h"
 #include "scenario.h"
@@ -410,6 +411,9 @@ static bool Put_All(SaveStreamClass & stream, int save_net)
 	Scen->Save(stream);
 	Environment.Save(stream);
 	Rule->Save(stream);
+	if (!ProductionQueueClass::Save(stream)) {
+		return(false);
+	}
 
 	DebugString("Saving AnimTypes\n");
 	if (!Save_Vector(stream, AnimTypes)) {
@@ -780,6 +784,9 @@ static bool Get_All(SaveStreamClass & stream, bool save_net)
 	}
 
 	Rule->Load(stream);
+	if (!ProductionQueueClass::Load(stream)) {
+		return(false);
+	}
 
 	SideType speech = Scen->SpeechSide != SIDE_NONE ? Scen->SpeechSide : Scen->PlayerSide;
 	if (Prep_Speech_For_Side_Or_First(speech) == SIDE_NONE) {

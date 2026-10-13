@@ -15,6 +15,7 @@
 #include <string>
 
 class TechnoTypeClass;
+class SaveStreamClass;
 
 using ProductionQueueID = int;
 
@@ -37,6 +38,9 @@ class ProductionQueueClass
 
 		static void One_Time(void);
 		static void Reset(void);
+		static bool Save(SaveStreamClass & stream);
+		static bool Load(SaveStreamClass & stream);
+		static void Rebuild_Products(void);
 		static ProductionQueueClass * Find_Or_Make(char const * name);
 		static int Count(void);
 		static ProductionQueueClass * From_ID(ProductionQueueID id);

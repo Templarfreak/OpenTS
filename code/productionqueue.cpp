@@ -10,7 +10,9 @@
 #include "always.h"
 
 #include "dbgprint.h"
+#include "globals.h"
 #include "productionqueue.h"
+#include "savestream.h"
 #include "techtype.h"
 
 #include "_productionqueue.h"
@@ -60,6 +62,68 @@ void ProductionQueueClass::Reset(void)
 	ProductionQueues.Clear();
 	QueuesInitialized = true;
 	Register_Retail_Queues();
+}
+
+
+// Writes the registered queue names in ID order, because saved types and houses refer to queues by ID.
+bool ProductionQueueClass::Save(SaveStreamClass & stream)
+{
+	One_Time();
+
+	int count = ProductionQueues.Count();
+	stream.Serialize(count);
+	for (int index = 0; index < count; index++) {
+		std::string name = ProductionQueues[index]->IniName;
+		stream.Serialize(name);
+	}
+	return(!stream.Was_Error());
+}
+
+
+// Restores the queue registry from a save, so that every saved queue ID names the same queue again.
+// Returns false if the saved list is malformed.
+bool ProductionQueueClass::Load(SaveStreamClass & stream)
+{
+	Reset();
+
+	int count = 0;
+	stream.Serialize(count);
+	if (stream.Was_Error() || count <= PRODUCTION_QUEUE_BUILDING || count > PRODUCTION_QUEUE_COUNT) {
+		return(false);
+	}
+
+	for (int index = 0; index < count; index++) {
+		std::string name;
+		stream.Serialize(name);
+		if (stream.Was_Error()) {
+			return(false);
+		}
+		if (index <= PRODUCTION_QUEUE_BUILDING) {
+			continue;
+		}
+
+		ProductionQueueClass * queue = Find_Or_Make(name.c_str());
+		if (queue == nullptr || queue->ID != index) {
+			return(false);
+		}
+	}
+	return(true);
+}
+
+
+// Refills every queue's product list from the loaded types. Call it once all types are loaded.
+void ProductionQueueClass::Rebuild_Products(void)
+{
+	One_Time();
+
+	for (int index = 0; index < ProductionQueues.Count(); index++) {
+		ProductionQueues[index]->ProductTypes.Clear();
+	}
+	for (int index = 0; index < TechnoTypes.Count(); index++) {
+		TechnoTypeClass * type = TechnoTypes[index];
+		Register_Product(type->ProducedIn, type);
+		type->RegisteredProducedIn = type->ProducedIn;
+	}
 }
 
 

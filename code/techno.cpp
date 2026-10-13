@@ -855,7 +855,7 @@ int TechnoClass::Time_To_Build(void) const
 	power = std::max(power, Rule->MinLowPowerProductionSpeed);
 	val /= power;
 
-	int extra = House->Factory_Count(RTTI) - 1;
+	int extra = House->Queue_Factory_Count(TClass->ProducedIn) - 1;
 	if (Rule->MultipleFactoryCap > 0) {
 		extra = std::min(extra, Rule->MultipleFactoryCap - 1);
 	}

@@ -137,6 +137,7 @@
 #include "revent.h"
 #include "rules.h"
 #include "savemgr.h"
+#include "productionqueue.h"
 #include "savestream.h"
 #include "scheme.h"
 #include "score.h"
@@ -1018,6 +1019,7 @@ void Fill_In_Data(void)
  *=============================================================================================*/
 void Post_Load_Game(void)
 {
+	ProductionQueueClass::Rebuild_Products();
 	BuildingTypeClass::Post_Load_Game();
 	TiberiumClass::Post_Load_Game();
 	VeinholeMonsterClass::Init(Scen->Theater);
