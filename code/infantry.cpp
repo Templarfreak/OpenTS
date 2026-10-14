@@ -728,6 +728,12 @@ void InfantryClass::Draw_It(Point2D const & xpoint, Rect const & cliprect) const
 }
 
 
+static bool Is_Weapons_Factory(TechnoClass const * techno)
+{
+	return(techno != NULL && techno->RTTI == RTTI_BUILDING && static_cast<BuildingClass const *>(techno)->Class->IsWeaponsFactory);
+}
+
+
 /***********************************************************************************************
  * InfantryClass::Per_Cell_Process -- Handles special operations that occur once per cell.     *
  *                                                                                             *
@@ -752,6 +758,11 @@ void InfantryClass::Per_Cell_Process(PCPType why)
 	CellClass * cellptr = &Map[Get_Coord()];
 
 	if (why == PCP_END) {
+
+		TechnoClass * factory = Contact_With_Whom();
+		if (IsTethered && Mission != MISSION_UNLOAD && Is_Weapons_Factory(factory) && Map[Get_Coord()].Cell_Building() != factory) {
+			Transmit_Message(RADIO_UNLOADED);
+		}
 
 		/*
 		**	If the infantry unit is entering a cell that contains the building it is trying to
@@ -2223,6 +2234,8 @@ bool InfantryClass::Random_Animate(void)
  *=============================================================================================*/
 void InfantryClass::Scatter(Coord const & threat, bool forced, bool nokidding)
 {
+	if (Is_Weapons_Factory(Contact_With_Whom())) return;
+
 	/*
 	**	A unit that is in the process of going somewhere will never scatter.
 	*/

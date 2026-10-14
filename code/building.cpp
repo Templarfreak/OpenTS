@@ -2961,7 +2961,9 @@ int BuildingClass::Exit_Object(TechnoClass * base)
 
 				if (Class->IsWeaponsFactory) {
 
-					base->ArchiveTarget = Rally_Point_For(base);
+					if (base->Fetch_RTTI() != RTTI_INFANTRY) {
+						base->ArchiveTarget = Rally_Point_For(base);
+					}
 
 					if (Mission == MISSION_UNLOAD) {
 						for (int index = 0; index < Buildings.Count(); index++) {
@@ -6370,13 +6372,13 @@ int BuildingClass::Do_MISSION_UNLOAD(void)
 			LEAVE,
 			CLOSE
 		};
-		UnitClass * unit;
+		FootClass * unit;
 		switch (Status) {
 			/*
 			**	Start the door opening.
 			*/
 			case INITIAL:
-				unit = (UnitClass *)Contact_With_Whom();
+				unit = (FootClass *)Contact_With_Whom();
 				if (unit) {
 					unit->Assign_Mission(MISSION_GUARD);
 					unit->Commence();
@@ -6405,7 +6407,7 @@ int BuildingClass::Do_MISSION_UNLOAD(void)
 			*/
 			case OPEN:
 				if (Door.Is_Door_Open()) {
-					unit = (UnitClass *)Contact_With_Whom();
+					unit = (FootClass *)Contact_With_Whom();
 					if (unit) {
 						unit->Assign_Mission(MISSION_MOVE);
 
@@ -6428,9 +6430,20 @@ int BuildingClass::Do_MISSION_UNLOAD(void)
 								unit->Take_Damage(damage, 0, Rule->C4Warhead, NULL, true);
 							}
 						} else if (clsid != ClassID_DriveLocomotion) {
-							Cell exitcell = Find_Exit_Cell(unit);
-							if (exitcell != CELL_NONE) {
-								unit->Assign_Destination(&Map[exitcell]);
+							// Infantry walk out of the cell past the east edge, which moves with the footprint width.
+							Cell door = Get_Cell() + (unit->Fetch_RTTI() == RTTI_INFANTRY ? Cell(Class->Width(), 1) : exitcell);
+							if (!Map.In_Radar(door) || unit->Can_Enter_Cell(&Map[door], FACING_NONE, -1, NULL, false) != MOVE_OK) {
+								door = Find_Exit_Cell(unit);
+							}
+							if (door != CELL_NONE) {
+								unit->Assign_Destination(&Map[door]);
+								if (unit->Fetch_RTTI() == RTTI_INFANTRY) {
+									Coord spot = Map[door].Closest_Free_Spot(Coord(door, 0), true);
+									if (spot != COORD_NONE) {
+										unit->Locomotion->Force_Immediate_Destination(spot);
+									}
+									unit->ArchiveTarget = Rally_Point_For(unit);
+								}
 							}
 						} else {
 							Coord cs;

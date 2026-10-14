@@ -1,5 +1,5 @@
 ---
-title: Use passable exits for non-drive factory products
+title: Leave weapons factories through the door
 category: fix
 release: 0.2.0
 targets:
@@ -10,4 +10,4 @@ credit:
 - Templarfreak
 ---
 
-A non-tunnel `UnitType` product that does not use drive movement leaving a `WeaponsFactory=yes` building used one fixed destination, even when another cell in the building's exit list was passable. It now heads to the first passable cell in that list.
+A non-tunnel product that does not use drive movement leaving a `WeaponsFactory=yes` building heads to the door cell first, as drive vehicles do, and uses the first passable cell of the building's exit list only when the door cell is blocked. Infantry produced there now leave through the door and walk to the rally point once they are outside the building.
