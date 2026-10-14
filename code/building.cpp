@@ -2723,8 +2723,16 @@ void BuildingClass::Assign_Rally_Point(Cell const & cell)
 	MZoneType mzone = MZONE_NORMAL;
 
 	bool underbridge = Map[cell].IsUnderBridge;
+	bool water = Map[cell].Land_Type() == LAND_WATER && !underbridge;
 
-	if (Produces_Aircraft_Only()) {
+	if (water ? !Class->RallyPointOnWater : !Class->RallyPointOnLand) {
+		return;
+	}
+
+	if (water) {
+		speed = SPEED_FLOAT;
+		mzone = MZONE_AMPHIBIOUS;
+	} else if (Produces_Aircraft_Only()) {
 		speed = SPEED_WINGED;
 		mzone = MZONE_FLYER;
 	}
@@ -2734,10 +2742,17 @@ void BuildingClass::Assign_Rally_Point(Cell const & cell)
 	Cell nearbyloc = Map.Nearby_Location(cell, speed, zone, mzone, underbridge);
 
 	if (nearbyloc != CELL_NONE) {
-		OutList.push_back(EventClass(Owner(), EventClass::ARCHIVE, TargetClass(this), TargetClass(&Map[nearbyloc])));
+		bool const nearby_water = Map[nearbyloc].Land_Type() == LAND_WATER && !Map[nearbyloc].IsUnderBridge;
+		if (nearby_water ? Class->RallyPointOnWater : Class->RallyPointOnLand) {
+			OutList.push_back(EventClass(Owner(), EventClass::ARCHIVE, TargetClass(this), TargetClass(&Map[nearbyloc])));
+		}
 	} else {
 		if (Class->IsConstructionYard && House->Is_Human_Player() && Session.Type != GAME_NORMAL && Session.Options.MCVRedeploy) {
-			OutList.push_back(EventClass(Owner(), EventClass::ARCHIVE, TargetClass(this), TargetClass(&Map[Center_Coord()])));
+			Cell const center = Center_Coord().As_Cell();
+			bool const center_water = Map[center].Land_Type() == LAND_WATER && !Map[center].IsUnderBridge;
+			if (center_water ? Class->RallyPointOnWater : Class->RallyPointOnLand) {
+				OutList.push_back(EventClass(Owner(), EventClass::ARCHIVE, TargetClass(this), TargetClass(&Map[center])));
+			}
 		}
 	}
 }
@@ -2848,7 +2863,7 @@ int BuildingClass::Exit_Object(TechnoClass * base)
 		case RTTI_AIRCRAFT:
 
 			House->Update_Production_Mode(RTTI_AIRCRAFT);
-			House->BuildAircraft = AIRCRAFT_NONE;
+			House->Clear_AI_Wanted(base->TClass);
 
 			if (!In_Radio_Contact() || IonStormClass::Is_Ion_Storm_Active()) {
 				AircraftClass * air = (AircraftClass *)base;
@@ -2939,13 +2954,7 @@ int BuildingClass::Exit_Object(TechnoClass * base)
 
 			if (!Class->IsHospital && !Class->IsArmory) {
 				House->Update_Production_Mode(base->Fetch_RTTI());
-
-				if (base->Fetch_RTTI() == RTTI_UNIT) {
-					House->BuildUnit = UNIT_NONE;
-				}
-				if (base->Fetch_RTTI() == RTTI_INFANTRY) {
-					House->BuildInfantry = INFANTRY_NONE;
-				}
+				House->Clear_AI_Wanted(base->TClass);
 			}
 
 			if (!Class->IsRefinery && !Class->IsWeeder) {
@@ -3179,7 +3188,7 @@ int BuildingClass::Exit_Object(TechnoClass * base)
 			if (!House->Is_Human_Player()) {
 
 				House->Update_Production_Mode(RTTI_BUILDING);
-				House->BuildStructure = STRUCT_NONE;
+				House->Clear_AI_Wanted(base->TClass);
 
 				/*
 				**	Find the next available spot to place this newly created building. If the
@@ -3237,12 +3246,6 @@ int BuildingClass::Exit_Object(TechnoClass * base)
 
 						case 0:
 							if (base->Unlimbo(placementcoord)) {
-								if (node != NULL) {
-									if (building->Class->HeapID == House->BuildStructure) {
-										House->BuildStructure = STRUCT_NONE;
-									}
-								}
-
 								if (base->CurrentMission == MISSION_NONE && base->MissionQueue == MISSION_CONSTRUCTION) {
 									base->Commence();
 								}
@@ -3251,7 +3254,7 @@ int BuildingClass::Exit_Object(TechnoClass * base)
 								 * When a wall tower is placed, the next base defense node is
 								 * moved to the spot the tower actually appeared at.
 								 */
-								if (building->Class == Rule->WallTower) {
+								if (node != NULL && building->Class == Rule->WallTower) {
 									int index = House->Base.Nodes.ID(node) + 1;
 									int count = House->Base.Nodes.Count();
 									for (; index < count; index++) {
@@ -4047,11 +4050,20 @@ ActionType BuildingClass::What_Action(Cell const & cell, bool check_fog, bool di
 	}
 
 	if (action == ACTION_RALLY_TO_POINT) {
-		if (!Produces_Aircraft_Only()) {
+		bool const underbridge = Map[cell].IsUnderBridge;
+		bool const water = Map[cell].Land_Type() == LAND_WATER && !underbridge;
+		if (water) {
+			if (!Class->RallyPointOnWater
+				|| !Map.Is_Same_Cell_Zone(Get_Cell(), cell, MZONE_AMPHIBIOUS, false, underbridge)) {
+				action = ACTION_NOMOVE;
+			}
+		} else if (!Class->RallyPointOnLand) {
+			action = ACTION_NOMOVE;
+		} else if (!Produces_Aircraft_Only()) {
 			if (!Is_In_Same_Zone(cell)) {
 				action = ACTION_NOMOVE;
 			}
-			if (!Map[cell].IsUnderBridge && Map[cell].Passability != PASSABLE_LAND) {
+			if (!underbridge && Map[cell].Passability != PASSABLE_LAND) {
 				action = ACTION_NOMOVE;
 			}
 		}
@@ -6416,7 +6428,10 @@ int BuildingClass::Do_MISSION_UNLOAD(void)
 								unit->Take_Damage(damage, 0, Rule->C4Warhead, NULL, true);
 							}
 						} else if (clsid != ClassID_DriveLocomotion) {
-							unit->Assign_Destination(&Map[Get_Cell() + Cell(3, 1)]);
+							Cell exitcell = Find_Exit_Cell(unit);
+							if (exitcell != CELL_NONE) {
+								unit->Assign_Destination(&Map[exitcell]);
+							}
 						} else {
 							Coord cs;
 							cs.X = coord.X;
@@ -7410,10 +7425,13 @@ void BuildingClass::Factory_AI(void)
 					if (!factory->Set(*techno, *House, false)) {
 						delete factory;
 						factory = NULL;
+						House->Clear_AI_Wanted(techno);
 					} else {
 						House->Production_Begun(factory->Get_Object());
 						factory->Start(false);
 					}
+				} else {
+					House->Clear_AI_Wanted(techno);
 				}
 			}
 		}

@@ -322,10 +322,6 @@ HouseClass::HouseClass(HouseTypeClass const * type) :
 	AngerNodes(),
 	ScoutNodes(),
 	AITimer(0),
-	BuildStructure(STRUCT_NONE),
-	BuildUnit(UNIT_NONE),
-	BuildInfantry(INFANTRY_NONE),
-	BuildAircraft(AIRCRAFT_NONE),
 	RatioAITriggerTeam(100),
 	RatioTeamAircraft(75),
 	RatioTeamInfantry(75),
@@ -364,6 +360,7 @@ HouseClass::HouseClass(HouseTypeClass const * type) :
 	for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
 		ProductionFactories[index] = NULL;
 		ProductionQueueCounts[index] = 0;
+		AIWanted[index] = NULL;
 	}
 
 	if (Class) {
@@ -761,7 +758,6 @@ void HouseClass::Debug_Dump(MonoClass * mono) const
 	mono->Set_Cursor(65, 1);mono->Printf("%2d", IQ);
 	mono->Set_Cursor(72, 1);mono->Printf("%5d", (int)RepairTimer);
 
-	mono->Set_Cursor(10, 3);mono->Printf("%8.8s", (BuildAircraft == AIRCRAFT_NONE) ? " " : AircraftTypes[BuildAircraft]->Graphic_Name());
 	mono->Set_Cursor(21, 3);mono->Printf("%3d", CurAircraft);
 	mono->Set_Cursor(27, 3);mono->Printf("%8d", Credits);
 	mono->Set_Cursor(37, 3);mono->Printf("%5d", Power);
@@ -770,7 +766,6 @@ void HouseClass::Debug_Dump(MonoClass * mono) const
 	mono->Set_Cursor(62, 3);mono->Printf("%5d", (int)TeamTime);
 	mono->Set_Cursor(71, 3);mono->Printf("%5d", (int)AlertTime);
 
-	mono->Set_Cursor(10, 5);mono->Printf("%8.8s", (BuildStructure == STRUCT_NONE) ? " " : BuildingTypes[BuildStructure]->Graphic_Name());
 	mono->Set_Cursor(21, 5);mono->Printf("%3d", CurBuildings);
 	mono->Set_Cursor(27, 5);mono->Printf("%8d", Tiberium.Get_Total_Amount());
 	mono->Set_Cursor(37, 5);mono->Printf("%5d", Drain);
@@ -778,14 +773,12 @@ void HouseClass::Debug_Dump(MonoClass * mono) const
 	mono->Set_Cursor(62, 5);mono->Printf("%5d", (int)TriggerTime);
 	mono->Set_Cursor(71, 5);mono->Printf("%5d", (int)BorrowedTime);
 
-	mono->Set_Cursor(10, 7);mono->Printf("%8.8s", (BuildUnit == UNIT_NONE) ? " " : UnitTypes[BuildUnit]->Graphic_Name());
 	mono->Set_Cursor(21, 7);mono->Printf("%3d", CurUnits);
 	mono->Set_Cursor(27, 7);mono->Printf("%8d", Control.InitialCredits);
 	mono->Set_Cursor(38, 7);mono->Printf("%5d", UnitsLost);
 	mono->Set_Cursor(44, 7);mono->Printf("%08X", (unsigned)Allies.Raw());
 	mono->Set_Cursor(71, 7);mono->Printf("%5d", (int)Attack.Timer);
 
-	mono->Set_Cursor(10, 9);mono->Printf("%8.8s", (BuildInfantry == INFANTRY_NONE) ? " " : InfantryTypes[BuildInfantry]->Graphic_Name());
 	mono->Set_Cursor(21, 9);mono->Printf("%3d", CurInfantry);
 	mono->Set_Cursor(27, 9);mono->Printf("%8d", Capacity);
 	mono->Set_Cursor(38, 9);mono->Printf("%5d", BuildingsLost);
@@ -1612,29 +1605,45 @@ void HouseClass::AI(void)
 			AI_Aircraft();
 		} else if (ProductionMode == BUILDINGS) {
 			AI_Building();
-			if (BuildStructure == STRUCT_NONE || !BuildingTypes[BuildStructure]->Who_Can_Build_Me(true, true, true, this)) {
+			bool has_buildable_structure = false;
+			for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+				TechnoTypeClass const * type = AIWanted[index];
+				if (type != NULL && type->RTTI == RTTI_BUILDINGTYPE && type->Who_Can_Build_Me(true, true, true, this)) {
+					has_buildable_structure = true;
+					break;
+				}
+			}
+			if (!has_buildable_structure) {
 				AI_Unit();
 				AI_Infantry();
 				AI_Aircraft();
 			}
 		} else if (ProductionMode == UNITS) {
 			AI_Unit();
-			if (BuildUnit == UNIT_NONE || !Rule->HarvesterUnit.Is_In_List(UnitTypes[BuildUnit])) {
+			bool has_harvester_order = false;
+			bool has_non_building_order = false;
+			bool has_unbuildable_non_building_order = false;
+			for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+				TechnoTypeClass const * type = AIWanted[index];
+				if (type == NULL || type->RTTI == RTTI_BUILDINGTYPE) {
+					continue;
+				}
+
+				has_non_building_order = true;
+				if (type->RTTI == RTTI_UNITTYPE && Rule->HarvesterUnit.Is_In_List((UnitTypeClass const *)type)) {
+					has_harvester_order = true;
+				}
+				if (!type->Who_Can_Build_Me(true, true, true, this)) {
+					has_unbuildable_non_building_order = true;
+				}
+			}
+
+			if (!has_harvester_order) {
 				AI_Infantry();
 				AI_Aircraft();
 			}
 
-			bool build_buildings = BuildUnit == UNIT_NONE && BuildInfantry == INFANTRY_NONE && BuildAircraft == AIRCRAFT_NONE;
-
-			if (BuildUnit != UNIT_NONE && !UnitTypes[BuildUnit]->Who_Can_Build_Me(true, true, true, this)) {
-				build_buildings = true;
-			}
-			if (BuildInfantry != INFANTRY_NONE && !InfantryTypes[BuildInfantry]->Who_Can_Build_Me(true, true, true, this)) {
-				build_buildings = true;
-			}
-			if (BuildAircraft != AIRCRAFT_NONE && !AircraftTypes[BuildAircraft]->Who_Can_Build_Me(true, true, true, this)) {
-				build_buildings = true;
-			}
+			bool build_buildings = !has_non_building_order || has_unbuildable_non_building_order;
 
 			if (build_buildings) {
 				AI_Building();
@@ -3094,82 +3103,16 @@ bool HouseClass::Does_Enemy_Building_Exist(StructType btype) const
  *=============================================================================================*/
 TechnoTypeClass const * HouseClass::Suggest_New_Object(RTTIType objecttype, bool kennel) const
 {
-	TechnoTypeClass const * techno = NULL;
-
-	switch (objecttype) {
-		case RTTI_AIRCRAFT:
-		case RTTI_AIRCRAFTTYPE:
-			if (BuildAircraft != AIRCRAFT_NONE) {
-				return(AircraftTypes[BuildAircraft]);
-			}
-			return(NULL);
-
-		/*
-		**	Unit construction is based on the rule that up to twice the number required
-		**	to fill all teams will be created.
-		*/
-		case RTTI_UNIT:
-		case RTTI_UNITTYPE:
-			if (BuildUnit != UNIT_NONE) {
-				return(UnitTypes[BuildUnit]);
-			}
-			return(NULL);
-
-		/*
-		**	Infantry construction is based on the rule that up to twice the number required
-		**	to fill all teams will be created.
-		*/
-		case RTTI_INFANTRY:
-		case RTTI_INFANTRYTYPE:
-			if (BuildInfantry != INFANTRY_NONE) {
-				return(InfantryTypes[BuildInfantry]);
-			}
-			return(NULL);
-
-		/*
-		**	Building construction is based upon the preconstruction list.
-		*/
-		case RTTI_BUILDING:
-		case RTTI_BUILDINGTYPE:
-			if (BuildStructure != STRUCT_NONE) {
-				return(BuildingTypes[BuildStructure]);
-			}
-			return(NULL);
-	}
-	return(techno);
+	return(Suggest_New_Object(ProductionQueueClass::From_RTTI(objecttype), kennel));
 }
 
 
-TechnoTypeClass const * HouseClass::Suggest_New_Object(ProductionQueueID queue, bool kennel) const
+TechnoTypeClass const * HouseClass::Suggest_New_Object(ProductionQueueID queue, bool) const
 {
-	TechnoTypeClass const * preferred[] = {
-		BuildStructure != STRUCT_NONE ? BuildingTypes[BuildStructure] : NULL,
-		BuildUnit != UNIT_NONE ? UnitTypes[BuildUnit] : NULL,
-		BuildInfantry != INFANTRY_NONE ? InfantryTypes[BuildInfantry] : NULL,
-		BuildAircraft != AIRCRAFT_NONE ? AircraftTypes[BuildAircraft] : NULL
-	};
-
-	for (TechnoTypeClass const * type : preferred) {
-		if (type != NULL && type->ProducedIn == queue) {
-			return(type);
-		}
-	}
-
-	ProductionQueueClass const * queue_class = ProductionQueueClass::From_ID(queue);
-	if (queue_class == NULL) {
+	if (queue < 0 || queue >= PRODUCTION_QUEUE_COUNT) {
 		return(NULL);
 	}
-
-	for (int index = 0; index < queue_class->ProductTypes.Count(); index++) {
-		TechnoTypeClass const * type = queue_class->ProductTypes[index];
-		if ((kennel && type->RTTI == RTTI_INFANTRYTYPE && !((InfantryTypeClass const *)type)->IsDoggie)
-			|| Can_Build(type, false, true) == 0) {
-			continue;
-		}
-		return(type);
-	}
-
-	return(NULL);
+	return(AIWanted[queue]);
 }
 
 
@@ -3908,8 +3851,11 @@ void HouseClass::Sell_Wall(Cell const & cell, bool quiet)
  *=============================================================================================*/
 BuildingTypeClass const * HouseClass::Suggest_New_Building(void) const
 {
-	if (BuildStructure != STRUCT_NONE) {
-		return(BuildingTypes[BuildStructure]);
+	for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+		TechnoTypeClass const * type = AIWanted[index];
+		if (type != NULL && type->RTTI == RTTI_BUILDINGTYPE) {
+			return((BuildingTypeClass const *)type);
+		}
 	}
 	return(NULL);
 }
@@ -4339,7 +4285,17 @@ UrgencyType HouseClass::Check_Raise_Money(void)
 			 * There is a refinery, so a harvester is what this house is short of. If one is
 			 * not on order, or is on order but cannot be paid for, then cash must be raised.
 			 */
-			if (BuildUnit == UNIT_NONE || !Rule->HarvesterUnit.Is_In_List(UnitTypes[BuildUnit])) {
+			TechnoTypeClass const * harvester_order = NULL;
+			for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+				TechnoTypeClass const * type = AIWanted[index];
+				if (type != NULL && type->RTTI == RTTI_UNITTYPE
+					&& Rule->HarvesterUnit.Is_In_List((UnitTypeClass const *)type)) {
+					harvester_order = type;
+					break;
+				}
+			}
+
+			if (harvester_order == NULL) {
 				if (Available_Money() < Get_Preferred(Rule->HarvesterUnit)->Cost_Of(this)) {
 					urgency++;
 				}
@@ -4367,7 +4323,17 @@ UrgencyType HouseClass::Check_Raise_Money(void)
 			/*
 			 * No refinery at all. The same reasoning applies to getting one built.
 			 */
-			if (BuildStructure == STRUCT_NONE || !Rule->BuildRefinery.Is_In_List(BuildingTypes[BuildStructure])) {
+			TechnoTypeClass const * refinery_order = NULL;
+			for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+				TechnoTypeClass const * type = AIWanted[index];
+				if (type != NULL && type->RTTI == RTTI_BUILDINGTYPE
+					&& Rule->BuildRefinery.Is_In_List((BuildingTypeClass const *)type)) {
+					refinery_order = type;
+					break;
+				}
+			}
+
+			if (refinery_order == NULL) {
 				if (Available_Money() < Get_Preferred(Rule->BuildRefinery)->Cost_Of(this)) {
 					urgency++;
 				}
@@ -4498,12 +4464,13 @@ bool HouseClass::AI_Raise_Money(UrgencyType urgency)
 					delete Factories[j];
 				}
 			}
-			BuildUnit = UNIT_NONE;
-			BuildInfantry = INFANTRY_NONE;
-			BuildAircraft = AIRCRAFT_NONE;
-			BuildStructure = STRUCT_NONE;
+			for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+				AIWanted[index] = NULL;
+			}
 			if (can_build_harvester) {
-				BuildUnit = harvester->HeapID;
+				if (harvester->ProducedIn >= 0 && harvester->ProducedIn < PRODUCTION_QUEUE_COUNT) {
+					AIWanted[harvester->ProducedIn] = harvester;
+				}
 				ProductionMode = UNITS;
 			} else {
 				int next = Base.Next_Buildable_Index();
@@ -4555,7 +4522,18 @@ int HouseClass::AI_Building(void)
 		DEFENSE = -1
 	};
 
-	if (BuildStructure != STRUCT_NONE) return(TICKS_PER_SECOND);
+	for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+		if (AIWanted[index] != NULL && AIWanted[index]->RTTI == RTTI_BUILDINGTYPE) {
+			return(TICKS_PER_SECOND);
+		}
+	}
+	for (int index = 0; index < Factories.Count(); index++) {
+		FactoryClass * factory = Factories[index];
+		TechnoClass * product = factory->House == this ? factory->Get_Object() : NULL;
+		if (product != NULL && product->RTTI == RTTI_BUILDING) {
+			return(TICKS_PER_SECOND);
+		}
+	}
 
 	if (ConYards.Count() == 0) return(TICKS_PER_SECOND);
 
@@ -4680,7 +4658,10 @@ int HouseClass::AI_Building(void)
 		}
 	}
 
-	BuildStructure = node->Type;
+	ProductionQueueID const queue = b->ProducedIn;
+	if (queue >= 0 && queue < PRODUCTION_QUEUE_COUNT && AIWanted[queue] == NULL && Queue_Factory_Count(queue) > 0) {
+		AIWanted[queue] = b;
+	}
 
 	return(TICKS_PER_SECOND);
 }
@@ -4702,8 +4683,6 @@ int HouseClass::AI_Building(void)
  *=============================================================================================*/
 int HouseClass::AI_Unit(void)
 {
-	if (BuildUnit != UNIT_NONE) return(TICKS_PER_SECOND);
-
 	int harv = Count_Owned(AUQuantity, Rule->HarvesterUnit);
 	int ref = Count_Owned(ABQuantity, Rule->BuildRefinery);
 	int mult;
@@ -4720,8 +4699,10 @@ int HouseClass::AI_Unit(void)
 	if (IQ >= Rule->IQHarvester && !IsTiberiumShort && !Is_Human_Player() && ref * mult > harv) {
 		UnitTypeClass const * harvester = Get_Preferred(Rule->HarvesterUnit);
 		if (harvester != NULL && (unsigned int)harvester->Level <= (unsigned int)Control.TechLevel) {
-			BuildUnit = harvester->HeapID;
-			return(TICKS_PER_SECOND);
+			ProductionQueueID const queue = harvester->ProducedIn;
+			if (queue >= 0 && queue < PRODUCTION_QUEUE_COUNT && AIWanted[queue] == NULL && Queue_Factory_Count(queue) > 0) {
+				AIWanted[queue] = harvester;
+			}
 		}
 	}
 
@@ -4771,38 +4752,59 @@ int HouseClass::AI_Unit(void)
 		}
 	}
 
-	/*
-	**	Pick to build the most needed object but don't consider those object that
-	**	can't be built because of scenario restrictions or insufficient cash.
-	*/
-	int bestval = -1;
-	UnitType lasttype = UNIT_NONE;
-	int lastval = 0x7FFFFFFF;
-	std::vector<UnitType> bestlist;
-	bestlist.reserve(UnitTypes.Count());
-	for (UnitType type = UnitType(0); type < UnitTypes.Count(); type++) {
-		if (counter[type] > 0 && Can_Build(UnitTypes[type], false, false) && UnitTypes[type]->Cost_Of(this) <= Available_Money()) {
-			if (bestval == -1 || bestval < counter[type]) {
-				bestval = counter[type];
-				bestlist.clear();
-			}
-			bestlist.push_back(type);
-
-			if (lasttype == UNIT_NONE || value[type] < lastval) {
-				lasttype = type;
-				lastval = value[type];
+	for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+		TechnoTypeClass const * type = AIWanted[index];
+		if (type != NULL && type->RTTI == RTTI_UNITTYPE) {
+			UnitType const id = ((UnitTypeClass const *)type)->HeapID;
+			if (static_cast<unsigned>(id) < counter.size() && counter[id] > 0) {
+				counter[id]--;
 			}
 		}
 	}
 
-	if (Random_Double(0, 0x7FFFFFFE) < Rule->FillEarliestTeamProbability[Difficulty] / 100.0) {
-		BuildUnit = lasttype;
-	} else {
-		/*
-		**	The object type to build is now known. Fetch a pointer to the techno type class.
-		*/
-		if (!bestlist.empty()) {
-			BuildUnit = bestlist[Random_Pick(0, static_cast<int>(bestlist.size()) - 1)];
+	/*
+	**	Pick to build the most needed object but don't consider those object that
+	**	can't be built because of scenario restrictions or insufficient cash.
+	*/
+	for (ProductionQueueID queue = 0; queue < ProductionQueueClass::Count(); queue++) {
+		if (AIWanted[queue] != NULL || Queue_Factory_Count(queue) <= 0) {
+			continue;
+		}
+
+		int bestval = -1;
+		UnitType lasttype = UNIT_NONE;
+		int lastval = 0x7FFFFFFF;
+		std::vector<UnitType> bestlist;
+		bestlist.reserve(UnitTypes.Count());
+		for (UnitType type = UnitType(0); type < UnitTypes.Count(); type++) {
+			if (UnitTypes[type]->ProducedIn == queue && counter[type] > 0
+				&& Can_Build(UnitTypes[type], false, false) && UnitTypes[type]->Cost_Of(this) <= Available_Money()) {
+				if (bestval == -1 || bestval < counter[type]) {
+					bestval = counter[type];
+					bestlist.clear();
+				}
+				bestlist.push_back(type);
+
+				if (lasttype == UNIT_NONE || value[type] < lastval) {
+					lasttype = type;
+					lastval = value[type];
+				}
+			}
+		}
+
+		if (Random_Double(0, 0x7FFFFFFE) < Rule->FillEarliestTeamProbability[Difficulty] / 100.0) {
+			if (lasttype != UNIT_NONE) {
+				AIWanted[queue] = UnitTypes[lasttype];
+				if (counter[lasttype] > 0) {
+					counter[lasttype]--;
+				}
+			}
+		} else if (!bestlist.empty()) {
+			UnitType const type = bestlist[Random_Pick(0, static_cast<int>(bestlist.size()) - 1)];
+			AIWanted[queue] = UnitTypes[type];
+			if (counter[type] > 0) {
+				counter[type]--;
+			}
 		}
 	}
 
@@ -4827,8 +4829,6 @@ int HouseClass::AI_Unit(void)
  *=============================================================================================*/
 int HouseClass::AI_Infantry(void)
 {
-	if (BuildInfantry != INFANTRY_NONE) return(TICKS_PER_SECOND);
-
 	std::vector<int> counter(InfantryTypes.Count(), 0);
 	std::vector<int> value(InfantryTypes.Count(), 0x7FFFFFFF);
 
@@ -4875,38 +4875,59 @@ int HouseClass::AI_Infantry(void)
 		}
 	}
 
-	/*
-	**	Pick to build the most needed object but don't consider those object that
-	**	can't be built because of scenario restrictions or insufficient cash.
-	*/
-	int bestval = -1;
-	InfantryType lasttype = INFANTRY_NONE;
-	int lastval = 0x7FFFFFFF;
-	std::vector<InfantryType> bestlist;
-	bestlist.reserve(InfantryTypes.Count());
-	for (InfantryType type = InfantryType(0); type < InfantryTypes.Count(); type++) {
-		if (counter[type] > 0 && Can_Build(InfantryTypes[type], false, false) && InfantryTypes[type]->Cost_Of(this) <= Available_Money()) {
-			if (bestval == -1 || bestval < counter[type]) {
-				bestval = counter[type];
-				bestlist.clear();
-			}
-			bestlist.push_back(type);
-
-			if (lasttype == INFANTRY_NONE || value[type] < lastval) {
-				lasttype = type;
-				lastval = value[type];
+	for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+		TechnoTypeClass const * type = AIWanted[index];
+		if (type != NULL && type->RTTI == RTTI_INFANTRYTYPE) {
+			InfantryType const id = ((InfantryTypeClass const *)type)->HeapID;
+			if (static_cast<unsigned>(id) < counter.size() && counter[id] > 0) {
+				counter[id]--;
 			}
 		}
 	}
 
-	if (Random_Double(0, 0x7FFFFFFE) < Rule->FillEarliestTeamProbability[Difficulty] / 100.0) {
-		BuildInfantry = lasttype;
-	} else {
-		/*
-		**	The object type to build is now known. Fetch a pointer to the techno type class.
-		*/
-		if (!bestlist.empty()) {
-			BuildInfantry = bestlist[Random_Pick(0, static_cast<int>(bestlist.size()) - 1)];
+	/*
+	**	Pick to build the most needed object but don't consider those object that
+	**	can't be built because of scenario restrictions or insufficient cash.
+	*/
+	for (ProductionQueueID queue = 0; queue < ProductionQueueClass::Count(); queue++) {
+		if (AIWanted[queue] != NULL || Queue_Factory_Count(queue) <= 0) {
+			continue;
+		}
+
+		int bestval = -1;
+		InfantryType lasttype = INFANTRY_NONE;
+		int lastval = 0x7FFFFFFF;
+		std::vector<InfantryType> bestlist;
+		bestlist.reserve(InfantryTypes.Count());
+		for (InfantryType type = InfantryType(0); type < InfantryTypes.Count(); type++) {
+			if (InfantryTypes[type]->ProducedIn == queue && counter[type] > 0
+				&& Can_Build(InfantryTypes[type], false, false) && InfantryTypes[type]->Cost_Of(this) <= Available_Money()) {
+				if (bestval == -1 || bestval < counter[type]) {
+					bestval = counter[type];
+					bestlist.clear();
+				}
+				bestlist.push_back(type);
+
+				if (lasttype == INFANTRY_NONE || value[type] < lastval) {
+					lasttype = type;
+					lastval = value[type];
+				}
+			}
+		}
+
+		if (Random_Double(0, 0x7FFFFFFE) < Rule->FillEarliestTeamProbability[Difficulty] / 100.0) {
+			if (lasttype != INFANTRY_NONE) {
+				AIWanted[queue] = InfantryTypes[lasttype];
+				if (counter[lasttype] > 0) {
+					counter[lasttype]--;
+				}
+			}
+		} else if (!bestlist.empty()) {
+			InfantryType const type = bestlist[Random_Pick(0, static_cast<int>(bestlist.size()) - 1)];
+			AIWanted[queue] = InfantryTypes[type];
+			if (counter[type] > 0) {
+				counter[type]--;
+			}
 		}
 	}
 
@@ -4930,8 +4951,6 @@ int HouseClass::AI_Infantry(void)
  *=============================================================================================*/
 int HouseClass::AI_Aircraft(void)
 {
-	if (BuildAircraft != AIRCRAFT_NONE) return(TICKS_PER_SECOND);
-
 	std::vector<int> counter(AircraftTypes.Count(), 0);
 	std::vector<int> value(AircraftTypes.Count(), 0x7FFFFFFF);
 
@@ -4978,38 +4997,59 @@ int HouseClass::AI_Aircraft(void)
 		}
 	}
 
-	/*
-	**	Pick to build the most needed object but don't consider those object that
-	**	can't be built because of scenario restrictions or insufficient cash.
-	*/
-	int bestval = -1;
-	AircraftType lasttype = AIRCRAFT_NONE;
-	int lastval = 0x7FFFFFFF;
-	std::vector<AircraftType> bestlist;
-	bestlist.reserve(AircraftTypes.Count());
-	for (AircraftType type = AircraftType(0); type < AircraftTypes.Count(); type++) {
-		if (counter[type] > 0 && Can_Build(AircraftTypes[type], false, false) && AircraftTypes[type]->Cost_Of(this) <= Available_Money()) {
-			if (bestval == -1 || bestval < counter[type]) {
-				bestval = counter[type];
-				bestlist.clear();
-			}
-			bestlist.push_back(type);
-
-			if (lasttype == AIRCRAFT_NONE || value[type] < lastval) {
-				lasttype = type;
-				lastval = value[type];
+	for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+		TechnoTypeClass const * type = AIWanted[index];
+		if (type != NULL && type->RTTI == RTTI_AIRCRAFTTYPE) {
+			AircraftType const id = ((AircraftTypeClass const *)type)->HeapID;
+			if (static_cast<unsigned>(id) < counter.size() && counter[id] > 0) {
+				counter[id]--;
 			}
 		}
 	}
 
-	if (Random_Double(0, 0x7FFFFFFE) < Rule->FillEarliestTeamProbability[Difficulty] / (100.0)) {
-		BuildAircraft = lasttype;
-	} else {
-		/*
-		**	The object type to build is now known. Fetch a pointer to the techno type class.
-		*/
-		if (!bestlist.empty()) {
-			BuildAircraft = bestlist[Random_Pick(0, static_cast<int>(bestlist.size()) - 1)];
+	/*
+	**	Pick to build the most needed object but don't consider those object that
+	**	can't be built because of scenario restrictions or insufficient cash.
+	*/
+	for (ProductionQueueID queue = 0; queue < ProductionQueueClass::Count(); queue++) {
+		if (AIWanted[queue] != NULL || Queue_Factory_Count(queue) <= 0) {
+			continue;
+		}
+
+		int bestval = -1;
+		AircraftType lasttype = AIRCRAFT_NONE;
+		int lastval = 0x7FFFFFFF;
+		std::vector<AircraftType> bestlist;
+		bestlist.reserve(AircraftTypes.Count());
+		for (AircraftType type = AircraftType(0); type < AircraftTypes.Count(); type++) {
+			if (AircraftTypes[type]->ProducedIn == queue && counter[type] > 0
+				&& Can_Build(AircraftTypes[type], false, false) && AircraftTypes[type]->Cost_Of(this) <= Available_Money()) {
+				if (bestval == -1 || bestval < counter[type]) {
+					bestval = counter[type];
+					bestlist.clear();
+				}
+				bestlist.push_back(type);
+
+				if (lasttype == AIRCRAFT_NONE || value[type] < lastval) {
+					lasttype = type;
+					lastval = value[type];
+				}
+			}
+		}
+
+		if (Random_Double(0, 0x7FFFFFFE) < Rule->FillEarliestTeamProbability[Difficulty] / (100.0)) {
+			if (lasttype != AIRCRAFT_NONE) {
+				AIWanted[queue] = AircraftTypes[lasttype];
+				if (counter[lasttype] > 0) {
+					counter[lasttype]--;
+				}
+			}
+		} else if (!bestlist.empty()) {
+			AircraftType const type = bestlist[Random_Pick(0, static_cast<int>(bestlist.size()) - 1)];
+			AIWanted[queue] = AircraftTypes[type];
+			if (counter[type] > 0) {
+				counter[type]--;
+			}
 		}
 	}
 
@@ -6619,11 +6659,13 @@ void HouseClass::Compute_CRC(CRCEngine & crc) const
 
 	crc(ProductionQueueClass::Count());
 	for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+		crc(index);
 		if (index < ProductionQueueClass::Count()) {
 			crc(ProductionQueueClass::Name_From_ID(index));
 		}
 		crc(ProductionQueueCounts[index]);
 		crc(ProductionFactories[index] != NULL ? ProductionFactories[index]->Fetch_ID() : -1);
+		crc(AIWanted[index] != NULL ? AIWanted[index]->Name() : "<none>");
 	}
 
 	Base.Compute_CRC(crc);
@@ -6782,10 +6824,9 @@ void HouseClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(ScoutNodes);
 	stream.Serialize(AITimer);
 	stream.Serialize(PickEnemyTimer);
-	stream.Serialize(BuildStructure);
-	stream.Serialize(BuildUnit);
-	stream.Serialize(BuildInfantry);
-	stream.Serialize(BuildAircraft);
+	for (int index = 0; index < PRODUCTION_QUEUE_COUNT; index++) {
+		stream.Serialize(AIWanted[index]);
+	}
 	stream.Serialize(RatioAITriggerTeam);
 	stream.Serialize(RatioTeamAircraft);
 	stream.Serialize(RatioTeamInfantry);
@@ -8587,6 +8628,19 @@ void HouseClass::Update_Production_Mode(RTTIType type)
 				ProductionMode = (type == RTTI_BUILDING) ? UNITS : BUILDINGS;
 			}
 			break;
+	}
+}
+
+
+void HouseClass::Clear_AI_Wanted(TechnoTypeClass const * type)
+{
+	if (type == NULL) {
+		return;
+	}
+
+	ProductionQueueID const queue = type->ProducedIn;
+	if (queue >= 0 && queue < PRODUCTION_QUEUE_COUNT && AIWanted[queue] == type) {
+		AIWanted[queue] = NULL;
 	}
 }
 

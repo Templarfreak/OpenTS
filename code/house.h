@@ -699,16 +699,7 @@ class HouseClass : public AbstractClass
 		CDTimerClass<FrameTimerClass> AITimer;
 		CDTimerClass<FrameTimerClass> PickEnemyTimer;
 
-		/*
-		**	This elaborates the suggested objects to construct. When the specified object
-		**	is constructed, then this corresponding value will be reset to nill state. The
-		**	expert system decides what should be produced, and then records the
-		**	recommendation in these variables.
-		*/
-		StructType BuildStructure;
-		UnitType BuildUnit;
-		InfantryType BuildInfantry;
-		AircraftType BuildAircraft;
+		TechnoTypeClass const * AIWanted[PRODUCTION_QUEUE_COUNT];
 
 		/*
 		 * This is the percent chance (0 - 100) that the house will consider its AI triggers
@@ -869,6 +860,7 @@ class HouseClass : public AbstractClass
 		void Set_Factory(ProductionQueueID queue, FactoryClass * factory);
 		void Set_Factory(RTTIType rtti, FactoryClass * factory);
 		void Update_Production_Mode(RTTIType type);
+		void Clear_AI_Wanted(TechnoTypeClass const * type);
 		void Production_Status_Changed(void) {IsRecalcNeeded = true;}
 
 		int Can_Build(ObjectTypeClass const * type, bool illegal, bool nofactory) const;

@@ -18822,6 +18822,40 @@ RailgunDamageRadius:
       source: code/rules.cpp
       guard: null
     level: RulesClass
+RallyPointOnLand:
+  key: RallyPointOnLand
+  scopes:
+  - applies_to: *id004
+    file: rules.ini
+    section:
+      kind: identifier
+      source: object-type
+    value_type: boolean
+    status: generated
+    _provenance:
+      default_candidate: 'yes'
+      declared_in: BuildingTypeClass
+      member: RallyPointOnLand
+      source: code/builtype.cpp
+      guard: null
+    level: BuildingTypeClass
+RallyPointOnWater:
+  key: RallyPointOnWater
+  scopes:
+  - applies_to: *id004
+    file: rules.ini
+    section:
+      kind: identifier
+      source: object-type
+    value_type: boolean
+    status: generated
+    _provenance:
+      default_candidate: 'no'
+      declared_in: BuildingTypeClass
+      member: RallyPointOnWater
+      source: code/builtype.cpp
+      guard: null
+    level: BuildingTypeClass
 RampBase:
   key: RampBase
   scopes:

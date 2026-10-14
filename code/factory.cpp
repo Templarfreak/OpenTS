@@ -452,18 +452,7 @@ bool FactoryClass::Abandon(void)
 		IsDifferent = true;
 
 		if ( !House->Is_Human_Player()) {
-			if (Object->RTTI == RTTI_INFANTRY) {
-				House->BuildInfantry = INFANTRY_NONE;
-			}
-			if (Object->RTTI == RTTI_UNIT) {
-				House->BuildUnit = UNIT_NONE;
-			}
-			if (Object->RTTI == RTTI_AIRCRAFT) {
-				House->BuildAircraft = AIRCRAFT_NONE;
-			}
-			if (Object->RTTI == RTTI_BUILDING) {
-				House->BuildStructure = STRUCT_NONE;
-			}
+			House->Clear_AI_Wanted(Object->TClass);
 		}
 
 		/*

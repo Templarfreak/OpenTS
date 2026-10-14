@@ -515,6 +515,9 @@ class BuildingTypeClass : public TechnoTypeClass
 		 */
 		bool IsWeaponsFactory;
 
+		bool RallyPointOnWater;
+		bool RallyPointOnLand;
+
 		/*
 		 * If this building is a laser fence post, then this flag will be true. A post links
 		 * itself to its neighbors and raises the fence spans between them while powered.

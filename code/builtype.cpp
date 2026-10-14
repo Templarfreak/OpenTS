@@ -296,6 +296,8 @@ BuildingTypeClass::BuildingTypeClass(char const * ininame) :
 	IsRefinery(false),
 	IsWeeder(false),
 	IsWeaponsFactory(false),
+	RallyPointOnWater(false),
+	RallyPointOnLand(true),
 	IsLaserFencePost(false),
 	IsLaserFence(false),
 	IsFirestormWall(false),
@@ -1260,6 +1262,8 @@ bool BuildingTypeClass::Read_INI(CCINIClass const & ini)
 		IsNukeSilo = ini.Get_Bool(Name(), "NukeSilo", IsNukeSilo);
 		IsRefinery = ini.Get_Bool(Name(), "Refinery", IsRefinery);
 		IsWeaponsFactory = ini.Get_Bool(Name(), "WeaponsFactory", IsWeaponsFactory);
+		RallyPointOnWater = ini.Get_Bool(Name(), "RallyPointOnWater", RallyPointOnWater);
+		RallyPointOnLand = ini.Get_Bool(Name(), "RallyPointOnLand", RallyPointOnLand);
 		IsLaserFencePost = ini.Get_Bool(Name(), "LaserFencePost", IsLaserFencePost);
 		IsLaserFence = ini.Get_Bool(Name(), "LaserFence", IsLaserFence);
 		IsFirestormWall = ini.Get_Bool(Name(), "FirestormWall", IsFirestormWall);
@@ -1772,6 +1776,8 @@ void BuildingTypeClass::Compute_CRC(CRCEngine & crc) const
 	crc(IsNukeSilo);
 	crc(IsRefinery);
 	crc(IsWeaponsFactory);
+	crc(RallyPointOnWater);
+	crc(RallyPointOnLand);
 	crc(IsLaserFencePost);
 	crc(IsLaserFence);
 	crc(IsFirestormWall);
@@ -1916,6 +1922,8 @@ void BuildingTypeClass::Serialize(SaveStreamClass & stream)
 	stream.Serialize(IsRefinery);
 	stream.Serialize(IsWeeder);
 	stream.Serialize(IsWeaponsFactory);
+	stream.Serialize(RallyPointOnWater);
+	stream.Serialize(RallyPointOnLand);
 	stream.Serialize(IsLaserFencePost);
 	stream.Serialize(IsLaserFence);
 	stream.Serialize(IsFirestormWall);

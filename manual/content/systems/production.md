@@ -35,6 +35,8 @@ keys:
   - PrerequisiteTech
   - ProducedIn
   - Produces
+  - RallyPointOnLand
+  - RallyPointOnWater
   - ScoldSound
   - SeparateAircraft
   - TechLevel
@@ -52,7 +54,7 @@ Each object type belongs to one production queue. [`ProducedIn=`](/keys/produced
 
 A player's house has one production slot for each queue. Objects assigned to the same queue share its active build and waiting orders, even when their kinds differ. Separate queues build independently. Extra factories still shorten build time by the product's category, as [More than one factory](#more-than-one-factory) explains.
 
-A computer house keeps one production process per factory and queue. A structure that produces several queues can build one object from each at the same time. Each idle queue uses the house's preferred type when that type belongs to the queue; otherwise it takes the first buildable type assigned to the queue.
+A computer house keeps one production process per factory and queue. A structure that produces several queues can build one object from each at the same time. The AI selects a product for each queue from team needs or its base plan; a queue stays idle when the AI has no matching product to build. The AI selects only one structure for production at a time and waits for it to be placed before selecting another.
 
 Four built-in queues cover aircraft, infantry, vehicles and structures. Rules can add up to 64 custom queues. Queue names match without regard to case. After that limit, a new name is not registered, so a type assigned that name has no production queue and a factory listing it does not serve it.
 
@@ -93,7 +95,7 @@ A structure keeps the country it acts for when it changes hands, so the last tes
 
 The search takes the first [primary factory](#the-primary-factory) it finds that passes. Without one, it takes the last passing structure. For an aircraft, a pad already in radio contact with an aircraft, such as one parked on it, is used only when no free pad passes.
 
-A computer house does not search for a player slot. Each factory-and-queue pair builds the house's next eligible product for that queue.
+A computer house does not search for a player slot. Each factory-and-queue pair builds only the product selected for its queue by the AI. The AI selects vehicles, infantry and aircraft from team needs, and structures from its base plan.
 
 Use `Produces=` for named or multiple queues. `Factory=` accepts the built-in names `UnitType`, `InfantryType`, `AircraftType` and `BuildingType`, as well as their short spellings. The short spellings now map to the same built-in queues for player and computer houses. If `Produces=` is present, it takes precedence over `Factory=`.
 
@@ -271,7 +273,7 @@ A structure placed by hand appears on the chosen cell, plays the placement sound
 How a factory lets an object out depends on the factory:
 
 - An aircraft appears on its pad. If the pad is already in radio contact with another aircraft, the new one appears at the edge of the playable area and flies in instead. During an ion storm, it appears on a nearby cell.
-- A [`WeaponsFactory=yes`](/keys/weaponsfactory/) structure opens its door and clears whatever stands on its exit cell. While it is still unloading the previous object, it passes the next one to another idle structure of the same type, which lets it out through its own exit. If no such structure is free, the attempt is temporarily blocked.
+- A [`WeaponsFactory=yes`](/keys/weaponsfactory/) structure opens its door and clears whatever stands on its exit cell. Vehicles follow the factory's drive exit track, tunnel units use that track after switching locomotors, and other non-tunnel `UnitType` objects that do not use drive movement head to the first passable cell in the building's exit list. While it is still unloading the previous object, the factory passes the next one to another idle structure of the same type, which lets it out through its own exit. If no such structure is free, the attempt is temporarily blocked.
 - Every other factory moves the object out of its footprint to an exit cell beside it. If it finds no exit cell, the attempt fails permanently. A [`GDIBarracks=yes`](/keys/gdibarracks/) or [`NODBarracks=yes`](/keys/nodbarracks/) structure starts the object at its [`ExitCoord`](/keys/exitcoord/) offset when the exit cell is its door cell.
 - A factory lets out one vehicle or infantryman at a time. While it is still in radio contact with the last object to leave, the next attempt is temporarily blocked. [`Hospital=yes`](/keys/hospital/), [`Armory=yes`](/keys/armory/) and `WeaponsFactory=yes` structures are exempt.
 - A refinery or weeder cannot release what it produces. A vehicle briefly appears south-west of it and heads off to harvest, but the order is then canceled and refunded, which removes the vehicle again. Infantry fail the same way.
@@ -305,9 +307,9 @@ A [`HoverPad=yes`](/keys/hoverpad/) structure also receives the first [`PadAircr
 
 A structure that produces vehicles, infantry or aircraft can hold a rally point. Select it and click the ground to set one. Holding the force-move key instead gives the structure a move order, which packs up a structure that names an [`UndeploysInto`](/keys/undeploysinto/) type. [`AltToRally=yes`](/keys/alttorally/) swaps the two.
 
-The rally point is not always the clicked cell. The engine records the nearest cell to it where infantry could stand, or where an aircraft could fly for a factory that produces only aircraft among its mobile products. A factory that also produces vehicles or infantry uses ground movement rules. If there is no suitable cell, no rally point is set.
+The rally point is not always the clicked cell. The engine records the nearest cell to it where infantry could stand, or where an aircraft could fly for a factory that produces only aircraft among its mobile products. A factory that also produces vehicles or infantry uses ground movement rules. [`RallyPointOnLand=`](/keys/rallypointonland--buildingtype/) defaults to `yes`; [`RallyPointOnWater=`](/keys/rallypointonwater--buildingtype/) defaults to `no`. Water targets use the building's amphibious movement zone, and the engine records a reachable water cell in that zone. If there is no suitable cell, no rally point is set.
 
-The cursor refuses cells outside the playable area. It also refuses a cell in another movement zone or on ground that is not passable land, except for an aircraft-only factory.
+The cursor refuses cells outside the playable area. It also refuses water cells unless `RallyPointOnWater=yes` and the cell is in the building's amphibious movement zone. `RallyPointOnLand=no` refuses non-water cells, including bridge cells. Otherwise, the existing land movement-zone and passability checks still apply to factories that do not produce only aircraft.
 
 What the departing object does with the rally point depends on the factory:
 
