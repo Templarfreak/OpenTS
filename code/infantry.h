@@ -165,6 +165,7 @@ class InfantryClass : public FootClass
 		**	object interacts with the map and thus indirectly controls rendering.
 		*/
 		virtual void Draw_It(Point2D const & point, Rect const & cliprect) const override;
+		virtual bool Render(Rect &, bool forced, bool extras_only) const override;
 
 		/*
 		**	User I/O.

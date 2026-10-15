@@ -6343,6 +6343,56 @@ DirType BuildingClass::Fire_Direction(void) const
 }
 
 
+static bool Cell_Has_Occupier(CellClass const & cell, RTTIType rtti)
+{
+	for (ObjectClass const * object = cell.Cell_Occupier(); object != NULL; object = object->Next) {
+		if (object->RTTI == rtti) {
+			return(true);
+		}
+	}
+	return(false);
+}
+
+
+// Is the cell full of infantry that could be asked to move, with no vehicle or building in it?
+static bool Is_Blocked_By_Infantry(FootClass * unit, Cell cell)
+{
+	return(unit->Fetch_RTTI() == RTTI_INFANTRY
+		&& Map.In_Radar(cell)
+		&& Map[cell].Cell_Building() == NULL
+		&& !Cell_Has_Occupier(Map[cell], RTTI_UNIT)
+		&& Cell_Has_Occupier(Map[cell], RTTI_INFANTRY)
+		&& unit->Can_Enter_Cell(&Map[cell], FACING_NONE, -1, NULL, false) != MOVE_OK);
+}
+
+
+// Returns the closest cell at or east of the factory door that the unit can stand in, or CELL_NONE.
+static Cell Find_Door_Side_Cell(BuildingClass const * factory, FootClass * unit, Cell preferred)
+{
+	Cell best = CELL_NONE;
+	int best_distance = std::numeric_limits<int>::max();
+
+	for (int dx = 0; dx <= 2; dx++) {
+		for (int dy = -2; dy <= 2; dy++) {
+			Cell cell = preferred + Cell(dx, dy);
+			int distance = dx * dx + dy * dy;
+			if (distance >= best_distance || !Map.In_Radar(cell) || Map[cell].Cell_Building() == factory) {
+				continue;
+			}
+			if (unit->Can_Enter_Cell(&Map[cell], FACING_NONE, -1, NULL, false) != MOVE_OK) {
+				continue;
+			}
+			if (unit->Fetch_RTTI() == RTTI_INFANTRY && Map[cell].Closest_Free_Spot(Coord(cell, 0), false) == COORD_NONE) {
+				continue;
+			}
+			best = cell;
+			best_distance = distance;
+		}
+	}
+	return(best);
+}
+
+
 /***********************************************************************************************
  * BuildingClass::Mission_Unload -- Handles the unload mission for a building.                 *
  *                                                                                             *
@@ -6370,8 +6420,11 @@ int BuildingClass::Do_MISSION_UNLOAD(void)
 			CLEAR_BIB,
 			OPEN,
 			LEAVE,
-			CLOSE
+			CLOSE,
+			OPEN_NO_PUSH,
+			CLEAR_DOOR	// Counts up from here while the door cell is cleared.
 		};
+		int const clear_door_limit = 40;
 		FootClass * unit;
 		switch (Status) {
 			/*
@@ -6406,9 +6459,17 @@ int BuildingClass::Do_MISSION_UNLOAD(void)
 			**	unit to drive out.
 			*/
 			case OPEN:
+			case OPEN_NO_PUSH:
 				if (Door.Is_Door_Open()) {
 					unit = (FootClass *)Contact_With_Whom();
 					if (unit) {
+						// An infantry waits inside while the infantry in its exit cell are pushed out.
+						if (Status == OPEN && Is_Blocked_By_Infantry(unit, Get_Cell() + Cell(Class->Width(), 1))) {
+							Map[Get_Cell() + Cell(Class->Width(), 1)].Incoming(COORD_NONE, true, true, false);
+							Status = CLEAR_DOOR;
+							break;
+						}
+
 						unit->Assign_Mission(MISSION_MOVE);
 
 						ClassID const clsid = Locomotion_Class_ID(unit->Locomotion.get());
@@ -6430,16 +6491,25 @@ int BuildingClass::Do_MISSION_UNLOAD(void)
 								unit->Take_Damage(damage, 0, Rule->C4Warhead, NULL, true);
 							}
 						} else if (clsid != ClassID_DriveLocomotion) {
+							bool const infantry = unit->Fetch_RTTI() == RTTI_INFANTRY;
+
 							// Infantry walk out of the cell past the east edge, which moves with the footprint width.
-							Cell door = Get_Cell() + (unit->Fetch_RTTI() == RTTI_INFANTRY ? Cell(Class->Width(), 1) : exitcell);
+							Cell door = Get_Cell() + (infantry ? Cell(Class->Width(), 1) : exitcell);
 							if (!Map.In_Radar(door) || unit->Can_Enter_Cell(&Map[door], FACING_NONE, -1, NULL, false) != MOVE_OK) {
-								door = Find_Exit_Cell(unit);
+								// Use the nearest usable cell on the east side, then any exit cell.
+								door = Find_Door_Side_Cell(this, unit, door);
+								if (door == CELL_NONE) {
+									door = Find_Exit_Cell(unit);
+								}
 							}
 							if (door != CELL_NONE) {
 								unit->Assign_Destination(&Map[door]);
-								if (unit->Fetch_RTTI() == RTTI_INFANTRY) {
-									Coord spot = Map[door].Closest_Free_Spot(Coord(door, 0), true);
+								if (infantry) {
+									// Reserve a free spot in the cell, as a normal step onto it would.
+									Coord spot = Map[door].Closest_Free_Spot(Coord(door, 0), false);
 									if (spot != COORD_NONE) {
+										unit->Clear_Occupy_Bit(unit->PositionCoord);
+										unit->Set_Occupy_Bit(spot);
 										unit->Locomotion->Force_Immediate_Destination(spot);
 									}
 									unit->ArchiveTarget = Rally_Point_For(unit);
@@ -6482,6 +6552,16 @@ int BuildingClass::Do_MISSION_UNLOAD(void)
 				break;
 
 			default:
+				if (Status >= CLEAR_DOOR) {
+					unit = (FootClass *)Contact_With_Whom();
+					if (unit == NULL || !Is_Blocked_By_Infantry(unit, Get_Cell() + Cell(Class->Width(), 1))) {
+						Status = OPEN;
+					} else if (Status - CLEAR_DOOR >= clear_door_limit) {
+						Status = OPEN_NO_PUSH;
+					} else {
+						Status++;
+					}
+				}
 				break;
 		}
 		return(Current_Mission_Control().Normal_Delay() + Random_Pick(0, 2));

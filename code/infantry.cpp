@@ -734,6 +734,30 @@ static bool Is_Weapons_Factory(TechnoClass const * techno)
 }
 
 
+/// <summary>
+/// Determines if this infantry should be rendered with the normal objects.
+/// An infantry unit leaving a weapons factory is drawn by the factory itself until its door has
+/// finished, so that the door animation covers it as it does a vehicle.
+/// </summary>
+/// <param name="rect">The rectangle to record the unit's dirty area within.</param>
+/// <param name="forced">Is this redraw forced by outside circumstances?</param>
+/// <returns>bool; Was the unit rendered?</returns>
+bool InfantryClass::Render(Rect & rect, bool forced, bool extras_only) const
+{
+	if (IsTethered) {
+		TechnoClass * factory = Contact_With_Whom();
+		if (Is_Weapons_Factory(factory)) {
+			if (factory->Mission == MISSION_UNLOAD || factory->MissionQueue == MISSION_UNLOAD) {
+				if (!static_cast<BuildingClass *>(factory)->Door.Is_Ready_To_Close()) {
+					return(false);
+				}
+			}
+		}
+	}
+	return(BASECLASS::Render(rect, forced, extras_only));
+}
+
+
 /***********************************************************************************************
  * InfantryClass::Per_Cell_Process -- Handles special operations that occur once per cell.     *
  *                                                                                             *
